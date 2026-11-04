@@ -33,6 +33,9 @@ const cfg = {
   officeModel: opt('OFFICE_QWEN_MODEL', 'officeQwenModel') || 'Qwen3.8-27B',
   llama: opt('LLAMA_SERVER_BIN', 'llamaServer'),
   laptopModel: opt('LAPTOP_MODEL_PATH', 'laptopModel'),
+  laptopPort: opt('LAPTOP_PORT', 'laptopPort'),
+  officeUrl2: opt('OFFICE_QWEN_URL_2', 'officeQwenUrl2'),
+  officeModel2: opt('OFFICE_QWEN_MODEL_2', 'officeQwenModel2'),
 };
 
 // A .cmd shim must go through cmd.exe, which re-splits arguments: quote every argument that has a space or a shell character.
@@ -117,6 +120,11 @@ function providers() {
       '--openai-base-url', cfg.officeUrl, '--openai-api-key', 'none', '--model', cfg.officeModel] };
   } else notes.push('qwen-code needs the qwen CLI and OFFICE_QWEN_URL');
 
+  if (qwen && cfg.officeUrl2 && cfg.officeModel2) { // optional second office host (a free tier when the first is loaded)
+    p['qwen-code-2'] = { extends: 'acp', label: 'Qwen Code (office 2)', command: [qwen, '--acp', '--auth-type', 'openai',
+      '--openai-base-url', cfg.officeUrl2, '--openai-api-key', 'none', '--model', cfg.officeModel2] };
+  }
+
   const oc = which('opencode');
   if (oc && cfg.officeUrl) {
     mkdirSync(join(HUB_DIR, 'xdg'), { recursive: true });
@@ -133,7 +141,7 @@ function providers() {
   if (vram && qwen && cfg.llama && cfg.laptopModel) {
     p['qwen-laptop'] = { extends: 'acp', label: 'Qwen Code (laptop GPU)',
       command: [process.execPath, join(REPO, 'deploy', 'laptop', 'laptop-agent.mjs')],
-      env: { LLAMA_SERVER_BIN: cfg.llama, LAPTOP_MODEL_PATH: cfg.laptopModel, QWEN_BIN: qwen,
+      env: { LLAMA_SERVER_BIN: cfg.llama, LAPTOP_MODEL_PATH: cfg.laptopModel, QWEN_BIN: qwen, ...(cfg.laptopPort ? { LAPTOP_PORT: cfg.laptopPort } : {}),
         ...(opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') ? { HEAVY_LOCK_GLOB: opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') } : {}) } };
   } else notes.push(vram ? 'laptop model needs LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and qwen' : 'laptop model skipped: no GPU with >= 7.5 GiB VRAM (decision 35)');
   return { p, notes };
@@ -256,7 +264,7 @@ async function doctor(deep) {
 function unconfigure() {
   const f = join(HOME, 'config.json'); const c = readJson(f, null);
   if (c?.agents?.providers) {
-    for (const k of ['codex', 'claude-clean', 'qoder', 'qwen-code', 'opencode', 'qwen-laptop']) delete c.agents.providers[k];
+    for (const k of ['codex', 'claude-clean', 'qoder', 'qwen-code', 'qwen-code-2', 'opencode', 'qwen-laptop']) delete c.agents.providers[k];
     delete c.daemon?.auth;
     if (c.daemon?.mcp) { c.daemon.mcp.enabled = false; c.daemon.mcp.injectIntoAgents = false; } // never leave MCP open without auth
     writeJson(f, c);
