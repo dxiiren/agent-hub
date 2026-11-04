@@ -8,9 +8,11 @@
    - `codex` (gpt-6.1-terra and gpt-6.1-sol only), `claude-clean` (Claude with an empty MCP set), `qoder` (`qodercli --acp`), `qwen-code` (office model, needs `OFFICE_QWEN_URL`), `opencode` (`OPENCODE_DISABLE_MODELS_FETCH=1`), `qwen-laptop` (only when a GPU with 7.5 GiB or more is present and `LLAMA_SERVER_BIN` / `LAPTOP_MODEL_PATH` are set).
    - Host-specific values come from the environment or `config/hub.local.json` (template: `config/hub.local.template.json`).
 4. `scripts/hub.mjs mcp add`: registers `agent-hub` (`/mcp/agents` with the bearer secret) in Claude Code, Qoder, Qwen Code, Codex and OpenCode. The file is backed up once to `<file>.agent-hub.bak` when it exists, only the `agent-hub` entry is touched, and `just mcp-remove` removes it again. Skip with `-NoMcp` / `--no-mcp`.
-5. Service mode: Windows = Task Scheduler task `AgentHub` (at logon plus every minute with `IgnoreNew`, per user, no admin); Linux = systemd user unit `agent-hub` with `Restart=on-failure` and linger. Skip with `-NoService` / `--no-service`. A host without systemd prints a skip line and `just start` runs `paseo daemon start`.
+5. Service mode: Windows = Task Scheduler task `AgentHub` (at logon plus every minute with `IgnoreNew`, per user, no admin); Linux = systemd user unit `agent-hub` with `Restart=on-failure` and linger. Skip with `-NoService` / `--no-service`. A host without systemd prints a skip line and `just up` runs `paseo daemon start`.
 
-Daily commands: `just start`, `just stop`, `just status`, `just doctor` (PASS/FAIL per check and provider; `--deep` also runs one tiny task on each provider), `just uninstall`.
+6. Plugins (daemon running): `just plugins` sets `pluginsEnabled` and installs the gate and usage plugins. The service task runs `deploy/service/daemon-run.ps1`, which gives the daemon its plugin environment (`PASEO_PASSWORD` from the secret file, `AGENT_HUB_MCP`, `AGENT_HUB_ROUTES` = `config/routes/routes.local.json`, `AGENT_HUB_OTLP`, `AGENT_HUB_POLLER_DIR`) and puts Git Bash first on `PATH` so gates that run hooks do not pick the WSL `bash.exe`.
+
+Daily commands: `just up`, `just down`, `just status`, `just plugins`, `just doctor` (PASS/FAIL per check and provider; `--deep` also runs one tiny task on each provider), `just uninstall`.
 
 Test overrides (never touch your real configs): `AGENT_HUB_HOME` (Paseo home), `AGENT_HUB_PORT`, `AGENT_HUB_CLIENT_ROOT` (every client config goes under that folder), `AGENT_HUB_TASK` (task name).
 

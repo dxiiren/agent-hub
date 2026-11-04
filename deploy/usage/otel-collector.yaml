@@ -11,7 +11,7 @@ processors:
     error_mode: ignore
     metrics:
       metric:
-        - 'not IsMatch(name, "^(claude_code[.](token|cost)[.]usage|codex[.]turn[.]token_usage|qwen-code[.]token[.]usage)$")'
+        - 'not IsMatch(name, "^(claude_code[.](token|cost)[.]usage|codex[.]turn[.]token_usage|qwen-code[.]token[.]usage|agent_hub[.](tokens|cost|credits)[.].*|agent_hub[.]credits)$")'
   # Identity out. `dev` is set by the client (OTEL_RESOURCE_ATTRIBUTES=dev=<name>); insert only fills a gap.
   resource/strip:
     attributes:
@@ -37,6 +37,8 @@ processors:
       - {key: organization.id, action: delete}
       - {key: session.id, action: delete}
       - {key: conversation.id, action: delete}
+  # the usage plugin posts one DELTA per finished turn; Prometheus needs cumulative counters
+  deltatocumulative: {}
   batch: {}
 exporters:
   prometheus:
@@ -47,5 +49,5 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [filter/allow, resource/strip, attributes/strip, batch]
+      processors: [filter/allow, resource/strip, attributes/strip, deltatocumulative, batch]
       exporters: [prometheus]

@@ -1,16 +1,61 @@
 {
-  "_comment": "Default provider order per task type. A caller may override the provider and the gate. A busy or failed entry moves to the next one. The chains are the section 24 proposal and are replaced by the bench result; copy to routes.local.json and replace the <PLACEHOLDERS>. Each entry is provider/model as the daemon config names them.",
+  "_comment": "Default provider order per task type (section 24b capability bench, 05-11). A caller may override the provider and the gate. A busy or failed entry moves to the next one. Each entry is provider/model as the daemon config names them (see `paseo provider models <id>`). Copy to routes.local.json and replace <REPO_GATE_COMMAND> and the gate rows.",
   "gateDefault": "<REPO_GATE_COMMAND>",
   "gates": [
-    { "match": "<REPO_PATH_REGEX>", "cmd": "<REPO_GATE_COMMAND>", "maxLines": 400, "forbid": "^([.]env|[.]github/|.*[.]pem$)" }
+    {
+      "match": "<REPO_PATH_REGEX>",
+      "cmd": "<REPO_GATE_COMMAND>",
+      "maxLines": 400,
+      "forbid": "^([.]env|[.]github/|.*[.]pem$)"
+    }
   ],
-  "slots": { "codex": 2, "claude-clean": 2, "qoder": 1, "qwen-office": 2, "qwen-laptop": 1 },
-  "waitTimeout": "10m",
+  "slots": {
+    "codex": 2,
+    "claude-clean": 2,
+    "qoder": 1,
+    "qwen-code-2": 2,
+    "qwen-laptop": 1
+  },
+  "modes": {
+    "codex": "full-access",
+    "claude-clean": "bypassPermissions",
+    "qoder": "yolo",
+    "qwen-code": "yolo",
+    "qwen-code-2": "yolo",
+    "qwen-laptop": "yolo"
+  },
+  "waitTimeout": "15m",
   "routes": {
-    "code-edit": ["codex/gpt-6.1-terra", "codex/gpt-6.1-sol", "claude-clean/<CLAUDE_SONNET_MODEL>", "qwen-office/<OFFICE_MODEL>"],
-    "code-edit-easy": ["qwen-laptop/<LAPTOP_MODEL>", "qwen-office/<OFFICE_MODEL>", "codex/gpt-6-luna"],
-    "summarise": ["qwen-laptop/<LAPTOP_MODEL>", "qwen-office/<OFFICE_MODEL>", "codex/gpt-6-luna"],
-    "test-scaffold": ["qwen-laptop/<LAPTOP_MODEL>", "codex/gpt-6.1-sol", "claude-clean/<CLAUDE_HAIKU_MODEL>"],
-    "review": ["qwen-laptop/<LAPTOP_MODEL>", "qwen-office/<OFFICE_MODEL>", "claude-clean/<CLAUDE_HAIKU_MODEL>"]
+    "code-edit": [
+      "codex/gpt-6.1-terra",
+      "codex/gpt-6.1-sol",
+      "claude-clean/claude-sonnet-5-5",
+      "qoder/efficient",
+      "qwen-code-2"
+    ],
+    "code-edit-easy": [
+      "qwen-laptop",
+      "qwen-code-2",
+      "qoder/efficient",
+      "codex/gpt-6-luna"
+    ],
+    "summarise": [
+      "qwen-laptop",
+      "qoder/efficient",
+      "qwen-code-2",
+      "codex/gpt-6-luna"
+    ],
+    "test-scaffold": [
+      "qwen-laptop",
+      "qoder/efficient",
+      "codex/gpt-6.1-sol",
+      "claude-clean/claude-haiku-5-5"
+    ],
+    "review": [
+      "qwen-laptop",
+      "qoder/efficient",
+      "qwen-code-2",
+      "claude-clean/claude-haiku-5-5"
+    ]
   }
 }

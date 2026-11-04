@@ -11,7 +11,7 @@ if ! have systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
     start) paseo daemon start --home "$HOME_DIR"; exit $? ;;
     stop) paseo daemon stop --home "$HOME_DIR"; exit $? ;;
     status) paseo daemon status --home "$HOME_DIR"; exit $? ;;
-    *) echo "[SKIP] no systemd user session here (container or non-systemd host): the daemon runs via 'just start'"; exit 0 ;;
+    *) echo "[SKIP] no systemd user session here (container or non-systemd host): the daemon runs via 'just up'"; exit 0 ;;
   esac
 fi
 case "$ACTION" in

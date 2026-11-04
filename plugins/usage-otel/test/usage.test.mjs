@@ -42,3 +42,19 @@ test("append writes the global log and the per-session file; python CLI sums per
   const none = JSON.parse(spawnSync("python", [join(here, "..", "bin", "agent_hub_usage.py"), "usage", "--session", "nope", "--json"], { encoding: "utf8", env: { ...process.env, AGENT_HUB_USAGE_DIR: d } }).stdout);
   assert.equal(none.total.n, 0);
 });
+
+import { mkdirSync, writeFileSync } from "node:fs";
+import { fillRecord, qwenSession } from "../server/sidecar.mjs";
+test("Qwen Code chat file is summed and booked as a delta per turn", () => {
+  const home = mkdtempSync(join(tmpdir(), "qh-")); mkdirSync(join(home, "projects", "p", "chats"), { recursive: true });
+  const f = join(home, "projects", "p", "chats", "S9.jsonl");
+  const line = (p, c, o) => JSON.stringify({ usageMetadata: { promptTokenCount: p, cachedContentTokenCount: c, candidatesTokenCount: o, thoughtsTokenCount: 1 } }) + "\n";
+  writeFileSync(f, line(100, 0, 10) + line(120, 90, 5));
+  const t = qwenSession("S9", home);
+  assert.deepEqual(t, { in: 130, out: 17, cached: 90 });
+  const cur = join(home, "cursor.json"); const base = { agent: "a", in: 0, out: 0, cached: 0, credits: 0 };
+  assert.equal(fillRecord({ ...base }, cur, { tokens: t }).in, 130);
+  assert.equal(fillRecord({ ...base }, cur, { tokens: t }).in, 0, "second turn with no new requests books nothing");
+  assert.equal(fillRecord({ ...base, in: 5 }, cur, { tokens: t }).in, 5, "a provider that reports its own numbers is untouched");
+  assert.equal(fillRecord({ ...base, agent: "q" }, cur, { credits: 1.23456 }).credits, 1.235);
+});

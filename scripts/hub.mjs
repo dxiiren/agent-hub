@@ -223,7 +223,7 @@ async function doctor(deep) {
   const s = secret();
   const h = await http('/api/health');
   row(h.status === 200, 'daemon health', `127.0.0.1:${PORT}`);
-  if (h.status !== 200) { console.log('daemon is down: run `just start`'); process.exit(1); }
+  if (h.status !== 200) { console.log('daemon is down: run `just up`'); process.exit(1); }
   row((await http('/mcp/agents', {}, '{}')).status === 401, 'MCP refuses a call without the password');
   const t = await http('/mcp/agents', { authorization: `Bearer ${s}` }, JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));
   const n = (t.text.match(/"name"\s*:/g) || []).length;
@@ -261,6 +261,16 @@ async function doctor(deep) {
   process.exit(fails ? 1 : 0);
 }
 
+// ---------- plugins: enable plugins in the daemon config, then install the gate and usage plugins (daemon must be running)
+function plugins() {
+  const f = join(HOME, 'config.json'); const c = readJson(f, {});
+  if (!c.pluginsEnabled) { c.pluginsEnabled = true; writeJson(f, c); ok('pluginsEnabled set; restart the daemon (just down ; just up) if the installs below fail'); }
+  for (const d of ['gate', 'usage-otel']) {
+    const r = paseo(['plugin', 'install', join(REPO, 'plugins', d)]);
+    (r.status === 0 ? ok : (m) => console.log('[FAIL] ' + m))(`plugin ${d}: ${out(r).split(String.fromCharCode(10)).pop()}`);
+  }
+}
+
 function unconfigure() {
   const f = join(HOME, 'config.json'); const c = readJson(f, null);
   if (c?.agents?.providers) {
@@ -277,5 +287,6 @@ const [cmd, arg] = process.argv.slice(2);
 if (cmd === 'configure') configure();
 else if (cmd === 'mcp' && (arg === 'add' || arg === 'remove')) mcp(arg);
 else if (cmd === 'unconfigure') unconfigure();
+else if (cmd === 'plugins') plugins();
 else if (cmd === 'doctor') await doctor(process.argv.includes('--deep'));
-else { console.log('usage: hub.mjs configure | unconfigure | mcp add|remove | doctor [--deep]'); process.exit(2); }
+else { console.log('usage: hub.mjs configure | unconfigure | plugins | mcp add|remove | doctor [--deep]'); process.exit(2); }

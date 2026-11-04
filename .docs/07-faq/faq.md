@@ -2,7 +2,7 @@
 
 > **TL;DR** — short answers to the questions that actually come up on this project.
 
-**Q: Why is there no `just start`?**
+**Q: Why is there no app server (`just start`)?**
 
 This repo configures and extends the Paseo daemon; it runs no server of its own. The checks are `just deps && just test`.
 

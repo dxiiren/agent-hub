@@ -8,7 +8,7 @@ $paseo = (Get-Command paseo.cmd -ErrorAction SilentlyContinue).Source
 if (-not $paseo) { $paseo = (Get-Command paseo -ErrorAction Stop).Source }
 switch ($Action) {
   'install' {
-    $cmd = "& '$paseo' daemon run --home '$Home_'"
+    $cmd = "& '$(Join-Path $PSScriptRoot 'daemon-run.ps1')'"
     $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$cmd`""
     $t1  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $t2  = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)

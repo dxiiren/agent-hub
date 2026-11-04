@@ -70,4 +70,4 @@ if [ "$DRY" -eq 0 ]; then
 fi
 
 [ "$DRY" -eq 1 ] && echo "[INFO] dry run: nothing changed"
-echo "[NEXT] just start && just doctor   (then: just deps && just test)"
+echo "[NEXT] just up && just doctor   (then: just deps && just test)"

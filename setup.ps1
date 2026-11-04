@@ -282,7 +282,7 @@ Write-Host ""
 
 # ---------- Next steps (manual) ----------
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  0. Start and check the hub:         just start ; just doctor" -ForegroundColor Gray
+Write-Host "  0. Start and check the hub:         just up ; just doctor" -ForegroundColor Gray
 Write-Host "  1. Install dependencies:            just deps" -ForegroundColor Gray
 Write-Host "  2. Validate the config templates:   just test" -ForegroundColor Gray
 Write-Host "  3. Scan before any push:            just scan" -ForegroundColor Gray

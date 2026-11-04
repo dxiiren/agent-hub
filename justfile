@@ -23,20 +23,20 @@ install *flags:
 
 # Start the daemon (the scheduled task / systemd unit when installed, else a plain `paseo daemon start`).
 [windows]
-start:
+up:
     @& '{{justfile_directory()}}/deploy/service/service.ps1' start
 
 [unix]
-start:
+up:
     @sh '{{justfile_directory()}}/deploy/service/service.sh' start
 
 # Stop the daemon.
 [windows]
-stop:
+down:
     @& '{{justfile_directory()}}/deploy/service/service.ps1' stop
 
 [unix]
-stop:
+down:
     @sh '{{justfile_directory()}}/deploy/service/service.sh' stop
 
 # Show the service and daemon state.
@@ -47,6 +47,10 @@ status:
 [unix]
 status:
     @sh '{{justfile_directory()}}/deploy/service/service.sh' status
+
+# Enable plugins in the daemon and install the gate and usage plugins (daemon running).
+plugins:
+    node scripts/hub.mjs plugins
 
 # PASS/FAIL per check and per provider; add --deep to run one tiny task on each provider.
 doctor *flags:

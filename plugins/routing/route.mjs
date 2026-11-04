@@ -58,7 +58,7 @@ export function runRoute(o, paseo, routes) {
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
-    const mode = o.mode ?? routes.mode;
+    const mode = o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
     if (mode) args.push("--mode", mode);
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels

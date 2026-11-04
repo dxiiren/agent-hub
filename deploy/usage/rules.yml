@@ -11,3 +11,10 @@ groups:
         expr: label_replace(sum by (model, dev, type) (qwen_code_token_usage_total), "provider", "qwen-code", "", "")
       - record: hub_tokens_total
         expr: sum by (provider, model, dev, type) (opencode_tokens_total)
+      # tasks run through the hub (usage plugin, one delta per turn): provider = the daemon provider name (qwen/qoder filled from side channels)
+      - record: hub_tokens_total
+        expr: label_replace(sum by (provider, model, dev) (agent_hub_tokens_input_total), "type", "input", "", "")
+      - record: hub_tokens_total
+        expr: label_replace(sum by (provider, model, dev) (agent_hub_tokens_output_total), "type", "output", "", "")
+      - record: hub_tokens_total
+        expr: label_replace(sum by (provider, model, dev) (agent_hub_tokens_cached_total), "type", "cacheRead", "", "")

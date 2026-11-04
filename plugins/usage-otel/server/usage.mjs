@@ -64,7 +64,7 @@ export function appendUsage(dir, rec) {
 export function otlpBody(rec) {
   const attrs = ["provider", "model", "dev", "client"].map((k) => ({ key: k, value: { stringValue: rec[k] ?? "" } }));
   const t = String(Date.now() * 1e6);
-  const m = (name, v, kind = "asInt") => ({ name, sum: { aggregationTemporality: 2, isMonotonic: true, dataPoints: [{ [kind]: String(v), timeUnixNano: t, attributes: attrs }] } });
+  const m = (name, v, kind = "asInt") => ({ name, sum: { aggregationTemporality: 1, isMonotonic: true, dataPoints: [{ [kind]: String(v), timeUnixNano: t, attributes: attrs }] } });
   return { resourceMetrics: [{ resource: { attributes: [{ key: "service.name", value: { stringValue: "agent-hub" } }] }, scopeMetrics: [{ metrics: [
     m("agent_hub.tokens.input", rec.in), m("agent_hub.tokens.output", rec.out), m("agent_hub.tokens.cached", rec.cached),
     m("agent_hub.cost.usd", rec.cost_usd, "asDouble"), m("agent_hub.credits", rec.credits, "asDouble"),
