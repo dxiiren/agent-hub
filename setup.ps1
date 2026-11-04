@@ -244,6 +244,15 @@ if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] hub configure failed" -ForegroundC
 if ($NoMcp) { Write-Host "[SKIP] -NoMcp: client MCP configs untouched" -ForegroundColor DarkGray }
 else { & node (Join-Path $PSScriptRoot 'scripts/hub.mjs') mcp add }
 
+# ---------- 12b. agent-hub CLI (usage / route): put the plugin bin folder on the user PATH ----------
+$hubBin = Join-Path $PSScriptRoot 'plugins/usage-otel/bin'
+$userPath = [Environment]::GetEnvironmentVariable('Path','User')
+if (($userPath -split ';') -notcontains $hubBin) {
+    [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $hubBin), 'User')
+    $env:Path += ";$hubBin"
+}
+Write-Host "[OK] agent-hub CLI on PATH: $hubBin" -ForegroundColor Green
+
 # ---------- 13. Service mode: per-user Task Scheduler task, no admin ----------
 if ($NoService) { Write-Host "[SKIP] -NoService: no scheduled task" -ForegroundColor DarkGray }
 else { & (Join-Path $PSScriptRoot 'deploy/service/service.ps1') install }

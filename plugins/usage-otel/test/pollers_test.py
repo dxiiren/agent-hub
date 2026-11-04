@@ -6,6 +6,12 @@ import qoder_poll as qp
 
 
 class Pollers(unittest.TestCase):
+    def test_opencode_empty_session_list_is_zero(self):
+        self.assertEqual(oe.session_ids(""), [])
+        self.assertEqual(oe.session_ids("  \n"), [])
+        self.assertEqual(oe.totals([]), {})
+        self.assertEqual(oe.prom({}, "d"), "")
+
     def test_opencode_totals_and_prom(self):
         s = [{"messages": [
             {"info": {"role": "user"}},

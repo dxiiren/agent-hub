@@ -65,6 +65,7 @@ done
 if [ "$DRY" -eq 0 ]; then
   node "$HERE/scripts/hub.mjs" configure || exit 1
   if [ "$NOMCP" -eq 1 ]; then echo "[SKIP] --no-mcp: client MCP configs untouched"; else node "$HERE/scripts/hub.mjs" mcp add; fi
+  mkdir -p "$HOME/.local/bin" && ln -sf "$HERE/plugins/usage-otel/bin/agent-hub" "$HOME/.local/bin/agent-hub" && echo "[OK] agent-hub CLI linked: ~/.local/bin/agent-hub"
   if [ "$NOSVC" -eq 1 ]; then echo "[SKIP] --no-service: no systemd unit"; else sh "$HERE/deploy/service/service.sh" install; fi
 fi
 

@@ -35,9 +35,15 @@ def oc(*args):
     return subprocess.run(["opencode", *args], capture_output=True, text=True, env=env, shell=(os.name == "nt"), timeout=120).stdout
 
 
+def session_ids(text):
+    """Empty output (no sessions yet) means zero sessions, not an error."""
+    text = (text or "").strip()
+    return json.loads(text) if text else []
+
+
 def main(argv):
     dev = argv[argv.index("--dev") + 1] if "--dev" in argv else os.environ.get("AGENT_HUB_DEV", "")
-    sessions = [json.loads(oc("export", s["id"])) for s in json.loads(oc("session", "list", "--format", "json"))]
+    sessions = [json.loads(oc("export", s["id"])) for s in session_ids(oc("session", "list", "--format", "json"))]
     tot = totals(sessions)
     if "--json" in argv:
         sys.stdout.write(json.dumps([{"provider": p, "model": m, **a} for (p, m), a in sorted(tot.items())]) + "\n")

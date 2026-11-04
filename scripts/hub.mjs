@@ -53,12 +53,22 @@ function which(name) {
 const writeJson = (p, o) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(o, null, 2) + '\n'); };
 const readJson = (p, d) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return d; } };
 
+// Owner-only file: 0600 on POSIX, current-user-only ACL on Windows. Called after every write of a file that holds the token.
+function protect(file) {
+  if (!existsSync(file)) return;
+  if (WIN) {
+    const user = process.env.USERNAME || '';
+    const r = user ? run('icacls', [file, '/inheritance:r', '/grant:r', `${user}:F`]) : { status: 1 };
+    if (r.status !== 0) console.log(`[WARN] could not restrict ACL on ${file}`);
+  } else chmodSync(file, 0o600);
+}
+const writeSecretFile = (file, text) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text, { mode: 0o600 }); protect(file); };
+
 function secret() {
-  if (existsSync(SECRET_FILE)) return readFileSync(SECRET_FILE, 'utf8').trim();
+  if (existsSync(SECRET_FILE)) { protect(SECRET_FILE); return readFileSync(SECRET_FILE, 'utf8').trim(); }
   mkdirSync(HOME, { recursive: true });
   const s = randomBytes(24).toString('hex');
-  writeFileSync(SECRET_FILE, s, { mode: 0o600 });
-  try { chmodSync(SECRET_FILE, 0o600); } catch { /* windows: user profile ACL applies */ }
+  writeSecretFile(SECRET_FILE, s);
   return s;
 }
 
@@ -150,51 +160,42 @@ function configure() {
 
 // ---------- MCP registration (MCP first, decision 37). Backup once, add only agent-hub, removable.
 const MARK_A = '# >>> agent-hub (managed) >>>'; const MARK_B = '# <<< agent-hub (managed) <<<';
+// Every client config is written directly: the bearer token never appears in a process argument list.
 function clients() {
   const r = (...a) => join(ROOT, ...a);
-  const cli = (bin, env, file, add, rm) => ({ bin, env, file, add, rm });
+  const bearer = (s) => ({ Authorization: `Bearer ${s}` });
   return {
-    claude: cli('claude', ROOT ? { CLAUDE_CONFIG_DIR: r('claude') } : {}, ROOT ? r('claude', '.claude.json') : join(homedir(), '.claude.json'),
-      (s) => ['mcp', 'add', '--transport', 'http', '--scope', 'user', NAME, URL_MCP, '--header', `Authorization: Bearer ${s}`],
-      () => ['mcp', 'remove', '--scope', 'user', NAME]),
-    qoder: cli('qodercli', ROOT ? { HOME: r('qoder'), USERPROFILE: r('qoder') } : {}, ROOT ? r('qoder', '.qoder', 'settings.json') : join(homedir(), '.qoder', 'settings.json'),
-      (s) => ['mcp', 'add', '-s', 'user', '-t', 'http', NAME, URL_MCP, '-H', `Authorization: Bearer ${s}`],
-      () => ['mcp', 'remove', '-s', 'user', NAME]),
-    qwen: cli('qwen', ROOT ? { HOME: r('qwen'), USERPROFILE: r('qwen') } : {}, ROOT ? r('qwen', '.qwen', 'settings.json') : join(homedir(), '.qwen', 'settings.json'),
-      (s) => ['mcp', 'add', '-s', 'user', '-t', 'http', NAME, URL_MCP, '-H', `Authorization: Bearer ${s}`],
-      () => ['mcp', 'remove', '-s', 'user', NAME]),
+    claude: { bin: 'claude', file: ROOT ? r('claude', '.claude.json') : join(homedir(), '.claude.json'), key: 'mcpServers',
+      entry: (s) => ({ type: 'http', url: URL_MCP, headers: bearer(s) }) },
+    qoder: { bin: 'qodercli', file: ROOT ? r('qoder', '.qoder', 'settings.json') : join(homedir(), '.qoder', 'settings.json'), key: 'mcpServers',
+      entry: (s) => ({ url: URL_MCP, type: 'http', headers: bearer(s) }) },
+    qwen: { bin: 'qwen', file: ROOT ? r('qwen', '.qwen', 'settings.json') : join(homedir(), '.qwen', 'settings.json'), key: 'mcpServers',
+      entry: (s) => ({ httpUrl: URL_MCP, headers: bearer(s) }) },
     codex: { bin: 'codex', file: ROOT ? r('codex', 'config.toml') : join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml'), toml: true },
-    opencode: { bin: 'opencode', file: ROOT ? r('opencode', 'opencode.json') : join(homedir(), '.config', 'opencode', 'opencode.json'), json: true },
+    opencode: { bin: 'opencode', file: ROOT ? r('opencode', 'opencode.json') : join(homedir(), '.config', 'opencode', 'opencode.json'), key: 'mcp',
+      entry: (s) => ({ type: 'remote', url: URL_MCP, headers: bearer(s), enabled: true }), base: { $schema: 'https://opencode.ai/config.json' } },
   };
 }
 function backup(file) {
   const b = `${file}.${NAME}.bak`;
-  if (existsSync(file) && !existsSync(b) && !readFileSync(file, 'utf8').includes(NAME)) { copyFileSync(file, b); console.log(`     backup: ${b}`); }
+  if (existsSync(file) && !existsSync(b) && !readFileSync(file, 'utf8').includes(NAME)) { copyFileSync(file, b); protect(b); console.log(`     backup: ${b}`); }
 }
 function mcp(action) {
   const s = action === 'add' ? secret() : '';
   for (const [name, c] of Object.entries(clients())) {
     if (!which(c.bin)) { skip(`${name}: CLI not installed`); continue; }
     backup(c.file);
-    const env = { ...process.env, ...(c.env || {}) };
-    for (const d of [c.env?.HOME, c.env?.CLAUDE_CONFIG_DIR]) if (d) mkdirSync(d, { recursive: true });
     if (c.toml) {
       const t = existsSync(c.file) ? readFileSync(c.file, 'utf8') : '';
       const a = t.indexOf(MARK_A); const b = t.indexOf(MARK_B);
       const strip = a >= 0 && b > a ? t.slice(0, a) + t.slice(b + MARK_B.length) : t;
       const block = action === 'add' ? `\n${MARK_A}\n[mcp_servers.${NAME}]\nurl = "${URL_MCP}"\nhttp_headers = { Authorization = "Bearer ${s}" }\n${MARK_B}\n` : '';
-      mkdirSync(dirname(c.file), { recursive: true }); writeFileSync(c.file, strip.trimEnd() + (block ? '\n' + block : '\n'));
-    } else if (c.json) {
-      const j = readJson(c.file, { $schema: 'https://opencode.ai/config.json' });
-      j.mcp ??= {};
-      if (action === 'add') j.mcp[NAME] = { type: 'remote', url: URL_MCP, headers: { Authorization: `Bearer ${s}` }, enabled: true };
-      else delete j.mcp[NAME];
-      writeJson(c.file, j);
+      writeSecretFile(c.file, strip.trimEnd() + (block ? '\n' + block : '\n'));
     } else {
-      const bin = which(c.bin);
-      if (action === 'add') run(bin, c.rm(), { env }); // idempotent: the client CLIs refuse a duplicate name
-      const r = run(bin, action === 'add' ? c.add(s) : c.rm(), { env });
-      if (r.status !== 0 && !(action === 'remove' && /not found|no .*server/i.test(out(r)))) { console.log(`[FAIL] ${name}: ${out(r).slice(0, 200)}`); process.exitCode = 1; continue; }
+      const j = readJson(c.file, c.base || {});
+      j[c.key] ??= {};
+      if (action === 'add') j[c.key][NAME] = c.entry(s); else delete j[c.key][NAME];
+      writeSecretFile(c.file, JSON.stringify(j, null, 2) + '\n');
     }
     ok(`${name}: ${NAME} ${action === 'add' ? 'registered' : 'removed'} (${c.file})`);
   }
@@ -256,7 +257,9 @@ function unconfigure() {
   const f = join(HOME, 'config.json'); const c = readJson(f, null);
   if (c?.agents?.providers) {
     for (const k of ['codex', 'claude-clean', 'qoder', 'qwen-code', 'opencode', 'qwen-laptop']) delete c.agents.providers[k];
-    delete c.daemon?.auth; writeJson(f, c);
+    delete c.daemon?.auth;
+    if (c.daemon?.mcp) { c.daemon.mcp.enabled = false; c.daemon.mcp.injectIntoAgents = false; } // never leave MCP open without auth
+    writeJson(f, c);
   }
   rmSync(HUB_DIR, { recursive: true, force: true }); rmSync(SECRET_FILE, { force: true });
   ok(`providers, password hash, ${HUB_DIR} and the secret removed (${f} otherwise kept)`);
