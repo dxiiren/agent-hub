@@ -3,8 +3,9 @@
 $ErrorActionPreference = 'Stop'
 $Home_ = if ($env:AGENT_HUB_HOME) { $env:AGENT_HUB_HOME } else { Join-Path $HOME '.paseo' }
 $Repo  = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$secret = Join-Path $Home_ 'agent-hub-secret'
-if (Test-Path $secret) { $env:PASEO_PASSWORD = (Get-Content $secret -Raw).Trim() }
+# The plugins read <home>/agent-hub-secret themselves; the password and its path are never put in the environment agents inherit.
+foreach ($n in 'PASEO_PASSWORD','AGENT_HUB_SECRET_FILE') { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
+if ($env:AGENT_HUB_HOME) { $env:PASEO_HOME = $Home_ }
 $port = if ($env:AGENT_HUB_PORT) { $env:AGENT_HUB_PORT } else { '6767' }
 $env:AGENT_HUB_MCP = "http://127.0.0.1:$port/mcp/agents"
 $routes = Join-Path $Repo 'config/routes/routes.local.json'

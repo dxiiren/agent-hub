@@ -27,6 +27,23 @@ export function qwenSession(sessionId, home = join(os.homedir(), ".qwen")) {
   return null;
 }
 
+/** Credits of one Qoder session from its own transcript (~/.qoder/projects/<cwd>/<sessionId>.jsonl; fractional per message, unlike the whole-number account counter). null if no file. */
+export function qoderSession(sessionId, home = join(os.homedir(), ".qoder")) {
+  const root = join(home, "projects");
+  if (!sessionId || !existsSync(root)) return null;
+  for (const p of readdirSync(root)) {
+    const f = join(root, p, sessionId + ".jsonl");
+    if (!existsSync(f)) continue;
+    const seen = new Map();
+    for (const l of readFileSync(f, "utf8").split("\n")) {
+      if (!l.includes("credits")) continue;
+      try { const j = JSON.parse(l), m = j.message, c = Number(m?.usage?.credits ?? 0); if (c > 0) seen.set(m.id ?? j.uuid, Math.max(c, seen.get(m.id ?? j.uuid) ?? 0)); } catch { /* partial line */ }
+    }
+    return [...seen.values()].reduce((a, b) => a + b, 0);
+  }
+  return null;
+}
+
 /** Account credits used so far (qoder_poll.py, about 3 s, async so the plugin loop is never blocked); null when the poller cannot run. */
 export function qoderCredits(env = process.env) {
   let dir = env.AGENT_HUB_POLLER_DIR;
@@ -47,7 +64,10 @@ export function fillRecord(rec, cursorFile, side) {
     rec.in = Math.max(0, side.tokens.in - prev.in); rec.out = Math.max(0, side.tokens.out - prev.out); rec.cached = Math.max(0, side.tokens.cached - prev.cached);
     cur[rec.agent] = side.tokens;
   }
-  if (side.credits != null) rec.credits = Math.max(0, Math.round(side.credits * 1000) / 1000);
+  if (side.sessionCredits != null) { // cumulative per-session total: book the delta since the last turn
+    rec.credits = Math.max(0, Math.round((side.sessionCredits - (prev.credits ?? 0)) * 1000) / 1000);
+    cur[rec.agent] = { ...(cur[rec.agent] ?? prev), credits: side.sessionCredits };
+  } else if (side.credits != null) rec.credits = Math.max(0, Math.round(side.credits * 1000) / 1000);
   writeFileSync(cursorFile, JSON.stringify(cur));
   return rec;
 }

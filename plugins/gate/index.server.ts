@@ -1,7 +1,7 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { loadRoutes } from "./server/gate.mjs";
 import { evaluate } from "./server/hook.mjs";
-import { mcpCall } from "./server/mcp.mjs";
+import { mcpCall, hubPassword } from "./server/mcp.mjs";
 import { gateDir } from "./server/store.mjs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
@@ -21,7 +21,7 @@ export default function contribute(server: PluginServerContext) {
       console.error("agent-hub-gate", id, String(e));
       mirror = { "gate/status": "ERROR", "gate/reasons": "gate could not run: " + String(e).slice(0, 200) }; // fail closed: never shown as PASS
     }
-    await mcpCall(MCP, process.env.PASEO_PASSWORD ?? "", "update_agent", { agentId: id, labels: mirror }).catch((e) => console.error("agent-hub-gate mirror", String(e)));
+    await mcpCall(MCP, hubPassword(), "update_agent", { agentId: id, labels: mirror }).catch((e) => console.error("agent-hub-gate mirror", String(e)));
   });
   return () => {};
 }

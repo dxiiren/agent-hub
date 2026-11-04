@@ -49,3 +49,16 @@ test("caller gate goes to the plugin-side store, never into labels", async () =>
   assert.equal(claimRequest(d, "/r").cmd, "npm test");
   assert.equal(claimRequest(d, "/r"), null);
 });
+test("unsafe mode is dropped outside a worktree and kept (with --new-workspace worktree) inside one", () => {
+  const r2 = { ...routes, modes: { codex: "full-access", qwen: "plan" } };
+  const mk = () => fake({ run: () => ({ status: "completed", agentId: "A" }) });
+  let p = mk(); runRoute(o, p, r2);
+  assert.ok(!p.calls.find((c) => c[0] === "run").includes("--mode"));
+  p = mk(); runRoute({ ...o, mode: "yolo" }, p, r2);
+  assert.ok(!p.calls.find((c) => c[0] === "run").includes("yolo"));
+  p = mk(); runRoute({ ...o, worktree: true }, p, r2);
+  const run = p.calls.find((c) => c[0] === "run");
+  assert.ok(run.includes("full-access") && run.includes("--new-workspace") && run.includes("worktree"));
+  p = mk(); runRoute({ ...o, provider: "qwen/x" }, p, r2);
+  assert.ok(p.calls.find((c) => c[0] === "run").includes("plan"));
+});

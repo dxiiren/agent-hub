@@ -2,7 +2,7 @@
 // Routing wrapper (decision 41): task type -> ordered provider/model chain; the caller may override;
 // a provider at its slot limit is skipped and a failed or timed-out one falls to the next entry.
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
-// Usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--session ID] [--dev D] [--client C] [--home H]
+// Usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -42,6 +42,8 @@ export function cliPaseo(home, env = process.env) {
 }
 
 const base = (p) => p.split("/")[0];
+// Owner decision 21: full-access/bypass/yolo only inside a throwaway worktree; elsewhere drop --mode (provider default).
+export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 
 /**
  * Run a task through the chain. `paseo(args)` is injected (tests use a fake).
@@ -59,7 +61,9 @@ export function runRoute(o, paseo, routes) {
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const mode = o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
-    if (mode) args.push("--mode", mode);
+    if (o.worktree) args.push("--new-workspace", "worktree");
+    if (mode && (o.worktree || !unsafeMode(mode))) args.push("--mode", mode);
+    else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: needs --new-workspace worktree` });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels
     if (o.gate) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate);
@@ -74,10 +78,10 @@ export function runRoute(o, paseo, routes) {
 function main(argv) {
   const [type, prompt, ...rest] = argv;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
-  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--session ID] [--dev D] [--client C] [--home H]'); return 2; }
+  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]'); return 2; }
   const home = opt("--home") ?? process.env.PASEO_HOME;
   const res = runRoute({
-    type, prompt, provider: opt("--provider"), cwd: opt("--cwd") ?? process.cwd(), gate: opt("--gate"), mode: opt("--mode"),
+    type, prompt, provider: opt("--provider"), cwd: opt("--cwd") ?? process.cwd(), gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT,
   }, cliPaseo(home), loadRoutes());

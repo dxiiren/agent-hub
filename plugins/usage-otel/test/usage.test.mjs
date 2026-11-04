@@ -44,7 +44,7 @@ test("append writes the global log and the per-session file; python CLI sums per
 });
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { fillRecord, qwenSession } from "../server/sidecar.mjs";
+import { fillRecord, qwenSession, qoderSession } from "../server/sidecar.mjs";
 test("Qwen Code chat file is summed and booked as a delta per turn", () => {
   const home = mkdtempSync(join(tmpdir(), "qh-")); mkdirSync(join(home, "projects", "p", "chats"), { recursive: true });
   const f = join(home, "projects", "p", "chats", "S9.jsonl");
@@ -57,4 +57,16 @@ test("Qwen Code chat file is summed and booked as a delta per turn", () => {
   assert.equal(fillRecord({ ...base }, cur, { tokens: t }).in, 0, "second turn with no new requests books nothing");
   assert.equal(fillRecord({ ...base, in: 5 }, cur, { tokens: t }).in, 5, "a provider that reports its own numbers is untouched");
   assert.equal(fillRecord({ ...base, agent: "q" }, cur, { credits: 1.23456 }).credits, 1.235);
+});
+
+test("Qoder session transcript credits are fractional, deduped by message id, booked as a delta", () => {
+  const home = mkdtempSync(join(tmpdir(), "qo-")); mkdirSync(join(home, "projects", "p"), { recursive: true });
+  const f = join(home, "projects", "p", "Q1.jsonl");
+  const line = (id, c) => JSON.stringify({ message: { id, usage: { credits: c } } }) + "\n";
+  writeFileSync(f, line("a", 0.25) + line("a", 0.25) + line("b", 0.125));
+  assert.equal(qoderSession("Q1", home), 0.375);
+  assert.equal(qoderSession("nope", home), null);
+  const cur = join(home, "cursor.json"); const base = { agent: "q", in: 0, out: 0, cached: 0, credits: 0 };
+  assert.equal(fillRecord({ ...base }, cur, { sessionCredits: 0.375 }).credits, 0.375);
+  assert.equal(fillRecord({ ...base }, cur, { sessionCredits: 0.5 }).credits, 0.125);
 });

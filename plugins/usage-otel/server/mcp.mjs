@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import os from "node:os";
 // Minimal MCP-over-HTTP client for the daemon's own /mcp/agents endpoint.
 export async function mcpCall(url, token, tool, args) {
   const h = { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: "Bearer " + token };
@@ -12,4 +15,10 @@ export async function mcpCall(url, token, tool, args) {
   await post({ jsonrpc: "2.0", method: "notifications/initialized" }, i.sid);
   const r = await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: tool, arguments: args } }, i.sid);
   return r.json?.result?.structuredContent ?? r.json;
+}
+
+/** Daemon password: env override, else the owner-only secret file (so the daemon never has to export it to the agents it spawns). */
+export function hubPassword(env = process.env) {
+  if (env.PASEO_PASSWORD) return env.PASEO_PASSWORD;
+  try { return readFileSync(join(env.PASEO_HOME || join(os.homedir(), ".paseo"), "agent-hub-secret"), "utf8").trim(); } catch { return ""; }
 }

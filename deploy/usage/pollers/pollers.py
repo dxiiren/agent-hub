@@ -33,8 +33,15 @@ def to_epoch(v):
 def limits():
     base = os.environ.get("USAGE_MONITOR_URL", "http://127.0.0.1:47291")
     user, pw = os.environ.get("USAGE_MONITOR_USER"), os.environ.get("USAGE_MONITOR_PASS")
+    if not (user and pw):  # fallback: the owner-only login file (path in USAGE_MONITOR_LOGIN, else the pool's default); never committed
+        f = os.environ.get("USAGE_MONITOR_LOGIN") or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.local/share"), "llm-pool", "monitor-login.json")
+        try:
+            j = json.load(open(f, encoding="utf-8"))
+            user, pw = j.get("username"), j.get("password")
+        except (OSError, ValueError):
+            pass
     if not (user and pw):
-        raise RuntimeError("USAGE_MONITOR_USER / USAGE_MONITOR_PASS not set")
+        raise RuntimeError("USAGE_MONITOR_USER / USAGE_MONITOR_PASS not set (or USAGE_MONITOR_LOGIN file unreadable)")
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     form = urllib.parse.urlencode({"username": user, "password": pw}).encode()  # form-encoded; JSON returns 415
     op.open(urllib.request.Request(base + "/login", form, {"content-type": "application/x-www-form-urlencoded", "Origin": base}), timeout=10)

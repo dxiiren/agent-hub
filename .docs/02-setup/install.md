@@ -10,7 +10,7 @@
 4. `scripts/hub.mjs mcp add`: registers `agent-hub` (`/mcp/agents` with the bearer secret) in Claude Code, Qoder, Qwen Code, Codex and OpenCode. The file is backed up once to `<file>.agent-hub.bak` when it exists, only the `agent-hub` entry is touched, and `just mcp-remove` removes it again. Skip with `-NoMcp` / `--no-mcp`.
 5. Service mode: Windows = Task Scheduler task `AgentHub` (at logon plus every minute with `IgnoreNew`, per user, no admin); Linux = systemd user unit `agent-hub` with `Restart=on-failure` and linger. Skip with `-NoService` / `--no-service`. A host without systemd prints a skip line and `just up` runs `paseo daemon start`.
 
-6. Plugins (daemon running): `just plugins` sets `pluginsEnabled` and installs the gate and usage plugins. The service task runs `deploy/service/daemon-run.ps1`, which gives the daemon its plugin environment (`PASEO_PASSWORD` from the secret file, `AGENT_HUB_MCP`, `AGENT_HUB_ROUTES` = `config/routes/routes.local.json`, `AGENT_HUB_OTLP`, `AGENT_HUB_POLLER_DIR`) and puts Git Bash first on `PATH` so gates that run hooks do not pick the WSL `bash.exe`.
+6. Plugins (daemon running): `just plugins` sets `pluginsEnabled` and installs the gate and usage plugins. The service task runs `deploy/service/daemon-run.ps1`, which gives the daemon its plugin environment (`AGENT_HUB_MCP`, `AGENT_HUB_ROUTES` = `config/routes/routes.local.json`, `AGENT_HUB_OTLP`, `AGENT_HUB_POLLER_DIR`) and puts Git Bash first on `PATH` so gates that run hooks do not pick the WSL `bash.exe`.
 
 Daily commands: `just up`, `just down`, `just status`, `just plugins`, `just doctor` (PASS/FAIL per check and provider; `--deep` also runs one tiny task on each provider), `just uninstall`.
 

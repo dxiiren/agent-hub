@@ -58,6 +58,10 @@ Run `just` with no arguments to list every recipe. The ones you'll use daily:
 | `just claudex` | Launch Claude Code (Sonnet, all permissions) |
 | `just claudeo` / `just claudeh` | Same, on Opus / Haiku |
 
+## Security
+
+Full-access, bypass and yolo modes are used only with `--new-workspace worktree` (a throwaway worktree); `route.mjs` drops them otherwise. The daemon password lives in `<paseo home>/agent-hub-secret` and is never put in the environment agents inherit.
+
 ## Troubleshooting
 
 ### `just: command not found` right after setup
