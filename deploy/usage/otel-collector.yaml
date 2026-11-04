@@ -1,0 +1,51 @@
+# Metrics only. There is no logs or traces pipeline, so prompts, subagent results and tool output
+# (which Claude, Codex and Qwen Code can put in log events) are dropped on arrival.
+receivers:
+  otlp:
+    protocols:
+      grpc: {endpoint: 0.0.0.0:4317}
+      http: {endpoint: 0.0.0.0:4318}
+processors:
+  # Allow-list: token and cost counters of Claude Code, Codex and Qwen Code only.
+  filter/allow:
+    error_mode: ignore
+    metrics:
+      metric:
+        - 'not IsMatch(name, "^(claude_code[.](token|cost)[.]usage|codex[.]turn[.]token_usage|qwen-code[.]token[.]usage)$")'
+  # Identity out. `dev` is set by the client (OTEL_RESOURCE_ATTRIBUTES=dev=<name>); insert only fills a gap.
+  resource/strip:
+    attributes:
+      - {key: user.email, action: delete}
+      - {key: user.name, action: delete}
+      - {key: user.id, action: delete}
+      - {key: user.account_uuid, action: delete}
+      - {key: user.account_id, action: delete}
+      - {key: enduser.id, action: delete}
+      - {key: organization.id, action: delete}
+      - {key: session.id, action: delete}
+      - {key: conversation.id, action: delete}
+      - {key: host.name, action: delete}
+      - {key: dev, value: "${env:HUB_DEV_DEFAULT}", action: insert}
+  attributes/strip:
+    actions:
+      - {key: user.email, action: delete}
+      - {key: user.name, action: delete}
+      - {key: user.id, action: delete}
+      - {key: user.account_uuid, action: delete}
+      - {key: user.account_id, action: delete}
+      - {key: enduser.id, action: delete}
+      - {key: organization.id, action: delete}
+      - {key: session.id, action: delete}
+      - {key: conversation.id, action: delete}
+  batch: {}
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion: {enabled: true}
+    metric_expiration: 24h
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [filter/allow, resource/strip, attributes/strip, batch]
+      exporters: [prometheus]

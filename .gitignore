@@ -18,3 +18,10 @@ credentials*
 !.env.example
 config/local/
 !config/hub.local.template.json
+
+# deploy stacks: keep the templates, never the filled files
+!.env.template
+deploy/usage/targets/*.yml
+deploy/shared/env/*.env
+deploy/shared/.env
+__pycache__/

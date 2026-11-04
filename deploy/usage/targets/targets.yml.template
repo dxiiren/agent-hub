@@ -1,0 +1,7 @@
+# Copy to targets.yml (git-ignored) and replace the placeholders. One block per server.
+# Prometheus re-reads this file by itself; no restart needed.
+- targets: ['<OFFICE_SGLANG_HOST>:<PORT>']
+  labels: {host: office-1, provider: office-qwen, kind: sglang}
+# Laptop llama-server started with --metrics (from a container: host.docker.internal)
+- targets: ['host.docker.internal:8080']
+  labels: {host: laptop, provider: laptop-qwen, kind: llamacpp}

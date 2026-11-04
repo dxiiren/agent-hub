@@ -1,0 +1,13 @@
+# One metric for the dashboard: hub_tokens_total{provider,model,dev,type}. Vendors count cache differently,
+# so the type split is kept (input, output, cacheRead, ...), never one summed number.
+groups:
+  - name: hub-tokens
+    rules:
+      - record: hub_tokens_total
+        expr: label_replace(sum by (model, dev, type) (claude_code_token_usage_tokens_total), "provider", "claude", "", "")
+      - record: hub_tokens_total
+        expr: sum by (provider, model, dev, type) (label_replace(label_replace(codex_turn_token_usage_sum{token_type!="total"}, "type", "$1", "token_type", "(.*)"), "provider", "codex", "", ""))
+      - record: hub_tokens_total
+        expr: label_replace(sum by (model, dev, type) (qwen_code_token_usage_total), "provider", "qwen-code", "", "")
+      - record: hub_tokens_total
+        expr: sum by (provider, model, dev, type) (opencode_tokens_total)

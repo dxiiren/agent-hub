@@ -14,5 +14,7 @@ CI workflow files under `ci/` are not wired to a runner yet. Before they are: pi
 
 | Doc | Why |
 | --- | --- |
+| [usage-stack.md](usage-stack.md) | The OTel, Prometheus, Grafana stack and the host pollers |
+| [shared-server.md](shared-server.md) | One Paseo container per developer behind a login proxy |
 | [getting-started.md](../02-setup/getting-started.md) | The local "deployment" that actually exists |
 | [conventions.md](../05-reference/conventions.md) | Git rules that protect main |
