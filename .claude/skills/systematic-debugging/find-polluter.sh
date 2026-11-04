@@ -118,8 +118,9 @@ describe() {
 
 run_one() {
   local f="$1" cmd
-  cmd="${RUNNER//\{\}/\"$f\"}"
-  bash -c "$cmd" >/dev/null 2>&1
+  # the path is passed as $1, never spliced into the command text (no injection via file names)
+  cmd="${RUNNER//\{\}/\"\$1\"}"
+  bash -c "$cmd" _ "$f" >/dev/null 2>&1
 }
 
 echo "find-polluter: $TOTAL test file(s), runner: $RUNNER"

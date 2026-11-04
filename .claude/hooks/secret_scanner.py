@@ -53,6 +53,7 @@ PATTERNS: list[tuple[str, str, bool]] = [
     ),
     (r"(?i)\b(?:password|passwd)['\"\s]*[=:]\s*['\"][^'\"\s]{8,}['\"]", "hardcoded password", True),
 ]
+COMMIT_ALL = re.compile(r"(^|\s)(-[A-Za-z]*a[A-Za-z]*|--all)\b")
 _COMPILED = [(re.compile(p), kind, generic) for p, kind, generic in PATTERNS]
 
 SKIP_NAMES = {
@@ -72,13 +73,29 @@ def _git(*args: str) -> str:
     return out.stdout if out.returncode == 0 else ""
 
 
+_STAGED: set[str] = set()
+
+
+def _text(path: str) -> bytes:
+    """Staged blob when the file is staged (what the commit carries), else the working file."""
+    if path in _STAGED:
+        out = subprocess.run(["git", "show", f":{path}"], capture_output=True, check=False)
+        return out.stdout if out.returncode == 0 else b""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return b""
+
+
 def _candidates(command: str) -> list[str]:
     """Files the commit will carry: already staged, plus what a chained `git add` / `-a` adds."""
     files = [
         f for f in _git("diff", "--cached", "--name-only", "--diff-filter=ACM").splitlines() if f
     ]
+    _STAGED.update(f.replace("\\", "/") for f in files)
     commit = re.search(r"git(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+commit\s+(.*)", command)
-    if commit and re.search(r"(^|\s)-\w*a", commit.group(1)):
+    if commit and COMMIT_ALL.search(commit.group(1)):
         files += [f for f in _git("diff", "--name-only").splitlines() if f]
     for part in re.split(r"&&|;|\|\|", command):
         add = re.match(r"\s*git(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+add\s+(.+)", part)
@@ -94,7 +111,7 @@ def _candidates(command: str) -> list[str]:
     seen: list[str] = []
     for f in files:
         f = f.replace("\\", "/")
-        if f not in seen and os.path.isfile(f):
+        if f not in seen and (f in _STAGED or os.path.isfile(f)):
             seen.append(f)
     return seen
 
@@ -102,23 +119,18 @@ def _candidates(command: str) -> list[str]:
 def _skip(path: str) -> bool:
     if os.path.basename(path) in SKIP_NAMES or any(p in path for p in SKIP_PARTS):
         return True
-    try:
-        with open(path, "rb") as fh:
-            return b"\0" in fh.read(2048)
-    except OSError:
-        return True
+    return b"\0" in _text(path)[:2048]
 
 
 def _scan(path: str) -> list[tuple[int, str]]:
     in_tests = path.startswith("tests/")
     hits: list[tuple[int, str]] = []
-    with open(path, encoding="utf-8", errors="ignore") as fh:
-        for number, line in enumerate(fh, 1):
-            for pattern, kind, generic in _COMPILED:
-                if generic and in_tests:
-                    continue
-                if pattern.search(line):
-                    hits.append((number, kind))
+    for number, line in enumerate(_text(path).decode("utf-8", "ignore").splitlines(), 1):
+        for pattern, kind, generic in _COMPILED:
+            if generic and in_tests:
+                continue
+            if pattern.search(line):
+                hits.append((number, kind))
     return hits
 
 

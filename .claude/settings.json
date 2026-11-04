@@ -16,7 +16,8 @@
       "Bash(git push:*)",
       "Bash(git mv:*)",
       "Bash(git ls-files:*)",
-      "Bash(git config *)",
+      "Bash(git config --get *)",
+      "Bash(git config --list)",
       "Bash(git check-ignore:*)",
       "Bash(gh:*)",
       "Bash(just:*)",
@@ -24,7 +25,6 @@
       "Bash(npm run:*)",
       "Bash(npm ci:*)",
       "Bash(npm install:*)",
-      "Bash(curl:*)",
       "Bash(grep:*)",
       "Bash(findstr:*)",
       "Bash(wc:*)"
@@ -74,6 +74,11 @@
       "Bash(git push * -fq*)",
       "Bash(git -C * push -fq*)",
       "Bash(git -C * push * -fq*)",
+      "Bash(git config * core.sshCommand*)",
+      "Bash(git config * core.fsmonitor*)",
+      "Bash(git config * core.pager*)",
+      "Bash(git config * core.hooksPath*)",
+      "Bash(git config * credential.helper*)",
       "Bash(rm -rf /*)",
       "mcp__github__delete_file",
       "Read(**/.env)",
@@ -125,7 +130,7 @@
           {
             "type": "command",
             "timeout": 30,
-            "command": "bash -c 'p=$(cat); case \"$p\" in *git*commit*) cd \"$(git rev-parse --show-toplevel)\" && printf \"%s\" \"$p\" | uv run --no-project python .claude/hooks/secret_scanner.py ;; esac'"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/run_hook.sh\" secret_scanner.py"
           }
         ]
       },
@@ -135,7 +140,12 @@
           {
             "type": "command",
             "timeout": 15,
-            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/no_force_push.py\"; if [ -f \"$f\" ] && command -v python >/dev/null 2>&1; then python \"$f\"; fi"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/run_hook.sh\" no_force_push.py"
+          },
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/run_hook.sh\" secret_path_guard.py"
           }
         ]
       }
