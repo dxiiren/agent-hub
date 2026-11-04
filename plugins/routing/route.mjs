@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
+import { gateDir, writeRequest } from "../gate/server/store.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -55,11 +56,13 @@ export function runRoute(o, paseo, routes) {
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
-    const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session, "gate/cmd": o.gate };
+    const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const mode = o.mode ?? routes.mode;
     if (mode) args.push("--mode", mode);
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
+    // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels
+    if (o.gate) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate);
     const j = paseo([...args, o.prompt]);
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : {}) });
     if (j.status === "completed") return { used: prov, agentId: j.agentId, status: "completed", trace };

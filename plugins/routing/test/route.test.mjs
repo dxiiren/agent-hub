@@ -38,3 +38,14 @@ test("unknown type and all-fail return used:null", () => {
   assert.equal(runRoute({ ...o, type: "nope" }, fake({ run: () => ({}) }), routes).used, null);
   assert.equal(runRoute(o, fake({ run: () => ({ status: "error" }) }), routes).used, null);
 });
+
+test("caller gate goes to the plugin-side store, never into labels", async () => {
+  const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const { claimRequest } = await import("../../gate/server/store.mjs");
+  const d = mkdtempSync(join(tmpdir(), "gd-"));
+  const p = fake({ run: () => ({ status: "completed", agentId: "A9" }) });
+  runRoute({ ...o, gate: "npm test", gateDir: d }, p, routes);
+  assert.ok(!p.calls.find((c) => c[0] === "run").some((a) => String(a).startsWith("gate/")));
+  assert.equal(claimRequest(d, "/r").cmd, "npm test");
+  assert.equal(claimRequest(d, "/r"), null);
+});

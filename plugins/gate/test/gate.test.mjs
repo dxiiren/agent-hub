@@ -62,3 +62,51 @@ test("repo default gate: matching row, then gateDefault, placeholder ignored", (
   assert.deepEqual(repoGate(rt, "/other"), {});
   assert.equal(repoGate({ gateDefault: "make test" }, "/other").cmd, "make test");
 });
+
+import { evaluate } from "../server/hook.mjs";
+import { writeRequest } from "../server/store.mjs";
+import { existsSync, writeFileSync as wf, readFileSync as rf } from "node:fs";
+
+const routesCfg = { gates: [{ match: ".*", cmd: BAD, maxLines: 400 }] };
+
+test("agent labels cannot switch the gate off or swap its command (labels are not an input)", () => {
+  const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
+  wf(join(d, "a.py"), "x = 2\n");
+  // evaluate() takes no labels at all; the attack is an agent that wrote gate/skip, gate/cmd=true, gate/forbid=.* on itself
+  const r = evaluate({ dir: st, id: "A", cwd: d, routes: routesCfg });
+  assert.equal(r.d.status, "RETRY"); assert.match(r.res.reasons.join(), /gate cmd exit 1/);
+  assert.equal(evaluate({ dir: st, id: "A", cwd: d, routes: routesCfg }).d.status, "FAIL");
+});
+test("attempt counter lives in the plugin store, survives a restart, and ignores label rewrites", () => {
+  const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
+  wf(join(d, "a.py"), "x = 2\n");
+  assert.equal(evaluate({ dir: st, id: "B", cwd: d, routes: routesCfg }).mirror["gate/attempts"], "1");
+  const state = JSON.parse(rf(join(st, "state.json"), "utf8")); assert.equal(state.B.attempts, 1);
+  const again = evaluate({ dir: st, id: "B", cwd: d, routes: routesCfg }); // a "restart": state reloaded from disk
+  assert.equal(again.d.status, "FAIL"); assert.equal(again.mirror["gate/attempts"], "2");
+});
+test("caller-supplied gate comes from the plugin-side request, bound to the agent once", () => {
+  const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
+  wf(join(d, "a.py"), "x = 2\n");
+  writeRequest(st, d, OK); // routes default is BAD, caller says OK
+  assert.equal(evaluate({ dir: st, id: "C", cwd: d, routes: routesCfg }).d.status, "PASS");
+  assert.equal(evaluate({ dir: st, id: "D", cwd: d, routes: routesCfg }).d.status, "RETRY"); // request was consumed
+});
+test("a repo with a malicious core.fsmonitor / diff.external / textconv does not execute it", () => {
+  const d = repo(), marker = join(mkdtempSync(join(tmpdir(), "pwn-")), "PWNED");
+  const evil = `node -e "require('fs').writeFileSync('${marker.split(String.fromCharCode(92)).join("/")}','1')"`;
+  sh(d, "config", "core.fsmonitor", evil);
+  sh(d, "config", "diff.external", evil);
+  sh(d, "config", "diff.evil.textconv", evil);
+  wf(join(d, ".gitattributes"), "*.py diff=evil\n");
+  wf(join(d, "a.py"), "x = 9\n");
+  const r = runGate(d, { cmd: OK });
+  assert.equal(existsSync(marker), false, "repo-controlled command ran");
+  assert.ok(r.files >= 1);
+  // control: plain git in the same repo does run it, so the test can fail
+  execFileSync("git", ["diff", "HEAD"], { cwd: d, stdio: "ignore" });
+  assert.equal(existsSync(marker), true, "control: unhardened git should have triggered the config");
+});
+test("pattern length is capped", () => {
+  assert.throws(() => repoGate({ gates: [{ match: "a".repeat(300) }] }, "/x"), /too long/);
+});
