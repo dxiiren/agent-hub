@@ -1,0 +1,10 @@
+{
+  "_comment": "Default provider order per task category. A caller may override the provider and the gate. A busy or failed entry moves to the next one.",
+  "gateDefault": "<REPO_GATE_COMMAND>",
+  "routes": {
+    "summarise": ["office-qwen", "laptop-llama", "codex"],
+    "code-edit": ["office-qwen", "codex", "qoder"],
+    "bugfix": ["codex", "office-qwen"],
+    "draft": ["office-qwen", "laptop-llama"]
+  }
+}

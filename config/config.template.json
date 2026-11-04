@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to config.local.json (git-ignored) and fill the placeholders. W1 owns the merge script that joins the fragments under config/.",
+  "providers": {
+    "office-qwen": { "kind": "openai-compatible", "baseUrl": "<OFFICE_QWEN_URL>", "model": "<OFFICE_QWEN_MODEL>", "apiKeyEnv": "OFFICE_QWEN_API_KEY" },
+    "laptop-llama": { "kind": "openai-compatible", "baseUrl": "<LAPTOP_LLAMA_URL>", "model": "<LAPTOP_MODEL>", "preflight": "deploy/laptop/preflight" },
+    "codex": { "kind": "cli", "command": "codex" },
+    "qoder": { "kind": "cli", "command": "qodercli" },
+    "qwen-code": { "kind": "acp", "command": "qwen" },
+    "claude": { "kind": "cli", "command": "claude" }
+  },
+  "git": { "forgeUrl": "<GITEA_URL>", "loginCommand": "tea login add" },
+  "usage": { "prometheusUrl": "<PROMETHEUS_URL>", "grafanaUrl": "<GRAFANA_URL>" }
+}

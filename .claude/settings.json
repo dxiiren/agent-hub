@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "statusLine": {
+    "type": "command",
+    "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo \"${CLAUDE_PROJECT_DIR:-$PWD}\") && cd \"$ROOT\" && uv run --no-project python .claude/hooks/statusline.py'",
+    "padding": 0,
+    "refreshInterval": 30
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git fetch *)",
+      "Bash(git stash *)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git mv:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git config *)",
+      "Bash(git check-ignore:*)",
+      "Bash(gh:*)",
+      "Bash(just:*)",
+      "Bash(uv run:*)",
+      "Bash(npm run:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(curl:*)",
+      "Bash(grep:*)",
+      "Bash(findstr:*)",
+      "Bash(wc:*)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f *)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push * +*)",
+      "Bash(git push -fu*)",
+      "Bash(git push -uf*)",
+      "Bash(git push * -fu*)",
+      "Bash(git push * -uf*)",
+      "Bash(git -C * push *--force*)",
+      "Bash(git -C * push * -f)",
+      "Bash(git -C * push * -f *)",
+      "Bash(git -C * push * -fu*)",
+      "Bash(git -C * push * -uf*)",
+      "Bash(git -C * push * +*)",
+      "Bash(git -C * push -f*)",
+      "Bash(git -C * push -fu*)",
+      "Bash(git -C * push -uf*)",
+      "Bash(git -C * push --force*)",
+      "Bash(git push -nf*)",
+      "Bash(git push * -nf*)",
+      "Bash(git -C * push -nf*)",
+      "Bash(git -C * push * -nf*)",
+      "Bash(git push -fn*)",
+      "Bash(git push * -fn*)",
+      "Bash(git -C * push -fn*)",
+      "Bash(git -C * push * -fn*)",
+      "Bash(git push -vf*)",
+      "Bash(git push * -vf*)",
+      "Bash(git -C * push -vf*)",
+      "Bash(git -C * push * -vf*)",
+      "Bash(git push -fv*)",
+      "Bash(git push * -fv*)",
+      "Bash(git -C * push -fv*)",
+      "Bash(git -C * push * -fv*)",
+      "Bash(git push -qf*)",
+      "Bash(git push * -qf*)",
+      "Bash(git -C * push -qf*)",
+      "Bash(git -C * push * -qf*)",
+      "Bash(git push -fq*)",
+      "Bash(git push * -fq*)",
+      "Bash(git -C * push -fq*)",
+      "Bash(git -C * push * -fq*)",
+      "Bash(rm -rf /*)",
+      "mcp__github__delete_file",
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.production)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Read(**/*.pem)",
+      "Read(**/id_rsa*)",
+      "Read(**/credentials.json)",
+      "Edit(**/.env)",
+      "Edit(**/.env.local)",
+      "Edit(**/.env.*.local)",
+      "Edit(**/.env.development)",
+      "Edit(**/.env.production)",
+      "Edit(**/.env.staging)",
+      "Edit(**/.env.test)",
+      "Edit(**/*.pem)",
+      "Edit(**/id_rsa*)",
+      "Edit(**/credentials.json)",
+      "Read(**/*.key)",
+      "Edit(**/*.key)",
+      "PowerShell(git push*--force*)",
+      "PowerShell(git push* -f*)",
+      "PowerShell(git push*--mirror*)",
+      "PowerShell(git push* +*)",
+      "PowerShell(git push*--delete*)",
+      "PowerShell(git *push* -f*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'gh auth status || echo \"WARN: gh not authenticated - CI monitoring will be blind\"'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "command": "bash -c 'p=$(cat); case \"$p\" in *git*commit*) cd \"$(git rev-parse --show-toplevel)\" && printf \"%s\" \"$p\" | uv run --no-project python .claude/hooks/secret_scanner.py ;; esac'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/no_force_push.py\"; if [ -f \"$f\" ] && command -v python >/dev/null 2>&1; then python \"$f\"; fi"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "context7",
+    "playwright"
+  ]
+}

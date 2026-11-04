@@ -1,0 +1,14 @@
+Test the Playwright MCP server (browser automation).
+
+Call `mcp__playwright__browser_navigate` with url = about:blank (this repo has no server and no local page).
+Then call `mcp__playwright__browser_snapshot`.
+
+Reply with:
+1. Connected? — are the playwright MCP tools available? (yes/no)
+2. Raw result — a short excerpt of the browser_snapshot accessibility tree (or the error).
+3. Verdict — PASS if the snapshot returns a page accessibility tree / DOM; else FAIL.
+
+Notes: a connection-refused on the local app URL with the server stopped is NOT a FAIL — navigate
+to about:blank instead (still proves the MCP works). If the tools aren't available: restart Claude
+and confirm "playwright" is in enabledMcpjsonServers (.claude/settings.json). If the browser binary
+is missing: `npx playwright install chromium`.

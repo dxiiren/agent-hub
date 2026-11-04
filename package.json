@@ -1,0 +1,15 @@
+{
+  "name": "agent-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Any AI client hands a task to any agent provider through one daemon, with a gate and one usage view.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node scripts/check-config.mjs",
+    "lint": "node scripts/check-config.mjs",
+    "build": "node scripts/check-config.mjs",
+    "scan": "node scripts/scan.mjs"
+  }
+}

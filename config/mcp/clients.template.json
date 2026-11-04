@@ -1,0 +1,6 @@
+{
+  "_comment": "Each client points at the daemon MCP endpoint. The password comes from the environment, never from this file.",
+  "endpoint": "<HUB_MCP_URL>",
+  "passwordEnv": "AGENT_HUB_PASSWORD",
+  "clients": ["claude-code", "codex", "qoder", "opencode", "qwen-code"]
+}

@@ -1,0 +1,11 @@
+agent-hub
+Copyright 2026 dxiiren
+
+This product builds on Paseo (https://github.com/getpaseo/paseo),
+licensed under the Apache License, Version 2.0. Paseo is the agent
+daemon that agent-hub configures and extends with plugins. Paseo is a
+trademark of its owners; agent-hub is an independent project and is not
+affiliated with or endorsed by them.
+
+The spec-kit templates under .specify/ come from github/spec-kit (MIT).
+The .claude/ kit comes from dxiiren/project-skeleton.

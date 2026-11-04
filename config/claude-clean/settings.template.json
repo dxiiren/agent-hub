@@ -1,0 +1,5 @@
+{
+  "_comment": "Minimal Claude config for agents the daemon launches: no plugins, no extra MCP servers, to keep RAM low.",
+  "enabledPlugins": {},
+  "mcpServers": {}
+}
