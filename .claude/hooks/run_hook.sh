@@ -4,6 +4,7 @@
 # usage: run_hook.sh <script.py>
 d="$(cd "$(dirname "$0")" && pwd)"; command -v cygpath >/dev/null 2>&1 && d="$(cygpath -m "$d")"
 p="$(cat)"
+top="$(git rev-parse --show-toplevel 2>/dev/null)" && cd "$top"
 if [ -f "$d/$1" ]; then
   if command -v uv >/dev/null 2>&1; then printf '%s' "$p" | uv run --no-project python "$d/$1"; exit $?; fi
   for py in python3 python; do

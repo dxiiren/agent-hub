@@ -59,4 +59,35 @@ try:
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
+# round 2: guard normalisation
+for c in [r"cat C:\x\.env", r'cat "C:\x y\.env"', "cat '.env'", "cat *.pem", "cat .e?v", "cat .en*", "cat a,.env", "cat .e[n]v",
+          'cat ".e""nv"', r"cat dir\id_rsa.pub"]:
+    check("r2 block " + c, g.blocked(c) is not None)
+for c in ["ls *", "ls .*", r"cat C:\x\readme.md", "cat .env.example"]:
+    check("r2 allow " + c, g.blocked(c) is None)
+
+# round 2: scanner re-add modes scan the working file, plain commit does not; cwd = top-level
+d = tempfile.mkdtemp()
+try:
+    run = lambda *a: subprocess.run(["git", *a], cwd=d, capture_output=True, text=True)
+    run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    os.makedirs(os.path.join(d, "sub"))
+    secret = "AKIA" + "ABCDEFGHIJKLMNOP"
+    f = os.path.join(d, "a.txt")
+    open(f, "w").write("clean\n"); run("add", "a.txt"); run("commit", "-qm", "i")
+    scan = lambda cmd, cwd: subprocess.run([sys.executable, os.path.join(H, "secret_scanner.py")], cwd=cwd, text=True,
+                                          input=json.dumps({"tool_input": {"command": cmd}}), capture_output=True).returncode
+    open(f, "w").write("key=" + secret + "\n")  # modified, NOT staged
+    check("plain commit ignores unstaged", scan("git commit -m x", d) == 0)
+    for cmd in ["git commit -am x", "git commit --all -m x", "git commit -m x a.txt", "git commit -i a.txt -m x",
+                "git commit --only a.txt -m x", "git add a.txt && git commit -m x"]:
+        check("readd caught: " + cmd, scan(cmd, d) == 2)
+    check("runs from a subdir", scan("git commit -am x", os.path.join(d, "sub")) == 2)
+    run("add", "a.txt"); open(f, "w").write("clean\n")  # staged dirty, working clean
+    check("plain commit sees staged", scan("git commit -m x", d) == 2)
+    open(f, "w").write("key=" + secret + "\n"); run("add", "a.txt"); open(f, "w").write("clean\n")
+    check("readd still sees staged blob", scan("git commit -am x", d) == 2)
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
 print("FAIL: " + ", ".join(fails) if fails else "ALL PASS"); sys.exit(1 if fails else 0)

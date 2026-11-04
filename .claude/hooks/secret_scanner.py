@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -74,18 +75,48 @@ def _git(*args: str) -> str:
 
 
 _STAGED: set[str] = set()
+_READD = [False]
+_WORK: set[str] = set()  # paths whose working copy must be scanned too (re-added by the command)
 
 
-def _text(path: str) -> bytes:
-    """Staged blob when the file is staged (what the commit carries), else the working file."""
+def _texts(path: str) -> list[bytes]:
+    """Every version the commit may carry: the staged blob, and the working file when re-added."""
+    out: list[bytes] = []
     if path in _STAGED:
-        out = subprocess.run(["git", "show", f":{path}"], capture_output=True, check=False)
-        return out.stdout if out.returncode == 0 else b""
+        r = subprocess.run(["git", "show", f":{path}"], capture_output=True, check=False)
+        if r.returncode == 0:
+            out.append(r.stdout)
+    if path not in _STAGED or path in _WORK:
+        try:
+            with open(path, "rb") as fh:
+                out.append(fh.read())
+        except OSError:
+            pass
+    return out
+
+
+_VALUE_OPTS = {"-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message", "--cleanup", "--trailer", "-S"}
+
+
+def _commit_args(rest: str) -> tuple[bool, list[str]]:
+    """(re-adds files?, pathspecs) for the text after `git commit`."""
     try:
-        with open(path, "rb") as fh:
-            return fh.read()
-    except OSError:
-        return b""
+        toks = shlex.split(re.split(r"&&|;|\|\|", rest)[0])
+    except ValueError:
+        toks = rest.split()
+    readd, paths, skip, dd = False, [], False, False
+    for t in toks:
+        if skip:
+            skip = False
+        elif dd or not t.startswith("-"):
+            paths.append(t.replace("\\", "/")); readd = True
+        elif t == "--":
+            dd = True
+        elif t in _VALUE_OPTS:
+            skip = True
+        elif t in ("--all", "--include", "--only") or (not t.startswith("--") and re.search("[aio]", t[1:])):
+            readd = True
+    return readd, paths
 
 
 def _candidates(command: str) -> list[str]:
@@ -95,12 +126,16 @@ def _candidates(command: str) -> list[str]:
     ]
     _STAGED.update(f.replace("\\", "/") for f in files)
     commit = re.search(r"git(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+commit\s+(.*)", command)
-    if commit and COMMIT_ALL.search(commit.group(1)):
-        files += [f for f in _git("diff", "--name-only").splitlines() if f]
+    if commit:
+        readd, paths = _commit_args(commit.group(1))
+        if COMMIT_ALL.search(commit.group(1)) or readd:
+            _READD[0] = True
+            files += [f for f in _git("diff", "--name-only").splitlines() if f] + paths
     for part in re.split(r"&&|;|\|\|", command):
         add = re.match(r"\s*git(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+add\s+(.+)", part)
         if not add:
             continue
+        _READD[0] = True
         args = add.group(1).split()
         if any(a in (".", "-A", "--all") for a in args):
             for line in _git("status", "--porcelain").splitlines():
@@ -113,28 +148,34 @@ def _candidates(command: str) -> list[str]:
         f = f.replace("\\", "/")
         if f not in seen and (f in _STAGED or os.path.isfile(f)):
             seen.append(f)
+    if _READD[0]:
+        _WORK.update(seen)
     return seen
 
 
 def _skip(path: str) -> bool:
     if os.path.basename(path) in SKIP_NAMES or any(p in path for p in SKIP_PARTS):
         return True
-    return b"\0" in _text(path)[:2048]
+    return all(b"\0" in t[:2048] for t in _texts(path))
 
 
 def _scan(path: str) -> list[tuple[int, str]]:
     in_tests = path.startswith("tests/")
     hits: list[tuple[int, str]] = []
-    for number, line in enumerate(_text(path).decode("utf-8", "ignore").splitlines(), 1):
-        for pattern, kind, generic in _COMPILED:
-            if generic and in_tests:
-                continue
-            if pattern.search(line):
-                hits.append((number, kind))
+    for blob in _texts(path):
+        for number, line in enumerate(blob.decode("utf-8", "ignore").splitlines(), 1):
+            for pattern, kind, generic in _COMPILED:
+                if generic and in_tests:
+                    continue
+                if pattern.search(line) and (number, kind) not in hits:
+                    hits.append((number, kind))
     return hits
 
 
 def main() -> int:
+    top = _git("rev-parse", "--show-toplevel").strip()
+    if top:
+        os.chdir(top)
     try:
         payload = json.load(sys.stdin)
     except ValueError:

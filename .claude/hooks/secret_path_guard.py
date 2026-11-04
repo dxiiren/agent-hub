@@ -6,17 +6,31 @@ import json
 import re
 import sys
 
-SECRET = re.compile(
-    r"""(?ix)(?:^|[\s/\'"=<>@:])
-    (?:\.env(?:\.[\w.-]*)?|[\w.*?/\-]*\.(?:pem|key)|id_rsa[\w.*-]*|credentials[\w.*-]*)
-    (?=$|[\s'"|;&)<>])""")
+import fnmatch
+
 SAFE = re.compile(r"\.(?:example|sample|stub|template)$", re.I)
+SPLIT = re.compile(r"[\s'\"=<>@:,;|&()`]+")
+PLAIN = re.compile(r"^(?:\.env(?:\..*)?|.*\.(?:pem|key)|id_rsa.*|credentials.*)$", re.I)
+SAMPLES = (".env", ".env.local", ".env.production", "server.pem", "server.key", "id_rsa", "credentials.json")
+
+
+def _hit(tok: str) -> bool:
+    name = tok.rsplit("/", 1)[-1]
+    if not name or SAFE.search(name):
+        return False
+    if any(c in name for c in "*?["):
+        # a glob made only of wildcards and dots (`*`, `.*`) is too broad to call a secret
+        return bool(name.strip("*?[]./")) and any(fnmatch.fnmatchcase(x, name) for x in SAMPLES)
+    return bool(PLAIN.match(name))
 
 
 def blocked(command: str) -> str | None:
-    for m in SECRET.finditer(command):
-        if not SAFE.search(m.group(0).strip(" \t'\"=<>@:")):
-            return m.group(0).strip()
+    cmd = command.replace("\\", "/")
+    # check the text with quotes as separators and with quotes removed (".e""nv" joins up)
+    for text in (cmd, re.sub(r"['\"]", "", cmd)):
+        for tok in SPLIT.split(text):
+            if _hit(tok):
+                return tok
     return None
 
 
