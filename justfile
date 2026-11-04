@@ -19,6 +19,56 @@ install:
 install *flags:
     @sh '{{justfile_directory()}}/setup.sh' {{flags}}
 
+# ─── Hub: daemon, providers, MCP ─────────────────────────
+
+# Start the daemon (the scheduled task / systemd unit when installed, else a plain `paseo daemon start`).
+[windows]
+start:
+    @& '{{justfile_directory()}}/deploy/service/service.ps1' start
+
+[unix]
+start:
+    @sh '{{justfile_directory()}}/deploy/service/service.sh' start
+
+# Stop the daemon.
+[windows]
+stop:
+    @& '{{justfile_directory()}}/deploy/service/service.ps1' stop
+
+[unix]
+stop:
+    @sh '{{justfile_directory()}}/deploy/service/service.sh' stop
+
+# Show the service and daemon state.
+[windows]
+status:
+    @& '{{justfile_directory()}}/deploy/service/service.ps1' status
+
+[unix]
+status:
+    @sh '{{justfile_directory()}}/deploy/service/service.sh' status
+
+# PASS/FAIL per check and per provider; add --deep to run one tiny task on each provider.
+doctor *flags:
+    node scripts/hub.mjs doctor {{flags}}
+
+# Register the agent-hub MCP server in every installed client (backs up first; only the agent-hub entry).
+mcp-add:
+    node scripts/hub.mjs mcp add
+
+# Remove the agent-hub MCP server from every installed client.
+mcp-remove:
+    node scripts/hub.mjs mcp remove
+
+# Undo the install: service, MCP entries, providers and secret (Paseo itself and your agent CLIs stay).
+[windows]
+uninstall:
+    @& '{{justfile_directory()}}/deploy/service/service.ps1' uninstall; node scripts/hub.mjs mcp remove; node scripts/hub.mjs unconfigure
+
+[unix]
+uninstall:
+    @sh '{{justfile_directory()}}/deploy/service/service.sh' uninstall; node scripts/hub.mjs mcp remove; node scripts/hub.mjs unconfigure
+
 # ─── Build and quality ───────────────────────────────────
 
 # Install the npm dependencies (npm ci when the lockfile allows, else npm install).
