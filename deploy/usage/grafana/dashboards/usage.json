@@ -1,0 +1,681 @@
+{
+ "uid": "agent-hub-usage",
+ "title": "Agent Hub usage",
+ "schemaVersion": 39,
+ "version": 1,
+ "time": {
+  "from": "now-7d",
+  "to": "now"
+ },
+ "refresh": "30s",
+ "tags": [
+  "agent-hub"
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "provider",
+    "label": "provider",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prom"
+    },
+    "query": {
+     "query": "label_values(hub_tokens_total, provider)",
+     "refId": "v"
+    },
+    "includeAll": true,
+    "multi": true,
+    "allValue": ".+",
+    "current": {
+     "selected": true,
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2
+   },
+   {
+    "name": "dev",
+    "label": "dev",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prom"
+    },
+    "query": {
+     "query": "label_values(hub_tokens_total, dev)",
+     "refId": "v"
+    },
+    "includeAll": true,
+    "multi": true,
+    "allValue": ".+",
+    "current": {
+     "selected": true,
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "Tokens in+out today (all providers)",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(max_over_time(hub_tokens_total{provider=~\"$provider\",dev=~\"$dev\",type=~\"input|output\"}[1d]) or vector(0))",
+     "legendFormat": "tokens",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Qoder credits used (balance used)",
+   "gridPos": {
+    "x": 6,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(credits_used) or vector(0)",
+     "legendFormat": "used",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none"
+   },
+   "description": "Used credits of the Qoder resource package (SDK). Credits, not tokens."
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Qoder credits remaining",
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(credits_remaining)",
+     "legendFormat": "remaining",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Qoder quota resets",
+   "gridPos": {
+    "x": 18,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(credits_reset_timestamp_seconds) * 1000",
+     "legendFormat": "resets",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dateTimeAsLocal"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 6,
+   "type": "bargauge",
+   "title": "Tokens in+out per provider / model / dev (highest counter value in range)",
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 12,
+    "h": 10
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by(provider,model,dev)(max_over_time(hub_tokens_total{provider=~\"$provider\",dev=~\"$dev\",type=~\"input|output\"}[$__range]))",
+     "legendFormat": "{{provider}} | {{model}} | {{dev}}",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "gradient",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Tokens in+out: highest counter value per day by provider",
+   "gridPos": {
+    "x": 12,
+    "y": 4,
+    "w": 12,
+    "h": 10
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by(provider)(max_over_time(hub_tokens_total{provider=~\"$provider\",dev=~\"$dev\",type=~\"input|output\"}[1d]))",
+     "legendFormat": "{{provider}}",
+     "refId": "A",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 70,
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 8,
+   "type": "bargauge",
+   "title": "Token type split per provider (never summed across vendors)",
+   "gridPos": {
+    "x": 0,
+    "y": 14,
+    "w": 12,
+    "h": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by(provider,type)(max_over_time(hub_tokens_total{provider=~\"$provider\",dev=~\"$dev\"}[$__range]))",
+     "legendFormat": "{{provider}} | {{type}}",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "gradient",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Qoder credits used per day (native unit: credits)",
+   "gridPos": {
+    "x": 12,
+    "y": 14,
+    "w": 12,
+    "h": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max by(dev)(max_over_time(credits_used_today[1d]))",
+     "legendFormat": "{{dev}}",
+     "refId": "A",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 70
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 10,
+   "type": "bargauge",
+   "title": "Claude / Codex limit % (Usage Monitor)",
+   "gridPos": {
+    "x": 0,
+    "y": 23,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "usage_limit_percent",
+     "legendFormat": "{{plan}} {{account}} {{window}} [{{state}}]",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100
+    },
+    "overrides": []
+   },
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "gradient",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  },
+  {
+   "id": 11,
+   "type": "stat",
+   "title": "Limit resets",
+   "gridPos": {
+    "x": 12,
+    "y": 23,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "usage_limit_reset_timestamp_seconds * 1000",
+     "legendFormat": "{{plan}} {{account}} {{window}}",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dateTimeAsLocal"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "textMode": "value_and_name",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "Server slot use (visible, no target): running and queued requests",
+   "gridPos": {
+    "x": 0,
+    "y": 31,
+    "w": 12,
+    "h": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sglang:num_running_reqs",
+     "legendFormat": "{{host}} running",
+     "refId": "A",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    },
+    {
+     "expr": "sglang:num_queue_reqs",
+     "legendFormat": "{{host}} queued",
+     "refId": "B",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    },
+    {
+     "expr": "llamacpp:requests_processing",
+     "legendFormat": "{{host}} running",
+     "refId": "C",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    },
+    {
+     "expr": "llamacpp:requests_deferred",
+     "legendFormat": "{{host}} queued",
+     "refId": "D",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "description": "Counters are server-wide for every caller. No numeric target (decision 50)."
+  },
+  {
+   "id": 13,
+   "type": "timeseries",
+   "title": "Server-wide tokens per minute (all callers)",
+   "gridPos": {
+    "x": 12,
+    "y": 31,
+    "w": 12,
+    "h": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by(host)(rate(sglang:generation_tokens_total[5m])) * 60",
+     "legendFormat": "{{host}} generated",
+     "refId": "A",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    },
+    {
+     "expr": "sum by(host)(rate(llamacpp:tokens_predicted_total[5m])) * 60",
+     "legendFormat": "{{host}} generated",
+     "refId": "B",
+     "instant": false,
+     "range": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "options": {
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 14,
+   "type": "stat",
+   "title": "Sources (live = poller answered; otherwise not captured)",
+   "gridPos": {
+    "x": 0,
+    "y": 40,
+    "w": 24,
+    "h": 5
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "hub_poller_up",
+     "legendFormat": "{{poller}}",
+     "refId": "A",
+     "instant": true,
+     "range": false,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "live",
+         "color": "green"
+        },
+        "0": {
+         "text": "not captured",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "textMode": "value_and_name",
+    "graphMode": "none",
+    "colorMode": "background"
+   },
+   "description": "Qoder tokens: not reported (credits only). Office SGLang and laptop llama-server: server-wide, no per-dev split. OpenCode: export poller (its OTel has no token attributes)."
+  }
+ ]
+}

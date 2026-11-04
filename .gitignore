@@ -17,3 +17,10 @@ credentials*
 .env*
 !.env.example
 config/local/
+
+# deploy stacks: keep the templates, never the filled files
+!.env.template
+deploy/usage/targets/*.yml
+deploy/shared/env/*.env
+deploy/shared/.env
+__pycache__/

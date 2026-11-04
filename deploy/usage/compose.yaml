@@ -1,0 +1,71 @@
+# Usage stack: OTel collector -> Prometheus -> Grafana. Counts only, never prompt text.
+# Start: cp .env.template .env (fill it), cp targets/targets.yml.template targets/targets.yml, docker compose up -d
+name: agenthub-usage
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.157.0
+    container_name: agenthub-usage-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      HUB_DEV_DEFAULT: ${HUB_DEV_DEFAULT:-unknown}
+    volumes: ["./otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
+    ports:
+      - "${HUB_BIND:-127.0.0.1}:${HUB_OTLP_GRPC_PORT:-4317}:4317"
+      - "${HUB_BIND:-127.0.0.1}:${HUB_OTLP_HTTP_PORT:-4318}:4318"
+    networks: [usage]
+  prometheus:
+    image: prom/prometheus:v3.10.0
+    container_name: agenthub-usage-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${HUB_RETENTION:-180d}
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rules.yml:/etc/prometheus/rules.yml:ro
+      - ./targets:/etc/prometheus/targets:ro
+      - prom_data:/prometheus
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["${HUB_BIND:-127.0.0.1}:${HUB_PROM_PORT:-9090}:9090"]
+    networks: [usage]
+  grafana:
+    image: grafana/grafana:13.3.0
+    container_name: agenthub-usage-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PW:?set GRAFANA_ADMIN_PW in .env}
+      # everyone sees everyone (decision 45): anonymous read-only viewers
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["${HUB_BIND:-127.0.0.1}:${HUB_GRAFANA_PORT:-3000}:3000"]
+    networks: [usage]
+    depends_on: [prometheus]
+  # Optional: the limit-% poller in a container (Linux host or a reachable Usage Monitor).
+  # The Qoder and OpenCode pollers need the host's CLIs: run pollers/run-pollers.* on the host instead.
+  pollers:
+    profiles: ["pollers"]
+    image: python:3.12-slim
+    container_name: agenthub-usage-pollers
+    restart: unless-stopped
+    command: ["python", "/app/pollers.py"]
+    environment:
+      POLLERS: limits
+      USAGE_MONITOR_URL: ${USAGE_MONITOR_URL:-http://host.docker.internal:47291}
+      USAGE_MONITOR_USER: ${USAGE_MONITOR_USER:-}
+      USAGE_MONITOR_PASS: ${USAGE_MONITOR_PASS:-}
+    volumes: ["./pollers/pollers.py:/app/pollers.py:ro"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [usage]
+volumes:
+  prom_data: {name: agenthub-usage_prom_data}
+  grafana_data: {name: agenthub-usage_grafana_data}
+networks:
+  usage: {name: agenthub-usage-net, ipam: {config: [{subnet: 10.78.0.0/24}]}}
