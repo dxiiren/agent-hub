@@ -17,3 +17,4 @@ credentials*
 .env*
 !.env.example
 config/local/
+!config/hub.local.template.json

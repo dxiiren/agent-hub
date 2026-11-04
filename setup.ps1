@@ -9,6 +9,8 @@
 # Usage: pwsh ./setup.ps1   or   powershell -ExecutionPolicy Bypass -File ./setup.ps1
 # Note: run from PowerShell, NOT cmd.exe.
 
+param([switch]$NoService, [switch]$NoMcp)   # -NoService: skip the Task Scheduler task; -NoMcp: do not touch client MCP configs
+
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
@@ -210,12 +212,48 @@ if (Test-Path $mcpJson) {
     Write-Host "[INFO] No .mcp.json.stub found -- skipping MCP setup." -ForegroundColor Cyan
 }
 
+# ---------- 9. Paseo daemon (pinned) ----------
+$PaseoVersion = '0.15.0'
+Refresh-Path
+$have = if (Test-Command "paseo") { ((& paseo --version 2>&1) | Select-Object -First 1).ToString().Trim() } else { '' }
+if ($have -eq $PaseoVersion) {
+    Write-Host "[OK] Paseo $have already installed" -ForegroundColor Green
+} else {
+    Write-Host "[INSTALL] Installing Paseo $PaseoVersion via npm (found: '$have')..." -ForegroundColor Yellow
+    $savedEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    & npm install -g "@getpaseo/cli@$PaseoVersion" 2>&1 | Out-Host
+    $ErrorActionPreference = $savedEAP
+    Refresh-Path
+    if (-not (Test-Command "paseo")) { Write-Host "[FAIL] Paseo install failed" -ForegroundColor Red; exit 1 }
+    Write-Host "[OK] Paseo installed: $(& paseo --version 2>&1 | Select-Object -First 1)" -ForegroundColor Green
+}
+
+# ---------- 10. Agent CLIs present? (check only; each dev logs in to their own) ----------
+foreach ($cli in @('codex','claude','qodercli','qwen','opencode')) {
+    if (Test-Command $cli) { Write-Host "[OK] agent CLI present: $cli" -ForegroundColor Green }
+    else { Write-Host "[SKIP] agent CLI not installed: $cli (its provider is not registered)" -ForegroundColor DarkGray }
+}
+
+# ---------- 11. Paseo config, providers, password (placeholders from env or config/hub.local.json) ----------
+Write-Host ""
+Write-Host "Configuring the hub..." -ForegroundColor Cyan
+& node (Join-Path $PSScriptRoot 'scripts/hub.mjs') configure
+if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] hub configure failed" -ForegroundColor Red; exit 1 }
+
+# ---------- 12. MCP into each installed client (backup first, agent-hub only, `just mcp-remove` undoes it) ----------
+if ($NoMcp) { Write-Host "[SKIP] -NoMcp: client MCP configs untouched" -ForegroundColor DarkGray }
+else { & node (Join-Path $PSScriptRoot 'scripts/hub.mjs') mcp add }
+
+# ---------- 13. Service mode: per-user Task Scheduler task, no admin ----------
+if ($NoService) { Write-Host "[SKIP] -NoService: no scheduled task" -ForegroundColor DarkGray }
+else { & (Join-Path $PSScriptRoot 'deploy/service/service.ps1') install }
+
 # ---------- Final verification ----------
 Refresh-Path
 Write-Host ""
 Write-Host "Verifying installations..." -ForegroundColor Cyan
 $missing = @()
-foreach ($tool in @('git','node','npm','claude','uv','just','gh')) {
+foreach ($tool in @('git','node','npm','claude','uv','just','gh','paseo')) {
     if (Test-Command $tool) {
         Write-Host "  [OK] $tool" -ForegroundColor Green
     } else {
@@ -235,6 +273,7 @@ Write-Host ""
 
 # ---------- Next steps (manual) ----------
 Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  0. Start and check the hub:         just start ; just doctor" -ForegroundColor Gray
 Write-Host "  1. Install dependencies:            just deps" -ForegroundColor Gray
 Write-Host "  2. Validate the config templates:   just test" -ForegroundColor Gray
 Write-Host "  3. Scan before any push:            just scan" -ForegroundColor Gray
