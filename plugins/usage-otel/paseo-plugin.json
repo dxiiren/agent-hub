@@ -1,0 +1,6 @@
+{
+  "id": "agent-hub-usage",
+  "name": "Agent Hub usage",
+  "media": [],
+  "requirements": { "paseo": ">=0.15.0" }
+}

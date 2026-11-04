@@ -1,0 +1,1 @@
+{ "name": "agent-hub-routing", "private": true, "version": "0.1.0", "type": "module", "bin": { "agent-hub-route": "route.mjs" } }

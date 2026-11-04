@@ -5,9 +5,11 @@
   "description": "Any AI client hands a task to any agent provider through one daemon, with a gate and one usage view.",
   "license": "Apache-2.0",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "test": "node scripts/check-config.mjs",
+    "test": "node scripts/check-config.mjs && node --test plugins/gate/test/*.test.mjs plugins/routing/test/*.test.mjs plugins/usage-otel/test/*.test.mjs && python -m unittest discover -s plugins/usage-otel/test -p \"*_test.py\"",
     "lint": "node scripts/check-config.mjs",
     "build": "node scripts/check-config.mjs",
     "scan": "node scripts/scan.mjs"

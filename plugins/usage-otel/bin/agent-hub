@@ -1,0 +1,7 @@
+#!/bin/sh
+d=$(dirname "$0")
+case "$1" in
+  usage) exec python3 -S -E "$d/agent_hub_usage.py" "$@" ;;
+  route) shift; exec node "$d/../../routing/route.mjs" "$@" ;;
+  *) echo 'usage: agent-hub usage --session ID [--json] | agent-hub route TYPE "prompt" [opts]' >&2; exit 2 ;;
+esac
