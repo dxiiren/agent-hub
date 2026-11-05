@@ -451,7 +451,7 @@ docker compose up -d --build</code></pre></div>
 
 <section id="bench">
 <h2><span class="n">11</span>Benchmarks</h2>
-<p>These are lab measurements taken on 5 November 2026 through the installed hub. They answer one question: <i>which model, in which harness, passes which kind of task, how fast, and at what cost.</i> The routing table in section 4 is derived from them. Models are listed by their latest version; older versions are kept only under "History". Cells still being measured carry a visible "pending" and are filled when the run closes.</p>
+<p>These are lab measurements taken on 5 November 2026 through the installed hub. They answer one question: <i>which model, in which harness, passes which kind of task, how fast, and at what cost.</i> The routing table in section 4 is derived from them. Models are listed by their latest version; older versions are kept only under "History". Every cell has finished; none is pending.</p>
 <h3>Method</h3>
 <p>Every run is <code>paseo run --provider P/M --new-workspace worktree --json --no-wait</code>, then <code>paseo wait</code>, then <code>paseo inspect</code> for usage, then the gate on the worktree, then <code>paseo delete</code>. A throwaway daemon, one try per cell unless a repeat is stated, a cap of 600 s (420 s on the laptop, 900 s on the office servers). Claude agents ran with a clean config directory. Every task's starting state was shown to fail its own gate before the run. A pass means the task's own gate passed; a start failure of the harness is dropped, not counted as a model fail. A pass after the cap still counts as a pass and is marked "late".</p>
 <ul>
@@ -467,45 +467,45 @@ docker compose up -d --build</code></pre></div>
 <tr><td>Claude Sonnet 5.5</td><td>Claude</td><td class="num pass">10/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">70</td><td>$0.235 per task (total cost incl. cache reads)</td></tr>
 <tr><td>Claude Haiku 5.5</td><td>Claude</td><td class="num pass">9/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">100</td><td>$0.020 per task</td></tr>
 <tr><td>Claude Opus 5.5</td><td>Claude</td><td class="num pass">10/10</td><td class="num partial">2/3</td><td class="num">n/a</td><td class="num">95</td><td>$0.530 per task; c2 failed twice; not routed for bulk</td></tr>
-<tr><td>Codex gpt-6.1-terra</td><td>Codex</td><td class="num pass">10/10 and 10/10 (two runs)</td><td class="num partial">2/3</td><td class="num">n/a</td><td class="num">71 / 51</td><td>best value; about 27k input tokens (mostly cached) per task. Repeat set C: <!-- FILL:codex-rerun-setC -->pending</td></tr>
+<tr><td>Codex gpt-6.1-terra</td><td>Codex</td><td class="num pass">10/10 and 10/10 (two runs)</td><td class="num partial">2/3</td><td class="num">n/a</td><td class="num">71 / 51</td><td>best value; about 27k input tokens (mostly cached) per task. Set C was run once (2/3), not repeated.</td></tr>
 <tr><td>Codex gpt-6.1-sol</td><td>Codex</td><td class="num pass">10/10 and 9/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">84 / 63</td><td>about 29k input tokens per task</td></tr>
 <tr><td>Codex gpt-6-luna (newest luna)</td><td>Codex</td><td class="num partial">8/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">80</td><td></td></tr>
 <tr><td>Qoder Efficient</td><td>Qoder (ACP)</td><td class="num pass">9/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">238</td><td>free tier, no timeouts; credits not exposed</td></tr>
-<tr><td>Qwen3.8-27B, office GPU server A (shared)</td><td>Qwen Code</td><td class="num">7/10 <!-- FILL:officeA-qwencode-B -->(pending: re-run)</td><td class="num">2/3 <!-- FILL:officeA-qwencode-C --></td><td class="num">7/7 <!-- FILL:officeA-qwencode-A --></td><td class="num">115</td><td>900 s cap; shared with other users, so slow on busy days</td></tr>
-<tr><td>Qwen3.8-27B, office GPU server B (2-GPU cluster)</td><td>Qwen Code</td><td class="num partial">9/10 <!-- FILL:officeB-qwencode-B --></td><td class="num">2/3 <!-- FILL:officeB-qwencode-C --></td><td class="num">6/7 <!-- FILL:officeB-qwencode-A --></td><td class="num">109</td><td>best office cell; 900 s cap</td></tr>
+<tr><td>Qwen3.8-27B, office GPU server A (shared)</td><td>Qwen Code</td><td class="num">7/10</td><td class="num">2/3</td><td class="num">7/7</td><td class="num">115</td><td>900 s cap; shared with other users, so slow on busy days</td></tr>
+<tr><td>Qwen3.8-27B, office GPU server B (2-GPU cluster)</td><td>Qwen Code</td><td class="num partial">9/10</td><td class="num">2/3</td><td class="num">6/7</td><td class="num">109</td><td>best office cell; 900 s cap</td></tr>
 <tr><td>Qwen3.5-9B on the laptop GPU, 64k context</td><td>Qwen Code</td><td class="num partial">4/10</td><td class="num">n/a</td><td class="num">n/a</td><td class="num">198</td><td>420 s cap; 100% on the GPU</td></tr>
 <tr><td>Qwen3.5-9B on the laptop GPU, 32k context (the default)</td><td>Qwen Code</td><td class="num fail">1/10</td><td class="num pass">3/3</td><td class="num pass">7/7</td><td class="num">71 (set A) / 143 (set B)</td><td>easy edits, summaries, scaffolds and reviews only</td></tr>
 </table></div>
 
 <h3>Harness comparison for the same model</h3>
-<p>The same Qwen3.8-27B served by an office server, driven by three different harnesses (set B counts the tasks that ran so far; the rest are pending):</p>
+<p>The same Qwen3.8-27B served by an office server, driven by three different harnesses (all 20 cells per harness and host ran; the median is for set B):</p>
 <div class="tbl"><table>
 <tr><th>Host</th><th>Harness</th><th class="num">Set B</th><th class="num">Set C</th><th class="num">Median s</th><th>Notes</th></tr>
-<tr><td>Office server A</td><td>OpenCode</td><td class="num">5/5 ran <!-- FILL:officeA-opencode-B -->(rest pending)</td><td class="num">2/3</td><td class="num">627</td><td>gate quality fine; only 2 of 5 inside 900 s</td></tr>
-<tr><td>Office server A</td><td>Codex</td><td class="num partial">2/5 ran <!-- FILL:officeA-codex-B -->(rest pending)</td><td class="num">1/3</td><td class="num">910</td><td>both passes were late; not usable on this host</td></tr>
-<tr><td>Office server B</td><td>OpenCode</td><td class="num">3/4 ran <!-- FILL:officeB-opencode-B -->(rest pending)</td><td class="num">2/3</td><td class="num">424</td><td>one timeout</td></tr>
-<tr><td>Office server B</td><td>Codex</td><td class="num pass">4/5 ran <!-- FILL:officeB-codex-B -->(rest pending)</td><td class="num">2/3</td><td class="num">585</td><td>4 of 5 inside the cap</td></tr>
+<tr><td>Office server A</td><td>OpenCode</td><td class="num pass">9/10</td><td class="num">2/3</td><td class="num">592</td><td>9 of 10 passed the gate, 6 inside 900 s</td></tr>
+<tr><td>Office server A</td><td>Codex</td><td class="num partial">6/10</td><td class="num">1/3</td><td class="num">691</td><td>only 3 of 10 inside 900 s; not usable on this host</td></tr>
+<tr><td>Office server B</td><td>OpenCode</td><td class="num">6/10</td><td class="num">2/3</td><td class="num">446</td><td>6 of 10, all inside the cap</td></tr>
+<tr><td>Office server B</td><td>Codex</td><td class="num pass">8/10</td><td class="num">2/3</td><td class="num">534</td><td>8 of 10, all inside the cap</td></tr>
 <tr><td>Laptop 9B, 64k</td><td>Qwen Code</td><td class="num partial">4/10</td><td class="num">n/a</td><td class="num">198</td><td>no malformed calls, no timeouts</td></tr>
 <tr><td>Laptop 9B, 64k</td><td>OpenCode</td><td class="num fail">1/10</td><td class="num">n/a</td><td class="num">138</td><td>wrong output, not infrastructure</td></tr>
 <tr><td>Laptop 9B, 32k</td><td>OpenCode</td><td class="num">n/a</td><td class="num fail">1/3</td><td class="num">52</td><td>set C only</td></tr>
 </table></div>
-<p>Reading it: for the small laptop model the harness matters a lot (Qwen Code 4/10 against OpenCode 1/10 on identical tasks). On the large office model the harnesses are close and the cost is latency: a set B task takes 10 to 15 minutes there. Set C's c2 fails for every harness on both hosts, so that one is a task-side weakness, not a harness one.</p>
+<p>Reading it: for the small laptop model the harness matters a lot (Qwen Code 4/10 against OpenCode 1/10 on identical tasks). On the large office model the harnesses are close and the cost is latency: a set B task takes 7 to 12 minutes there. Set C's c2 fails for every harness on both hosts, so that one is a task-side weakness, not a harness one.</p>
 
 <h3>Qoder tiers (qodercli 1.1.81, credits are exact)</h3>
-<p>Only valid runs are counted: the assistant model in the record must equal the requested tier. Set B is still running for the paid tiers.</p>
+<p>Only valid runs are counted: the assistant model in the record must equal the requested tier. All nine tiers have finished set B (10 hard edits, 420 s cap).</p>
 <div class="tbl"><table>
 <tr><th>Tier</th><th class="num">Set B</th><th class="num">Set C</th><th class="num">Median s</th><th class="num">Credits per task</th></tr>
-<tr><td>Qwen3.8-Max</td><td class="num">2/4 <!-- FILL:qoder-setB-max --></td><td class="num">3/3</td><td class="num">269</td><td class="num">27.1</td></tr>
-<tr><td>DeepSeek-V4-Pro</td><td class="num">1/1 <!-- FILL:qoder-setB-dspro --></td><td class="num">2/3</td><td class="num">111</td><td class="num">6.4</td></tr>
-<tr><td>Kimi-K3.1-Pro</td><td class="num">0/0 <!-- FILL:qoder-setB-kimi --></td><td class="num">3/3</td><td class="num">50</td><td class="num">3.2</td></tr>
-<tr><td>GLM-5.3</td><td class="num">1/1 <!-- FILL:qoder-setB-glm --></td><td class="num">3/3</td><td class="num">43</td><td class="num">6.2</td></tr>
-<tr><td>Fast</td><td class="num">1/1 <!-- FILL:qoder-setB-fast --></td><td class="num">2/3</td><td class="num">48</td><td class="num">6.6</td></tr>
-<tr><td>Qwen3.8-Flash</td><td class="num">0/1 <!-- FILL:qoder-setB-flash --></td><td class="num">2/3</td><td class="num">99</td><td class="num">1.0</td></tr>
-<tr><td>DeepSeek-Flash</td><td class="num">1/1 <!-- FILL:qoder-setB-dsflash --></td><td class="num">2/3</td><td class="num">80</td><td class="num">0.34</td></tr>
-<tr><td>GLM-5.3-Flash</td><td class="num">0/0 <!-- FILL:qoder-setB-glmflash --></td><td class="num">3/3</td><td class="num">50</td><td class="num">0.60</td></tr>
-<tr><td>MiniMax-M3.1-Flash</td><td class="num">0/0 <!-- FILL:qoder-setB-minimax --></td><td class="num">3/3</td><td class="num">46</td><td class="num">0.49</td></tr>
+<tr><td>Qwen3.8-Max</td><td class="num">5/10</td><td class="num">3/3</td><td class="num">275</td><td class="num">19.6</td></tr>
+<tr><td>DeepSeek-V4-Pro</td><td class="num">4/10</td><td class="num">2/3</td><td class="num">225</td><td class="num">4.1</td></tr>
+<tr><td>Kimi-K3.1-Pro</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">194</td><td class="num">9.2</td></tr>
+<tr><td>GLM-5.3</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">214</td><td class="num">11.1</td></tr>
+<tr><td>Fast</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">109</td><td class="num">7.9</td></tr>
+<tr><td>Qwen3.8-Flash</td><td class="num">8/10</td><td class="num">2/3</td><td class="num">294</td><td class="num">1.1</td></tr>
+<tr><td>DeepSeek-Flash</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">117</td><td class="num">0.84</td></tr>
+<tr><td>GLM-5.3-Flash</td><td class="num">3/10</td><td class="num">3/3</td><td class="num">276</td><td class="num">0.70</td></tr>
+<tr><td>MiniMax-M3.1-Flash</td><td class="num">6/10</td><td class="num">3/3</td><td class="num">201</td><td class="num">2.1</td></tr>
 </table></div>
-<p>The Flash tiers cost under one credit per task, which makes them the cheap lane for summaries and reviews once their set B is in. The Max and Pro tiers cost 6 to 27 credits per task and are not routed.</p>
+<p>The Flash tiers cost under one credit per task, and DeepSeek-Flash passed all 10 hard edits for 0.84 credits per task, so it is the cheap Qoder lane for code edits (Fast also passes 10/10 but costs 7.9 credits per task). Qwen3.8-Max (5/10 for 19.6 credits), DeepSeek-V4-Pro (4/10), MiniMax (6/10) and GLM-5.3-Flash (3/10) are not routed.</p>
 
 <h3>History: superseded versions</h3>
 <div class="tbl"><table>
@@ -519,10 +519,10 @@ docker compose up -d --build</code></pre></div>
 
 <h3>The routing this produced</h3>
 <ul>
-<li><b>Hard code edits:</b> Codex terra (20 of 20 over two runs), then sol, then Claude Sonnet, then the free tiers (Qoder Efficient, office server B via Qwen Code). Gate first, then cost, then speed.</li>
+<li><b>Hard code edits:</b> Codex terra (20 of 20 over two runs), then sol, then Claude Sonnet, then the cheap Qoder tier DeepSeek-Flash, then the free lanes: Qwen Code on office server B, then server A (Qwen Code for every Qwen model, never Codex or OpenCode on the office models). Gate first, then cost, then speed.</li>
 <li><b>Easy edits, summaries, reviews:</b> the laptop 9B first (free), then Qoder and the office servers, then a cheap Codex or Haiku. Edits are limited to one small file with one visible test.</li>
 <li><b>Test scaffolds (c2):</b> avoid Opus and Codex terra for this task; the laptop 9B, Qoder Efficient and Codex sol passed it.</li>
-<li>Office server A stays out of the default chain; server B is a long-timeout lane. Final ordering: <!-- FILL:routing-final -->pending the last runs.</li>
+<li>Office server B (9/10 via Qwen Code) goes before server A (7/10, all inside the 15-minute cap); both are long-timeout lanes. Final ordering for hard edits: Codex terra, Codex sol, Claude Sonnet, Qoder DeepSeek-Flash, Qwen Code on server B, Qwen Code on server A.</li>
 </ul>
 
 <h3>Laptop engine choice (set A, 7 tasks, one try)</h3>

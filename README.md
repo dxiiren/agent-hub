@@ -69,11 +69,11 @@ Measured 5 November 2026 through the installed hub: each task runs in a throwawa
 | Claude Opus 5.5 | Claude | 10/10 | 2/3 | n/a | 95 | $0.530 per task |
 | Claude Haiku 5.5 | Claude | 9/10 | 3/3 | n/a | 100 | $0.020 per task |
 | Qoder Efficient | Qoder | 9/10 | 3/3 | n/a | 238 | free tier |
-| Qwen3.8-27B, office GPU server B | Qwen Code | 9/10 <!-- FILL:readme-officeB-B --> | 2/3 | 6/7 | 109 | local |
-| Qwen3.8-27B, office GPU server A | Qwen Code | 7/10 <!-- FILL:readme-officeA-B --> | 2/3 | 7/7 | 115 | local |
+| Qwen3.8-27B, office GPU server B | Qwen Code | 9/10 | 2/3 | 6/7 | 109 | local |
+| Qwen3.8-27B, office GPU server A | Qwen Code | 7/10 | 2/3 | 7/7 | 115 | local |
 | Qwen3.5-9B, laptop GPU, 64k | Qwen Code | 4/10 | n/a | n/a | 198 | local |
 | Qwen3.5-9B, laptop GPU, 32k (default) | Qwen Code | 1/10 | 3/3 | 7/7 | 71 to 143 | local |
-| Qoder paid tiers (Max, Pro, Flash and others) | Qoder | <!-- FILL:readme-qoder-B -->pending | 2/3 to 3/3 | n/a | 43 to 269 | 0.3 to 27 credits per task |
+| Qoder paid tiers (Max, Pro, Flash and others) | Qoder | 3/10 to 10/10 (DeepSeek-Flash 10/10) | 2/3 to 3/3 | n/a | 109 to 294 | 0.7 to 19.6 credits per task |
 
 Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
 
