@@ -82,7 +82,7 @@ def _subst_glued(command: str) -> bool:
     return False
 
 
-VARREF = re.compile(r"\$\{[^}]*\}|\$[A-Za-z_]\w*")
+VARREF = re.compile(r"\$\{[^}]*\}|\$(?:[A-Za-z_]\w*|[0-9@*#?!$-])")
 ASSIGN = re.compile(r"(?:^|[;&|\s])(?:export\s+|declare\s+|local\s+|typeset\s+)?([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]*)")
 SUBST_WORDS = re.compile(r"\benv\b|\.env|pem|\bkey|id_|cred|ppk|secret|passw", re.I)
 
@@ -102,16 +102,58 @@ _NO_ANALYSIS = re.compile(
     r"|\$\(\(|\$\["                                        # arithmetic
     r"|\w=\(|\w\[[^\]]*\]=|\$\{\w+\[")                      # arrays
 _REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
-_ANYREF = re.compile(r"\$[{\w]")
+_ANYREF = re.compile(r"\$[{\w@*#?!$'\"-]")  # `$'...'` and `$"..."` count as references
+# the original rule, kept: an assignment next to a construct that sets or reads variables indirectly blocks even with no visible reference
+_AMBIGUOUS = re.compile(r"\beval\b|\bread\b|printf\s+-v|\b(?:declare|typeset|export)\s+-n|\$\{[^}]*[^\w}][^}]*\}|\$\{!")
+_STATE = {"deadline": None, "work": 0, "bodies": set()}
+_BUDGET_SECONDS = 1.5
+_BUDGET_WORK = 3000
+
+
+class _Budget(Exception):
+    pass
+
+
+def _tick() -> None:
+    """One work counter and one wall-clock deadline shared by every recursion level; running out blocks."""
+    _STATE["work"] += 1
+    if _STATE["work"] > _BUDGET_WORK or time.monotonic() > _STATE["deadline"]:
+        raise _Budget()
+# positional and special parameters, and the constructs that set them: never analysed, always blocked
+_SPECIAL = re.compile(
+    r"\$[0-9@*#?!$-]|\$\{[0-9#?!@*$-]"
+    r"|(?:^|[;&|(])\s*(?:set\s+--|shift)(?![\w-])"
+    r"|(?<![\w])IFS="
+    r"|(?:^|[;&|(\s])(?:ba|z|da|k)?sh\s+-[A-Za-z]*c\s+(?:'[^']*'|\"[^\"]*\"|\S+)\s+\S")
+_STEMS = ("env", "nv", "pem", "key", "ppk", "id_", "rsa", "ed2", "ecd", "dsa", "cred", "secret", "pass", "ial", "pk")
+
+
+def _normalised(command: str) -> str:
+    """Command words with `$'...'`, quotes and backslashes removed, so a builtin written as `ev''al` or `\e\v\a\l` still matches."""
+    text = re.sub(r"\$'([^']*)'", r"\1", command)
+    return "".join(c for c in text if c not in chr(92) + "'\"")
 
 
 def _unanalysable(command: str) -> str | None:
     """Fail-closed pre-check: a variable reference next to a construct the text scan cannot follow, or a reference to a variable assigned LATER."""
-    if not _ANYREF.search(command):
+    sp = _SPECIAL.search(command) or _SPECIAL.search(_normalised(command))
+    if sp:
+        return "positional/special parameter or argument-setting construct: " + sp.group(0).strip()[:30]
+    norm = _normalised(command)
+    if ASSIGN.search(command) and (_AMBIGUOUS.search(command) or _AMBIGUOUS.search(norm)):
+        return "assignment next to eval/read/printf -v/nameref/parameter operator"
+    if not (_ANYREF.search(command) or _ANYREF.search(norm)):
         return None
-    m = _NO_ANALYSIS.search(command)
-    if m:
-        return "variable reference combined with a shell construct that cannot be analysed: " + m.group(0).strip()[:30]
+    for text in (command, norm):
+        m = _NO_ANALYSIS.search(text)
+        if m:
+            return "variable reference combined with a shell construct that cannot be analysed: " + m.group(0).strip()[:30]
+    refd = {r.group(1) or r.group(2) for r in _REF.finditer(command)}
+    for am in ASSIGN.finditer(command):
+        raw = am.group(2)
+        mixed = ("$(" in raw or "`" in raw or "(" in raw or (("'" in raw or '"' in raw) and not (len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"" and raw.count(raw[0]) == 2)))
+        if mixed and am.group(1) in refd:
+            return "variable " + am.group(1) + " is assigned a value with substitution or mixed quoting"
     first: dict[str, int] = {}
     for am in ASSIGN.finditer(command):
         first.setdefault(am.group(1), am.start(1))
@@ -181,6 +223,7 @@ def _expand_all(command: str) -> list[str] | None:
     for _ in range(4):
         changed = False
         for name, values in vals.items():
+            _tick()
             pat = re.compile(r"\$\{" + re.escape(name) + r"\}|\$" + re.escape(name) + r"(?![A-Za-z0-9_])")
             nxt: set[str] = set()
             for t in texts:
@@ -210,13 +253,20 @@ def _var_glued(command: str) -> str | None:
         glob = VARREF.sub("*", comp.replace("${IFS}", " ")).lower()
         if len(glob.replace("*", "")) >= 2 and any(fnmatch.fnmatchcase(s, glob) for s in SAMPLES):
             return tok
+        resid = VARREF.sub("", comp).lower()  # a variable glued to a literal next to a secret stem
+        if resid and resid != comp.lower() and any(st in resid for st in _STEMS):
+            return tok
     return None
 
 
 def _scan(text: str, depth: int) -> str | None:
+    _tick()
     for m in SUBST.finditer(text):  # a standalone substitution: scan its body, block secret-ish words (nested ones are found inner-first)
         body = m.group(0)[2:-1] if m.group(0).startswith("$(") else m.group(0)[1:-1]
-        if depth < 5 and blocked(body, depth + 1):
+        if body in _STATE["bodies"]:  # each distinct body is judged once
+            continue
+        _STATE["bodies"].add(body)
+        if depth < 5 and _blocked(body, depth + 1):
             return "command substitution: " + body[:40]
         if SUBST_WORDS.search(body):
             return "command substitution mentions a secret-ish word: " + body[:40]
@@ -227,7 +277,19 @@ def _scan(text: str, depth: int) -> str | None:
     return None
 
 
-def blocked(command: str, _depth: int = 0) -> str | None:
+def blocked(command: str) -> str | None:
+    """Public entry: ONE deadline (about 1.5 s) and one work budget for the whole command, nested substitutions included; exhausted = blocked."""
+    _STATE.update(deadline=time.monotonic() + _BUDGET_SECONDS, work=0, bodies=set())
+    try:
+        return _blocked(command, 0)
+    except _Budget:
+        return "analysis budget exhausted (deadline or work limit): blocked"
+    except RecursionError:
+        return "analysis too deep: blocked"
+
+
+def _blocked(command: str, _depth: int) -> str | None:
+    _tick()
     if len(command) > _MAX_CMD:
         return "command too long to inspect"
     if _subst_glued(command):  # what a substitution prints is unknown: fail closed on secret-ish tokens

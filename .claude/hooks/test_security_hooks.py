@@ -211,6 +211,30 @@ for c in ["local -rn x=y; echo $x", "alias c=cat; echo $c", "declare -n r=x; ech
 for c in ["git status", "ls *.md", "X=foo; echo $X", "npm test", "X=foo; cat $X", "echo $HOME/x", "cat README.md", "git log --oneline -5"]:
     check("final allow " + c, g.blocked(c) is None)
 
+# last round (documented residual risk after this: text guard = guardrail, not a sandbox)
+for c in ["ev''al echo $x", "$'eval' echo $x", "'local' -rn x=y; echo $x",
+          "echo $1", "echo $@", "echo ${1}", "cat $*", "echo $?", "echo $$", "set -- .env; cat $1", "shift", "x=a; shift; echo $x", "IFS=. ; echo x", "bash -c 'cat $0' .env",
+          "sh -c 'cat $1' _ .env", "a=$(echo .e); cat ${a}nv", "a=`echo .e`; cat ${a}nv", "a=.e'n'\"v\"; cat $a", "a=.e$(true); cat $a", "cat ${x}rsa", "cat ${y}pem"]:
+    check("last block " + c, g.blocked(c) is not None)
+for c in ["git status", "ls *.md", "X=foo; echo $X", "npm test", "git log --oneline -5", "X=foo; cat $X", "echo $HOME/x", "cat README.md"]:
+    check("last allow " + c, g.blocked(c) is None)
+
+BS = chr(92)
+for c in [BS.join(["", "e", "v", "a", "l"]) + " echo $x", "al" + BS + "ias c=cat; echo $c", "f" + BS + "or i in a; do echo $i; done"]:
+    check("last block escaped builtin " + c, g.blocked(c) is not None)
+
+# restored rule and budget: assignment + eval/read/printf -v/operator blocks with no visible reference; nested bombs finish inside the deadline
+for c in ["a=x; eval ls", "a=x; read v", "a=x; printf -v v x", "a=x; declare -n r", "ev''al $\"x\"", "ev''al $'x'"]:
+    check("restored block " + c, g.blocked(c) is not None)
+for depth in (50, 400, 3000):
+    nested = "cat " + "$(" * depth + "echo x" + ")" * depth
+    t0 = time.monotonic(); res = g.blocked(nested); dt = time.monotonic() - t0
+    check("nested depth %d finishes in budget" % depth, dt < 1.6)
+wide = "echo " + " ".join("$(echo a%d)" % i for i in range(3000))
+t0 = time.monotonic(); g.blocked(wide); check("wide substitutions finish in budget", time.monotonic() - t0 < 1.6)
+check("budget exhaustion blocks", (setattr(g, "_BUDGET_WORK", 1), g.blocked("echo $(echo a) $(echo b)"))[1] is not None)
+g._BUDGET_WORK = 3000
+
 # round 3d: normal commands pass; a crashing hook and unparsable input block
 for c in ["git status", "cat README.md", "ls *.md", "git log --oneline -5", "python -m pytest tests/"]:
     check("r3d normal passes " + c, g.blocked(c) is None)
