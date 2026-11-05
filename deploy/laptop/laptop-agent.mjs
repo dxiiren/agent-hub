@@ -17,6 +17,8 @@ const ALIAS = E.LAPTOP_ALIAS || 'qwen35-9b';
 const LOCK = join(tmpdir(), `agent-hub-laptop-${PORT}.lock`);
 const refuse = (m) => { process.stderr.write(`LAPTOP-REFUSED: ${m}\n`); process.exit(3); };
 const up = async () => { try { return (await fetch(`http://127.0.0.1:${PORT}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } };
+// any HTTP answer (503 while the model loads) means a server already owns the port: never start a second one
+const listening = async () => { try { await fetch(`http://127.0.0.1:${PORT}/health`, { signal: AbortSignal.timeout(2000) }); return true; } catch { return false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const pnp = pnpStatus();
@@ -44,14 +46,14 @@ async function ensureServer() {
   let owner = true;
   try { closeSync(openSync(LOCK, 'wx')); } catch { owner = false; }
   try {
-    if (owner) {
+    if (owner && !(await listening())) {
       const g = smi();
       if (pnpStatus() !== 'OK' || !g.ok) throw new Error('GPU missing -> provider disabled');
       const u = g.usedMiB;
-      if (u > 600) throw new Error(`GPU busy (${u} MiB used by another process)`);
+      if (u > Number(process.env.LAPTOP_BUSY_MIB || 600)) throw new Error(`GPU busy (${u} MiB used by another process)`);
       spawn(E.LLAMA_SERVER_BIN, ['-m', E.LAPTOP_MODEL_PATH, '--jinja', '-ngl', '99', '-c', E.LAPTOP_CTX || '32768', '-np', '1', '-fa', 'on',
         '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--reasoning', 'off', '--temp', '0.7', '--top-p', '0.8', '--top-k', '20',
-        '--device', 'CUDA0', '--load-mode', 'none', '--host', '127.0.0.1', '--port', PORT, '--alias', ALIAS, '--metrics'],
+        '--device', 'CUDA0', '--load-mode', 'none', '--host', '127.0.0.1', '--port', PORT, '--alias', ALIAS, '--metrics', '--cache-ram', '0'],
       { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     }
     for (let i = 0; i < 90; i++) { if (await up()) return; await sleep(2000); }
