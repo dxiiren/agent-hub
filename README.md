@@ -63,48 +63,54 @@ Interim update: cells marked "running" are still being measured; "pending" means
 
 Measured 5 November 2026 through the installed hub: each task runs in a throwaway worktree and is judged by its own gate (never by the agent's say-so). Set A = 7 easy edits, set B = 10 hard code edits, set C = 3 tasks (log summary, test scaffold that must kill 3 mutants, code review). Latest version of each model is shown; most cells are n=1 or 2, so one task of difference is noise. Full method, per-tier Qoder credits, harness comparison and history are in the [guide](https://dxiiren.github.io/agent-hub/#bench).
 
+Sorted by set B pass rate, then set A pass rate, then set C pass rate, then median time (faster first). Running or pending cells count their passes so far and the row is marked (partial).
+
+Sorted by set B pass rate, then set A pass rate, then set C pass rate, then median time (faster first). Running or pending cells count their passes so far and the row is marked (partial).
+
 | Model | Harness | Set A (7) | Set B (10) | Set C (3) | Median s |
 |---|---|---|---|---|---|
-| Codex gpt-6.1-terra | Codex | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 67 |
-| Codex gpt-6.1-sol | Codex | 3/3, running (3 of 7 done) | 10/10 | 3/3 | 86 |
-| Codex gpt-6-luna | Codex | 3/3, running (3 of 7 done) | 8/10 | 3/3 | 73 |
-| Codex gpt-6-astra * | Codex | pending | pending | pending | - |
-| Claude Sonnet 5.5 | Claude | 3/3, running (3 of 7 done) | 10/10 | 3/3 | 70 |
-| Claude Haiku 5.5 | Claude | 3/3, running (3 of 7 done) | 9/10 | 3/3 | 96 |
-| Claude Opus 5.5 | Claude | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 70 |
-| Qoder Efficient | Qoder | 3/3, running (3 of 7 done) | pending | pending | 65 |
-| Qoder Fast | Qoder | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 83 |
-| Qoder DeepSeek-Flash | Qoder | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 99 |
-| Qoder Qwen3.8-Flash | Qoder | 3/3, running (3 of 7 done) | 8/10 | 2/3 | 186 |
-| Qoder GLM-5.3-Flash | Qoder | 3/3, running (3 of 7 done) | 3/10 | 3/3 | 203 |
-| Qoder MiniMax-M3.1-Flash | Qoder | 3/3, running (3 of 7 done) | 6/10 | 3/3 | 187 |
-| Qoder DeepSeek-V4-Pro | Qoder | 3/3, running (3 of 7 done) | 4/10 | 2/3 | 189 |
-| Qoder Qwen3.8-Max | Qoder | 3/3, running (3 of 7 done) | 5/10 | 3/3 | 268 |
-| Qoder GLM-5.3 | Qoder | 3/3, running (3 of 7 done) | 9/10 | 3/3 | 189 |
-| Qoder Kimi-K3.1-Pro | Qoder | 3/3, running (3 of 7 done) | 9/10 | 3/3 | 147 |
-| Qwen3.8-27B (single GPU) | Qwen Code | 7/7 | 7/10 | 2/3 | 115 |
+| Claude Sonnet 5.5 (partial) | Claude | 4/4, running (4 of 7 done) | 10/10 | 3/3 | 70 |
+| Codex gpt-6.1-sol (partial) | Codex | 4/4, running (4 of 7 done) | 10/10 | 3/3 | 84 |
+| Qoder Fast (partial) | Qoder | 4/4, running (4 of 7 done) | 10/10 | 2/3 | 60 |
+| Codex gpt-6.1-terra (partial) | Codex | 4/4, running (4 of 7 done) | 10/10 | 2/3 | 63 |
+| Claude Opus 5.5 (partial) | Claude | 4/4, running (4 of 7 done) | 10/10 | 2/3 | 67 |
+| Qoder DeepSeek-Flash (partial) | Qoder | 4/4, running (4 of 7 done) | 10/10 | 2/3 | 86 |
+| Claude Haiku 5.5 (partial) | Claude | 4/4, running (4 of 7 done) | 9/10 | 3/3 | 92 |
+| Qoder Kimi-K3.1-Pro (partial) | Qoder | 4/4, running (4 of 7 done) | 9/10 | 3/3 | 129 |
+| Qoder GLM-5.3 (partial) | Qoder | 4/4, running (4 of 7 done) | 9/10 | 3/3 | 164 |
 | Qwen3.8-27B-NVFP (2-node cluster) | Qwen Code | 6/7 | 9/10 | 2/3 | 109 |
+| Codex gpt-6-luna (partial) | Codex | 4/4, running (4 of 7 done) | 8/10 | 3/3 | 67 |
+| Qoder Qwen3.8-Flash (partial) | Qoder | 4/4, running (4 of 7 done) | 8/10 | 2/3 | 173 |
+| Qwen3.8-27B (single GPU) | Qwen Code | 7/7 | 7/10 | 2/3 | 115 |
+| Qoder MiniMax-M3.1-Flash (partial) | Qoder | 3/3, running (3 of 7 done) | 6/10 | 3/3 | 187 |
+| Qoder Qwen3.8-Max (partial) | Qoder | 4/4, running (4 of 7 done) | 5/10 | 3/3 | 268 |
+| Qoder DeepSeek-V4-Pro (partial) | Qoder | 4/4, running (4 of 7 done) | 4/10 | 2/3 | 165 |
+| Qwen3.5-9B laptop, 64k (partial) | Qwen Code | 6/7 | 4/10 | 2/2, running (2 of 3 done) | 134 |
+| Qoder GLM-5.3-Flash (partial) | Qoder | 3/3, running (3 of 7 done) | 3/10 | 3/3 | 203 |
 | Qwen3.5-9B laptop, 32k (default) | Qwen Code | 7/7 | 1/10 | 3/3 | 76 |
-| Qwen3.5-9B laptop, 64k (partial) | Qwen Code | 4/5, running (5 of 7 done) | 4/10 | pending | 147 |
 | Qwen3.5-9B laptop, 64k (partial) | OpenCode | 1/1, running (1 of 7 done) | 1/10 | pending | 119 |
 | Qwen3.5-9B laptop, 32k (partial) | OpenCode | 1/1, running (1 of 7 done) | pending | 1/3 | 60 |
+| Codex gpt-6-astra * (partial) | Codex | 2/2, running (2 of 7 done) | pending | pending | 55 |
+| Qoder Efficient (partial) | Qoder | 3/3, running (3 of 7 done) | pending | pending | 65 |
 
 * Benchmark only; not in routing unless the owner approves.
 
 ### Qoder tiers (qodercli 1.1.81)
 
+Sorted by set B pass rate, then set A pass rate, then set C pass rate, then median time (faster first), then credits per task (cheaper first). Running or pending cells count their passes so far and the row is marked (partial).
+
 | Qoder tier | Set A (7) | Set B (10) | Set C (3) | Median s | Credit multiplier | Credits per task (measured) |
 |---|---|---|---|---|---|---|
-| Efficient | 3/3, running (3 of 7 done) | pending | pending | 65 | 0.00x | 0.35 |
-| Fast | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 83 | 0.80x | 6.82 |
-| DeepSeek-Flash | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 99 | 0.10x | 0.71 |
-| Qwen3.8-Flash | 3/3, running (3 of 7 done) | 8/10 | 2/3 | 186 | 0.10x | 0.92 |
-| GLM-5.3-Flash | 3/3, running (3 of 7 done) | 3/10 | 3/3 | 203 | 0.10x | 0.68 |
-| MiniMax-M3.1-Flash | 3/3, running (3 of 7 done) | 6/10 | 3/3 | 187 | 0.10x | 1.82 |
-| DeepSeek-V4-Pro | 3/3, running (3 of 7 done) | 4/10 | 2/3 | 189 | 0.50x | 3.50 |
-| Qwen3.8-Max | 3/3, running (3 of 7 done) | 5/10 | 3/3 | 268 | 0.50x | 16.77 |
-| GLM-5.3 | 3/3, running (3 of 7 done) | 9/10 | 3/3 | 189 | 0.80x | 9.85 |
-| Kimi-K3.1-Pro | 3/3, running (3 of 7 done) | 9/10 | 3/3 | 147 | 1.00x | 8.10 |
+| Fast (partial) | 4/4, running (4 of 7 done) | 10/10 | 2/3 | 60 | 0.80x | 6.43 |
+| DeepSeek-Flash (partial) | 4/4, running (4 of 7 done) | 10/10 | 2/3 | 86 | 0.10x | 0.67 |
+| Kimi-K3.1-Pro (partial) | 4/4, running (4 of 7 done) | 9/10 | 3/3 | 129 | 1.00x | 7.77 |
+| GLM-5.3 (partial) | 4/4, running (4 of 7 done) | 9/10 | 3/3 | 164 | 0.80x | 9.37 |
+| Qwen3.8-Flash (partial) | 4/4, running (4 of 7 done) | 8/10 | 2/3 | 173 | 0.10x | 0.88 |
+| MiniMax-M3.1-Flash (partial) | 3/3, running (3 of 7 done) | 6/10 | 3/3 | 187 | 0.10x | 1.82 |
+| Qwen3.8-Max (partial) | 4/4, running (4 of 7 done) | 5/10 | 3/3 | 268 | 0.50x | 16.02 |
+| DeepSeek-V4-Pro (partial) | 4/4, running (4 of 7 done) | 4/10 | 2/3 | 165 | 0.50x | 3.33 |
+| GLM-5.3-Flash (partial) | 3/3, running (3 of 7 done) | 3/10 | 3/3 | 203 | 0.10x | 0.68 |
+| Efficient (partial) | 3/3, running (3 of 7 done) | pending | pending | 65 | 0.00x | 0.35 |
 
 Qoder credit multiplier = the "x Credit" label each model carries in the `qodercli` 1.1.81 ACP model list (Efficient 0.00x = free tier). Credits per task = measured mean from the run records. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs); other cells are flat rate or local.
 
