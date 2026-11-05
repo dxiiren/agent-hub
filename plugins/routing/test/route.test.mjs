@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runRoute, withRetry, transient, readOnlyType, cliPaseo, toSeconds, markActive } from "../route.mjs";
+import { runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
 const routes = { slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
@@ -273,4 +273,17 @@ test("markActive writes a per-route marker and the slot total; the returned fn r
   assert.equal(readdirSync(d).filter((n) => n.startsWith("t-")).length, 1);
   done();
   assert.equal(readdirSync(d).filter((n) => n.startsWith("t-")).length, 0);
+});
+
+test("read-only types use each provider's read-only mode, in or out of a worktree, ignoring caller and routes modes", () => {
+  const prov = { claude: "plan", "claude-clean": "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk", codex: "auto" };
+  assert.deepEqual(Object.fromEntries(Object.entries(prov).map(([k]) => [k, READ_ONLY_MODES[k]])), prov);
+  for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
+    const r2 = { slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
+    const f = fake({ run: () => ({ status: "completed", agentId: "A" }) });
+    runRoute({ ...o, type: "summarise", mode: "bypassPermissions", worktree }, f, r2);
+    const run = f.calls.find((c) => c[0] === "run");
+    assert.equal(run[run.indexOf("--mode") + 1], m, p);
+  }
+  assert.equal(readOnlyMode("x", { readOnlyModes: { x: "ro" } }), "ro");
 });

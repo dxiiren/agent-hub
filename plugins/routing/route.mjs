@@ -64,6 +64,9 @@ const base = (p) => p.split("/")[0];
 export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 // Read-only task types never get an unsafe mode outside a worktree (same rule as every type): a "summarise" prompt must not be able to edit files. They run in the provider's default mode, and a post-check fails the task if the folder changed.
 export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["summarise", "review"]).includes(type);
+/** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has no read-only mode: "auto" is its default-permissions mode, the post-check is the backstop. Override per provider with routes.readOnlyModes. */
+export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
+export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
 export function snapshot(dir, max = 5000) {
   const out = []; const walk = (d) => { let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
@@ -110,7 +113,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
-    const mode = o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
+    const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
+    const mode = ro ? readOnlyMode(base(prov), routes) : o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
     if (o.worktree) args.push("--new-workspace", "worktree");
     if (mode && (o.worktree || !unsafeMode(mode))) args.push("--mode", mode);
     else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: needs --new-workspace worktree` });
@@ -119,13 +123,13 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.gate) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate);
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
-    const guard = !o.worktree && readOnlyType(o.type, routes) ? snapshot(o.cwd) : null;
+    const guard = ro ? snapshot(o.cwd) : null;
     let j = paseo([...args, o.prompt]);
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
-    const hint = j.status === "permission" ? { error: `agent waited for a permission: type ${o.type} edits files, but outside --new-workspace worktree its full-access mode is dropped (decision 21). Run it in a git repo with --new-workspace worktree, or use a read-only type (summarise, review).` } : {};
+    const hint = j.status === "permission" ? { error: `agent asked for a permission its mode does not grant (type ${o.type}, mode ${mode ?? "provider default"}). Edit types (code-edit, test-scaffold) need --new-workspace worktree (full-access is dropped outside one, decision 21); read-only types run in the provider read-only mode and cannot edit.` } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
