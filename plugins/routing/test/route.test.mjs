@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runRoute } from "../route.mjs";
+import { runRoute, withRetry } from "../route.mjs";
 
 const routes = { slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
@@ -137,4 +137,18 @@ test("doctor version comparison", () => {
   assert.equal(parseVersion("codex-cli 0.166.0"), "0.166.0"); assert.equal(parseVersion("2.1.318 (Claude Code)"), "2.1.318");
   assert.equal(compareVersions("1.18.29", "1.19.5"), -1); assert.equal(compareVersions("0.10.0", "0.9.9"), 1); assert.equal(compareVersions("1.2", "1.2.0"), 0); assert.equal(compareVersions("", "1"), null);
   assert.deepEqual(["1.0", "2.0", "2.0", ""].map((v, i) => verdict(i === 3 ? "" : v, "2.0")), ["UPDATE", "current", "current", "NOT INSTALLED"]);
+});
+
+test("DAEMON_UNREACHABLE on start is retried up to 3 times with backoff, then succeeds", () => {
+  let n = 0; const waits = [];
+  const raw = (args) => (args[0] === "ls" ? [] : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
+  const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms) }), routes);
+  assert.equal(r.used, "codex/a"); assert.equal(n, 3); assert.deepEqual(waits, [2000, 4000]);
+});
+test("a real failure with an agentId is not retried; retries stop after 3", () => {
+  let n = 0;
+  const f = withRetry((a) => { n++; return { status: "error", agentId: "Z", error: "unreachable" }; }, { sleep() {} });
+  f(["run"]); assert.equal(n, 1);
+  n = 0; const g = withRetry(() => { n++; return { error: "DAEMON_UNREACHABLE" }; }, { sleep() {} });
+  g(["run"]); assert.equal(n, 3);
 });

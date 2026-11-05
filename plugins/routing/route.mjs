@@ -42,6 +42,16 @@ export function cliPaseo(home, env = process.env) {
   };
 }
 
+/** Paseo's 1.5 s status probe fails while the daemon is busy (upstream #6584): retry the call, nothing was started. */
+export const transient = (j) => !j?.agentId && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out/i.test(String(j?.error ?? ""));
+export function withRetry(paseo, { tries = 3, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  return (args) => {
+    let j = paseo(args);
+    for (let i = 1; i < tries && transient(j) && args[0] !== "stop"; i++) { sleep(2000 * 2 ** (i - 1)); j = paseo(args); }
+    return j;
+  };
+}
+
 const base = (p) => p.split("/")[0];
 // Owner decision 21: full-access/bypass/yolo only inside a throwaway worktree; elsewhere drop --mode (provider default).
 export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
@@ -90,7 +100,7 @@ function main(argv) {
     type, prompt, provider: opt("--provider"), cwd: opt("--cwd") ?? process.cwd(), gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT,
-  }, cliPaseo(home), loadRoutes());
+  }, withRetry(cliPaseo(home)), loadRoutes());
   console.log(JSON.stringify(res));
   return res.used ? 0 : 1;
 }
