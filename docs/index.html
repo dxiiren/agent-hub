@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Hub</title>
+<meta name="description" content="Agent Hub configures the Paseo agent daemon so any AI client can hand a task to any agent provider and get a verdict plus a diff back.">
+<style>
+:root{--bg:#f7f8fa;--fg:#1a2330;--mut:#5b6877;--card:#fff;--line:#dde2e9;--acc:#0b7a75;--code:#0f141a;--codefg:#d6deeb}
+@media (prefers-color-scheme:dark){:root{--bg:#10151b;--fg:#e4e9f0;--mut:#9aa7b6;--card:#171e26;--line:#2a3441;--acc:#4fd1c5;--code:#0a0e13;--codefg:#d6deeb}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.w{max-width:980px;margin:0 auto;padding:0 16px}
+header{padding:48px 0 24px}
+h1{font-size:2.2rem;margin:0 0 8px}
+h2{margin:40px 0 12px;font-size:1.4rem}
+p.lead{font-size:1.1rem;color:var(--mut);margin:0 0 16px}
+a{color:var(--acc)}
+.btn{display:inline-block;padding:8px 16px;border:1px solid var(--acc);border-radius:6px;text-decoration:none;font-weight:600;margin:0 8px 8px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{margin:0 0 6px;font-size:1rem}
+.card p{margin:0;color:var(--mut);font-size:.95rem}
+figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+figure img{width:100%;height:auto;display:block;border-radius:6px}
+figcaption{font-size:.9rem;color:var(--mut);padding:8px 4px 2px}
+pre{background:var(--code);color:var(--codefg);padding:14px 16px;border-radius:8px;overflow-x:auto;font-size:.9rem}
+svg{width:100%;height:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}
+svg text{fill:var(--fg);font:13px system-ui,sans-serif}
+svg .b{fill:var(--bg);stroke:var(--acc);stroke-width:1.5}
+svg .l{stroke:var(--mut);stroke-width:1.5;fill:none}
+svg .s{fill:var(--mut);font-size:11px}
+footer{margin:48px 0 32px;color:var(--mut);font-size:.9rem}
+</style>
+</head>
+<body>
+<div class="w">
+<header>
+<h1>Agent Hub</h1>
+<p class="lead">Hand a task from any AI client to any agent provider and get a verdict plus a diff back. Agent Hub configures and extends the <a href="https://github.com/getpaseo/paseo">Paseo</a> agent daemon.</p>
+<a class="btn" href="https://github.com/dxiiren/agent-hub">View on GitHub</a><a class="btn" href="#start">Quick start</a>
+</header>
+
+<h2>What it is</h2>
+<div class="grid">
+<div class="card"><h3>Any client, any provider</h3><p>Claude Code, Codex, Qoder, OpenCode or Qwen Code can delegate to Codex, Qoder, Claude, Qwen Code, an office SGLang server or a laptop llama.cpp server.</p></div>
+<div class="card"><h3>Gate plugin</h3><p>After each turn: secret scan, diff-size and path check, one re-prompt, then a clear PASS or FAIL verdict.</p></div>
+<div class="card"><h3>Usage plugin</h3><p>Counts only, never prompt text. Feeds an OTel, Prometheus and Grafana stack and a per-session statusline line.</p></div>
+<div class="card"><h3>Routing and pre-flight</h3><p>A routing table picks the provider chain and falls back on failure. A laptop pre-flight keeps a GPU-less machine from running a model.</p></div>
+</div>
+
+<h2>Architecture</h2>
+<svg viewBox="0 0 900 330" role="img" aria-label="Clients call the Paseo daemon through routing; the gate and usage plugins run after each turn; providers do the work; usage flows to OTel, Prometheus and Grafana">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7b8896"/></marker></defs>
+<rect class="b" x="20" y="30" width="170" height="130" rx="8"/><text x="105" y="55" text-anchor="middle" font-weight="700">AI clients</text>
+<text class="s" x="105" y="82" text-anchor="middle">Claude Code</text><text class="s" x="105" y="100" text-anchor="middle">Codex · Qoder</text><text class="s" x="105" y="118" text-anchor="middle">OpenCode · Qwen Code</text>
+<rect class="b" x="260" y="30" width="170" height="130" rx="8"/><text x="345" y="55" text-anchor="middle" font-weight="700">Routing + MCP</text>
+<text class="s" x="345" y="82" text-anchor="middle">provider chain</text><text class="s" x="345" y="100" text-anchor="middle">busy skip, fallback</text><text class="s" x="345" y="118" text-anchor="middle">labels: dev, session</text>
+<rect class="b" x="500" y="30" width="170" height="130" rx="8"/><text x="585" y="55" text-anchor="middle" font-weight="700">Paseo daemon</text>
+<text class="s" x="585" y="82" text-anchor="middle">runs the agent task</text><text class="s" x="585" y="100" text-anchor="middle">gate plugin: verdict</text><text class="s" x="585" y="118" text-anchor="middle">usage plugin: counts</text>
+<rect class="b" x="730" y="30" width="150" height="130" rx="8"/><text x="805" y="55" text-anchor="middle" font-weight="700">Providers</text>
+<text class="s" x="805" y="82" text-anchor="middle">Codex · Qoder · Claude</text><text class="s" x="805" y="100" text-anchor="middle">Qwen Code · OpenCode</text><text class="s" x="805" y="118" text-anchor="middle">SGLang · llama.cpp</text>
+<path class="l" d="M190 95H258" marker-end="url(#a)"/><path class="l" d="M430 95H498" marker-end="url(#a)"/><path class="l" d="M670 95H728" marker-end="url(#a)"/>
+<rect class="b" x="500" y="230" width="110" height="60" rx="8"/><text x="555" y="266" text-anchor="middle">OTel collector</text>
+<rect class="b" x="650" y="230" width="100" height="60" rx="8"/><text x="700" y="266" text-anchor="middle">Prometheus</text>
+<rect class="b" x="790" y="230" width="90" height="60" rx="8"/><text x="835" y="266" text-anchor="middle">Grafana</text>
+<path class="l" d="M585 160V228" marker-end="url(#a)"/><path class="l" d="M610 260H648" marker-end="url(#a)"/><path class="l" d="M750 260H788" marker-end="url(#a)"/>
+<text class="s" x="20" y="260">Result back to the caller:</text><text class="s" x="20" y="278">verdict (PASS / FAIL) + diff</text>
+</svg>
+
+<h2>Screenshots</h2>
+<div class="grid">
+<figure><img src="images/agents.png" alt="Terminal listing of seven agents across qoder, codex, claude and qwen-code providers" loading="lazy"><figcaption>Agents running through the hub</figcaption></figure>
+<figure><img src="images/task-result.png" alt="A finished task result with a PASS gate verdict and a unified diff" loading="lazy"><figcaption>A finished task: verdict and diff</figcaption></figure>
+<figure><img src="images/doctor.png" alt="just doctor output with every check passing" loading="lazy"><figcaption><code>just doctor</code></figcaption></figure>
+<figure><img src="images/statusline.png" alt="Statusline with a hub line showing tokens per provider" loading="lazy"><figcaption>Statusline <code>hub</code> line</figcaption></figure>
+</div>
+<p></p>
+<figure><img src="images/grafana-usage.png" alt="Grafana usage dashboard: tokens per provider, model and dev, and a per-day chart" loading="lazy"><figcaption>Grafana usage dashboard (demo data)</figcaption></figure>
+
+<h2 id="start">Quick start</h2>
+<pre>pwsh ./setup.ps1         # one-time machine setup (Linux/macOS: sh ./setup.sh)
+just deps &amp;&amp; just test  # install dependencies, validate every config template
+just doctor              # check the daemon, MCP and each provider</pre>
+<p>Usage stack: copy <code>deploy/usage/.env.template</code> to <code>.env</code>, then run <code>docker compose up -d</code> in <code>deploy/usage</code>. Full docs are in the <a href="https://github.com/dxiiren/agent-hub#readme">README</a>.</p>
+
+<footer>Agent Hub · <a href="https://github.com/dxiiren/agent-hub">github.com/dxiiren/agent-hub</a></footer>
+</div>
+</body>
+</html>
