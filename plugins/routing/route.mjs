@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, writeRequest } from "../gate/server/store.mjs";
+import { runGate } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -56,11 +57,23 @@ const base = (p) => p.split("/")[0];
 // Owner decision 21: full-access/bypass/yolo only inside a throwaway worktree; elsewhere drop --mode (provider default).
 export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 
+/** Run the gate in the agent's cwd; on the first failure re-prompt once (decision 47), on the second return FAIL to the caller. */
+export function callerGate(o, agentId, paseo, gate = runGate) {
+  const cwdOf = () => { const r = paseo(["ls"]); return (Array.isArray(r) ? r : []).find((a) => a.id === agentId)?.cwd; };
+  let cwd = cwdOf();
+  if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
+  let res = gate(cwd, { cmd: o.gate });
+  if (res.status === "PASS") return { status: "PASS", reasons: [], attempts: 0 };
+  paseo(["send", agentId, "Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish."]);
+  res = gate(cwdOf() ?? cwd, { cmd: o.gate });
+  return { status: res.status, reasons: res.reasons, attempts: 1 };
+}
+
 /**
  * Run a task through the chain. `paseo(args)` is injected (tests use a fake).
  * Returns { used, agentId, status, trace }; used is null when every entry failed.
  */
-export function runRoute(o, paseo, routes) {
+export function runRoute(o, paseo, routes, gate = runGate) {
   const chain = o.provider ? [o.provider] : routes.routes?.[o.type];
   if (!chain?.length) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   const slots = routes.slots ?? {};
@@ -82,7 +95,13 @@ export function runRoute(o, paseo, routes) {
     if (o.gate) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate);
     const j = paseo([...args, o.prompt]);
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : {}) });
-    if (j.status === "completed") return { used: prov, agentId: j.agentId, status: "completed", trace };
+    if (j.status === "completed") {
+      if (!o.gate) return { used: prov, agentId: j.agentId, status: "completed", trace };
+      // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
+      const g = callerGate(o, j.agentId, paseo, gate);
+      trace.push({ provider: prov, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
+      return { used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace };
+    }
     if (j.agentId) paseo(["stop", j.agentId]); // a timed-out agent must not keep running while the next entry works
   }
   return { used: null, trace };
@@ -102,6 +121,6 @@ function main(argv) {
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT,
   }, withRetry(cliPaseo(home)), loadRoutes());
   console.log(JSON.stringify(res));
-  return res.used ? 0 : 1;
+  return res.used && res.status === "completed" ? 0 : 1;
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(main(process.argv.slice(2)));

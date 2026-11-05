@@ -152,3 +152,15 @@ test("a real failure with an agentId is not retried; retries stop after 3", () =
   n = 0; const g = withRetry(() => { n++; return { error: "DAEMON_UNREACHABLE" }; }, { sleep() {} });
   g(["run"]); assert.equal(n, 3);
 });
+
+test("caller gate runs in the agent's real cwd: PASS completes, two FAILs return gate-failed after one re-prompt", () => {
+  const ls = [{ id: "A9", cwd: "/wt/x", status: "idle", provider: "codex" }];
+  const mk = () => { const calls = []; const f = (a) => { calls.push(a); return a[0] === "ls" ? ls : a[0] === "send" ? {} : { status: "completed", agentId: "A9" }; }; f.calls = calls; return f; };
+  const seen = [];
+  let p = mk();
+  let r = runRoute({ ...o, gate: "g" }, p, routes, (cwd, x) => { seen.push([cwd, x.cmd]); return { status: "PASS", reasons: [] }; });
+  assert.equal(r.status, "completed"); assert.deepEqual(seen, [["/wt/x", "g"]]); assert.ok(!p.calls.some((c) => c[0] === "send"));
+  p = mk();
+  r = runRoute({ ...o, gate: "g" }, p, routes, () => ({ status: "FAIL", reasons: ["bad"] }));
+  assert.equal(r.status, "gate-failed"); assert.equal(r.gate.attempts, 1); assert.equal(p.calls.filter((c) => c[0] === "send").length, 1);
+});
