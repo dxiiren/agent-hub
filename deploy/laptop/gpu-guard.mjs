@@ -1,7 +1,7 @@
 // GPU-only guard for the laptop model (owner rule: the model must load 100% on the GPU, never on the CPU).
 // Pure decision logic (judge) plus the Windows/NVIDIA probes. Used by laptop-agent.mjs (start + watchdog).
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -58,4 +58,18 @@ export function modelMatches(id, alias, modelPath) {
   const file = strip(String(modelPath ?? "").split(/[\\/]/).pop());
   return Boolean(id) && (strip(id) === strip(alias) || (file !== '' && strip(id) === file));
 }
+
+// ---- shared in-flight marker: one file per agent process while it has a prompt running, refreshed while it runs.
+// Every process (other agents, the reaper, the watchdog) reads the same files, so none judges "idle" from its own memory.
+const MARK_TTL = 150_000; // a marker not refreshed for this long belongs to a dead process
+const markPrefix = (port) => `agent-hub-laptop-${port}.inflight.`;
+export const markInflight = (port, pid = process.pid) => writeFileSync(join(tmpdir(), markPrefix(port) + pid), String(Date.now()));
+export const clearInflight = (port, pid = process.pid) => { try { unlinkSync(join(tmpdir(), markPrefix(port) + pid)); } catch { /* already gone */ } };
+export function anyInflight(port, now = Date.now(), dir = tmpdir()) {
+  try { return readdirSync(dir).some((f) => f.startsWith(markPrefix(port)) && now - statSync(join(dir, f)).mtimeMs < MARK_TTL); } catch { return false; }
+}
+/** Truly idle = nobody has a prompt in flight and the shared lastUsed is older than idleMs. */
+export const sharedIdle = (own, inflight, now, idleMs) => !inflight && now - (own?.lastUsed ?? 0) > idleMs;
+/** CPU is judged only after the first /health success and 60 s after the server start (model load burns CPU). */
+export const cpuJudgeable = (own, healthSeen, now) => Boolean(healthSeen) && now - (own?.startedAt ?? 0) > 60_000;
 export { existsSync };
