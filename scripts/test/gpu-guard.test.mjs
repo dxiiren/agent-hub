@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { judge, ownedStopTarget, idleExpired } from '../../deploy/laptop/gpu-guard.mjs';
+import { judge, ownedStopTarget, idleExpired, modelMatches } from '../../deploy/laptop/gpu-guard.mjs';
 
 const ok = { pnp: 'OK', smiOk: true, usedMiB: 6000, apps: [42], serverPid: 42, cpuPct: 3, idle: true };
 
@@ -38,4 +38,10 @@ test('keep-warm: idle timeout is honoured, a fresh prompt resets it', () => {
   assert.equal(idleExpired(own, 1_000 + 14 * 60_000, 15 * 60_000), false);
   assert.equal(idleExpired(own, 1_000 + 16 * 60_000, 15 * 60_000), true);
   assert.equal(idleExpired(null, 1e12, 1), false);
+});
+test('modelMatches: alias or model file name, else refuse', () => {
+  assert.equal(modelMatches('qwen35-9b', 'qwen35-9b', 'D:/m/x.gguf'), true);
+  assert.equal(modelMatches('Qwen3.5-9B-Q4.gguf', 'qwen35-9b', 'D:'+String.fromCharCode(92)+'m'+String.fromCharCode(92)+'Qwen3.5-9B-Q4.gguf'), true);
+  assert.equal(modelMatches('llama-70b', 'qwen35-9b', 'D:/m/x.gguf'), false);
+  assert.equal(modelMatches('', 'qwen35-9b', 'D:/m/x.gguf'), false);
 });

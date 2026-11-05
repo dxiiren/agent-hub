@@ -10,7 +10,7 @@ import { freemem, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 import { firstId } from '../../plugins/routing/office.mjs';
-import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired } from './gpu-guard.mjs';
+import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches } from './gpu-guard.mjs';
 
 const E = process.env;
 const PORT = E.LAPTOP_PORT || '8089';
@@ -41,8 +41,15 @@ if (!serverUp0 && freeGb < Number(E.LAPTOP_MIN_FREE_GB || 3)) refuse(`free RAM $
 if (process.argv.includes('--check')) { console.log(`laptop pre-flight ok (GPU used ${used} MiB, free RAM ${freeGb.toFixed(1)} GB, server ${serverUp0 ? 'up' : 'not started'})`); process.exit(0); }
 if (!E.LLAMA_SERVER_BIN || !E.LAPTOP_MODEL_PATH || !E.QWEN_BIN) refuse('LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and QWEN_BIN must be set');
 
+// A server already on the port is reused only if it serves our model; otherwise refuse and leave it alone (never use or stop it).
+async function checkServed() {
+  let id = '';
+  try { id = firstId(await (await fetch(`http://127.0.0.1:${PORT}/v1/models`, { signal: AbortSignal.timeout(2000) })).json()); } catch { /* unreadable: treated as a mismatch */ }
+  if (!modelMatches(id, ALIAS, E.LAPTOP_MODEL_PATH)) throw new Error(`wrong model on port ${PORT} (serves "${id || 'unknown'}", expected ${ALIAS})`);
+  return id;
+}
 async function ensureServer() {
-  if (await up()) return;
+  if (await up()) { await checkServed(); return; }
   // one starter at a time: three parallel callers once started six servers without this lock
   if (existsSync(LOCK) && Date.now() - statSync(LOCK).mtimeMs > 180000) unlinkSync(LOCK);
   let owner = true;
@@ -68,7 +75,7 @@ async function ensureServer() {
 
 // Use the model id llama-server actually serves (GET /v1/models) when it is already up; else the alias it will be started with.
 let model = ALIAS;
-if (await up()) { try { const id = firstId(await (await fetch(`http://127.0.0.1:${PORT}/v1/models`, { signal: AbortSignal.timeout(2000) })).json()); if (id) model = id; } catch { /* keep the alias */ } }
+if (await up()) { try { model = await checkServed(); } catch (e) { refuse(e.message); } }
 const win = /\.(cmd|bat)$/i.test(E.QWEN_BIN);
 const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], shell: win });
 child.stdout.on('data', (d) => { process.stdout.write(d); const n = String(d).split('"stopReason"').length - 1; if (n) { inflight = Math.max(0, inflight - n); touch(); } });

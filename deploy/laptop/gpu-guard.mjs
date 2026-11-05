@@ -52,4 +52,10 @@ export function writeOwn(port, own) { writeFileSync(stateFile(port), JSON.string
 export function ownedStopTarget(own, listener) { return own?.pid && listener === own.pid ? own.pid : null; }
 /** Keep-warm: an owned server is stopped only after idleMs without a prompt. */
 export function idleExpired(own, now, idleMs) { return Boolean(own?.pid) && now - (own.lastUsed ?? 0) > idleMs; }
+/** Does the model id a server reports on /v1/models match the alias we start with or the model file name? */
+export function modelMatches(id, alias, modelPath) {
+  const strip = (x) => String(x ?? '').toLowerCase().replace(/\.gguf$/, '');
+  const file = strip(String(modelPath ?? "").split(/[\\/]/).pop());
+  return Boolean(id) && (strip(id) === strip(alias) || (file !== '' && strip(id) === file));
+}
 export { existsSync };

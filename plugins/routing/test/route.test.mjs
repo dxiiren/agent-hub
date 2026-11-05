@@ -142,7 +142,7 @@ test("doctor version comparison", () => {
 test("DAEMON_UNREACHABLE on start is retried up to 3 times with backoff, then succeeds", () => {
   let n = 0; const waits = [];
   const raw = (args) => (args[0] === "ls" ? [] : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
-  const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms) }), routes);
+  const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms), jitter: () => 0 }), routes);
   assert.equal(r.used, "codex/a"); assert.equal(n, 3); assert.deepEqual(waits, [2000, 4000]);
 });
 test("a real failure with an agentId is not retried; retries stop after 3", () => {
@@ -150,7 +150,7 @@ test("a real failure with an agentId is not retried; retries stop after 3", () =
   const f = withRetry((a) => { n++; return { status: "error", agentId: "Z", error: "unreachable" }; }, { sleep() {} });
   f(["run"]); assert.equal(n, 1);
   n = 0; const g = withRetry(() => { n++; return { error: "DAEMON_UNREACHABLE" }; }, { sleep() {} });
-  g(["run"]); assert.equal(n, 3);
+  g(["run"]); assert.equal(n, 6);
 });
 
 test("caller gate runs in the agent's real cwd: PASS completes, two FAILs return gate-failed after one re-prompt", () => {
@@ -206,7 +206,7 @@ test("a failed freeze (stop) is FAIL, but 'already stopped' is fine", () => {
   const mk = (stopErr) => (a) => a[0] === "ls" ? [{ id: "A9", cwd: "/r" }] : a[0] === "run" ? { status: "completed", agentId: "A9" } : a[0] === "stop" && stopErr ? { error: stopErr } : {};
   let n = 0; const g = () => (++n % 2 ? { status: "FAIL", reasons: ["x"] } : { status: "PASS", reasons: [] });
   assert.equal(runRoute({ ...o, gate: "g" }, mk("daemon exploded"), routes, g).status, "gate-failed");
-  assert.equal(runRoute({ ...o, gate: "g" }, mk("agent not running"), routes, g).status, "completed");
+  assert.equal(runRoute({ ...o, gate: "g" }, mk("AGENT_NOT_FOUND: No agent found matching: A9"), routes, g).status, "completed");
 });
 test("paseo CLI crash text (top-level await, no agentId, non-zero exit) is transient and retried", () => {
   const crash = "exit=1 ed top-level await at file:///C:/x/@getpaseo/cli/dist/index.js:2\r\nconst exitCode = await runCli(process.argv.slice(2), {\r\n ^\r\n";
@@ -215,4 +215,7 @@ test("paseo CLI crash text (top-level await, no agentId, non-zero exit) is trans
   assert.equal(transient({ error: "WORKSPACE_CREATE_FAILED" }), false);
   let n = 0; const f = withRetry(() => (++n < 3 ? { error: crash } : { status: "completed", agentId: "R" }), { sleep() {} });
   assert.equal(f(["run"]).agentId, "R"); assert.equal(n, 3);
+  assert.equal(transient({ error: "Cannot connect to daemon: Connection timed out" }), true);
+  const w = []; n = 0; withRetry(() => { n++; return { error: "DAEMON_UNREACHABLE" }; }, { sleep: (ms) => w.push(ms), jitter: () => 7 })(["ls"]);
+  assert.equal(n, 6); assert.deepEqual(w, [2007, 4007, 8007, 16007, 32007]);
 });

@@ -44,11 +44,11 @@ export function cliPaseo(home, env = process.env) {
 }
 
 /** Paseo's 1.5 s status probe fails while the daemon is busy (upstream #6584): retry the call, nothing was started. */
-export const transient = (j) => !j?.agentId && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
-export function withRetry(paseo, { tries = 3, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+export const transient = (j) => !j?.agentId && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
+export function withRetry(paseo, { tries = 6, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), jitter = () => Math.random() * 1000 } = {}) {
   return (args) => {
     let j = paseo(args);
-    for (let i = 1; i < tries && transient(j) && args[0] !== "stop"; i++) { sleep(2000 * 2 ** (i - 1)); j = paseo(args); }
+    for (let i = 1; i < tries && transient(j) && args[0] !== "stop"; i++) { sleep(2000 * 2 ** (i - 1) + jitter()); j = paseo(args); }
     return j;
   };
 }
@@ -72,7 +72,7 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   const w = paseo(["wait", agentId, "--timeout", "900"]);
   if (w?.error) return fail("wait for re-prompt failed: " + String(w.error).slice(0, 120));
   const st = paseo(["stop", agentId]);
-  if (st?.error && !/not (found|running)|already|no such/i.test(String(st.error))) return fail("could not freeze the agent: " + String(st.error).slice(0, 120));
+  if (st?.error && !/AGENT_NOT_FOUND|No agent found/.test(String(st.error))) return fail("could not freeze the agent: " + String(st.error).slice(0, 120));
   // freeze: the second gate must judge the final tree, not one the agent is still editing
   res = gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate));
   return { status: res.status, reasons: res.reasons, attempts: 1 };
@@ -124,6 +124,7 @@ function main(argv) {
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]'); return 2; }
   const home = opt("--home") ?? process.env.PASEO_HOME;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   const res = runRoute({
     type, prompt, provider: opt("--provider"), cwd: opt("--cwd") ?? process.cwd(), gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
