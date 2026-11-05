@@ -70,8 +70,12 @@ async function ensureServer() {
 let model = ALIAS;
 if (await up()) { try { const id = firstId(await (await fetch(`http://127.0.0.1:${PORT}/v1/models`, { signal: AbortSignal.timeout(2000) })).json()); if (id) model = id; } catch { /* keep the alias */ } }
 const win = /\.(cmd|bat)$/i.test(E.QWEN_BIN);
-const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'inherit', 'inherit'], shell: win });
+const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], shell: win });
+child.stdout.on('data', (d) => { process.stdout.write(d); const n = String(d).split('"stopReason"').length - 1; if (n) { inflight = Math.max(0, inflight - n); touch(); } });
 child.on('exit', (c) => process.exit(c ?? 1));
+// Keep-warm clock: a turn longer than LAPTOP_IDLE_MIN must not look idle to the reaper, so refresh lastUsed while a prompt is in flight and when it ends.
+let inflight = 0;
+setInterval(() => { if (inflight > 0) touch(); }, 60000).unref();
 // Runtime watchdog: the card can vanish after sleep while llama-server keeps running on the CPU.
 let lastPrompt = 0; let strikes = 0; let lastCpu = null;
 setInterval(() => {
@@ -97,7 +101,7 @@ let chain = Promise.resolve(); let buf = '';
 const NL = String.fromCharCode(10);
 process.stdin.on('data', (d) => {
   buf += d; const lines = buf.split(NL); buf = lines.pop();
-  for (const l of lines) chain = chain.then(async () => { if (l.includes('"session/prompt"')) { lastPrompt = Date.now(); await ensureServer(); touch(); } child.stdin.write(l + NL); })
+  for (const l of lines) chain = chain.then(async () => { if (l.includes('"session/prompt"')) { lastPrompt = Date.now(); inflight++; await ensureServer(); touch(); } child.stdin.write(l + NL); })
     .catch((e) => { process.stderr.write('LAPTOP-REFUSED: ' + e.message + NL); child.kill(); process.exit(3); });
 });
 process.stdin.on('end', () => chain.then(() => child.stdin.end()));

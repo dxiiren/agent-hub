@@ -39,12 +39,12 @@ export function cliPaseo(home, env = process.env) {
   return (args) => {
     const r = spawnSync(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), "--json"], { encoding: "utf8", timeout: 15 * 60_000, env });
     const out = r.stdout || "";
-    try { return JSON.parse(out.slice(out.search(/[[{]/))); } catch { return { error: (r.stderr || out || "no output").slice(-200) }; }
+    try { return JSON.parse(out.slice(out.search(/[[{]/))); } catch { const t = String(r.stderr || out || "no output"); return { error: `exit=${r.status} ` + (t.length > 500 ? t.slice(0, 300) + " ... " + t.slice(-200) : t) }; }
   };
 }
 
 /** Paseo's 1.5 s status probe fails while the daemon is busy (upstream #6584): retry the call, nothing was started. */
-export const transient = (j) => !j?.agentId && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out/i.test(String(j?.error ?? ""));
+export const transient = (j) => !j?.agentId && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
 export function withRetry(paseo, { tries = 3, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
   return (args) => {
     let j = paseo(args);
@@ -71,7 +71,9 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   if (s?.error) return fail("re-prompt failed: " + String(s.error).slice(0, 120));
   const w = paseo(["wait", agentId, "--timeout", "900"]);
   if (w?.error) return fail("wait for re-prompt failed: " + String(w.error).slice(0, 120));
-  paseo(["stop", agentId]); // freeze: the second gate must judge the final tree, not one the agent is still editing
+  const st = paseo(["stop", agentId]);
+  if (st?.error && !/not (found|running)|already|no such/i.test(String(st.error))) return fail("could not freeze the agent: " + String(st.error).slice(0, 120));
+  // freeze: the second gate must judge the final tree, not one the agent is still editing
   res = gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate));
   return { status: res.status, reasons: res.reasons, attempts: 1 };
 }

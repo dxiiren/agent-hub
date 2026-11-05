@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runRoute, withRetry } from "../route.mjs";
+import { runRoute, withRetry, transient } from "../route.mjs";
 
 const routes = { slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
@@ -201,4 +201,18 @@ test("re-prompt blocks (send, wait), freezes the agent (stop) and only then runs
     r = runRoute({ ...o, gate: "g" }, mkp(bad), routes, () => ({ status: "FAIL", reasons: ["x"] }));
     assert.equal(r.status, "gate-failed"); assert.match(r.gate.reasons.join(), /failed: boom/);
   }
+});
+test("a failed freeze (stop) is FAIL, but 'already stopped' is fine", () => {
+  const mk = (stopErr) => (a) => a[0] === "ls" ? [{ id: "A9", cwd: "/r" }] : a[0] === "run" ? { status: "completed", agentId: "A9" } : a[0] === "stop" && stopErr ? { error: stopErr } : {};
+  let n = 0; const g = () => (++n % 2 ? { status: "FAIL", reasons: ["x"] } : { status: "PASS", reasons: [] });
+  assert.equal(runRoute({ ...o, gate: "g" }, mk("daemon exploded"), routes, g).status, "gate-failed");
+  assert.equal(runRoute({ ...o, gate: "g" }, mk("agent not running"), routes, g).status, "completed");
+});
+test("paseo CLI crash text (top-level await, no agentId, non-zero exit) is transient and retried", () => {
+  const crash = "exit=1 ed top-level await at file:///C:/x/@getpaseo/cli/dist/index.js:2\r\nconst exitCode = await runCli(process.argv.slice(2), {\r\n ^\r\n";
+  assert.equal(transient({ error: crash }), true);
+  assert.equal(transient({ error: "exit=1 some other crash" }), true);
+  assert.equal(transient({ error: "WORKSPACE_CREATE_FAILED" }), false);
+  let n = 0; const f = withRetry(() => (++n < 3 ? { error: crash } : { status: "completed", agentId: "R" }), { sleep() {} });
+  assert.equal(f(["run"]).agentId, "R"); assert.equal(n, 3);
 });
