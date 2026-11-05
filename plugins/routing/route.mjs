@@ -104,6 +104,13 @@ const withAnswer = (r, paseo) => {
   return { ...r, answer: a.answer, ...(a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
 };
 
+/** Git-Bash and Cygwin drive paths (/c/Users/x, /cygdrive/c/x) are not paths to the Windows daemon: it spent 74 s on WORKSPACE_CREATE_FAILED. Rewrite them to C:/... on win32. */
+export function normCwd(p, platform = process.platform) {
+  if (platform !== "win32" || typeof p !== "string") return p;
+  const m = /^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)(.*)$/.exec(p);
+  return m ? `${m[1].toUpperCase()}:${m[2] || "/"}` : p;
+}
+
 /** The commit a task starts from; the gate diffs against it. Null only outside a git repo; a repo with no commits yet (unborn HEAD) gets the empty-tree hash so the gate diffs and scans everything. */
 export function headSha(cwd) {
   const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd, encoding: "utf8" });
@@ -222,12 +229,14 @@ function main(argv) {
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]'); return 2; }
   const home = opt("--home") ?? process.env.PASEO_HOME;
+  const cwd = normCwd(opt("--cwd") ?? process.cwd());
+  if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   const routes = loadRoutes();
   const unmark = markActive(routes, opt("--provider"));
   let res;
   try { res = runRoute({
-    type, prompt, provider: opt("--provider"), cwd: opt("--cwd") ?? process.cwd(), gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
+    type, prompt, provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }

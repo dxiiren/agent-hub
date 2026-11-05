@@ -527,3 +527,19 @@ test("headSha: commit, unborn HEAD -> empty tree, non-repo -> null", async () =>
   assert.equal(headSha(d), "4b825dc642cb6eb9a060e54bf8d69288fbee4904");
   assert.equal(headSha(mkdtempSync(join(tmpdir(), "hs-np-"))), null);
 });
+
+test("normCwd: Git-Bash and Cygwin drive paths become C:/ on win32 only", async () => {
+  const { normCwd } = await import("../route.mjs");
+  assert.equal(normCwd("/c/Users/x/repo", "win32"), "C:/Users/x/repo");
+  assert.equal(normCwd("/cygdrive/d/a", "win32"), "D:/a");
+  assert.equal(normCwd("/c", "win32"), "C:/");
+  assert.equal(normCwd("C:/Users/x", "win32"), "C:/Users/x");
+  assert.equal(normCwd("/home/x", "win32"), "/home/x");
+  assert.equal(normCwd("/c/Users/x", "linux"), "/c/Users/x");
+});
+test("route CLI with a missing --cwd fails fast with a clear message (no daemon call)", async () => {
+  const { spawnSync } = await import("node:child_process"); const { fileURLToPath } = await import("node:url");
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL("../route.mjs", import.meta.url)), "summarise", "x", "--cwd", "/c/definitely/not/here-xyz"], { encoding: "utf8", timeout: 20000 });
+  assert.equal(r.status, 2); assert.match(r.stderr, /not an existing folder/); assert.ok(Date.now() - t0 < 10000);
+});
