@@ -71,8 +71,10 @@ const base = (p) => p.split("/")[0];
 export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 // Read-only task types never get an unsafe mode outside a worktree (same rule as every type): a "summarise" prompt must not be able to edit files. They run in the provider's default mode, and a post-check fails the task if the folder changed.
 export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["summarise", "review"]).includes(type);
-/** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has no read-only mode: "auto" is its default-permissions mode, the post-check is the backstop. Override per provider with routes.readOnlyModes. */
-export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
+/** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has NONE (its Paseo modes are Default Permissions, Auto-review, Full Access: all can write in the folder), so it is left out and a read-only type skips it. Qoder "dontAsk" was proven live on 06-11: Write and shell refused, Read outside the task folder refused. Override per provider with routes.readOnlyModes. */
+export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
+/** Provider ids this hub knows: slot keys, every route entry's id, and the built-in read-only-mode table. */
+export const knownProviders = (routes = {}) => new Set(["codex", ...Object.keys(routes.slots ?? {}), ...Object.keys(READ_ONLY_MODES), ...Object.values(routes.routes ?? {}).flat().map(base)]);
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
 export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
@@ -157,6 +159,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   if (!chain?.length) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   const slots = routes.slots ?? {};
   const trace = [];
+  // fail fast: an unknown provider id would otherwise reach the daemon, which holds the create for minutes with no agent
+  if (o.provider) { const known = knownProviders(routes); if (!known.has(base(o.provider))) return { used: null, trace: [{ provider: o.provider, error: `unknown provider id "${base(o.provider)}": not in routes slots, any route chain or the built-in provider list (known: ${[...known].sort().join(", ")})` }] }; }
   // A finished agent keeps its provider process (a claude is ~250 MB idle): stop and archive it once its answer and gate are read, unless --keep.
   // A route-created worktree (--new-workspace worktree) is removed with its agent, or it piles up under ~/.paseo/worktrees.
   const retire = (id) => {
@@ -176,6 +180,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
+    if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "no read-only mode for this provider (read-only task types never run on it)" }); continue; }
     const mode = ro ? readOnlyMode(base(prov), routes) : o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
     if (o.worktree) args.push("--new-workspace", "worktree");
     if (mode && (o.worktree || !unsafeMode(mode))) args.push("--mode", mode);
@@ -244,6 +249,8 @@ function main(argv) {
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
+  const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;
+  if (bad) { console.error("route: " + bad); return 2; }
   return res.used && res.status === "completed" ? 0 : 1;
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(main(process.argv.slice(2)));

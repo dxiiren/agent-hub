@@ -43,8 +43,7 @@
     "summarise": [
       "qwen-laptop",
       "qoder/efficient",
-      "qwen-code-2",
-      "codex/latest-terra"
+      "qwen-code-2"
     ],
     "test-scaffold": [
       "qwen-laptop",

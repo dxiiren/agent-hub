@@ -410,7 +410,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <tr><td><code>just doctor [--deep]</code></td><td>PASS/FAIL per check and per provider; <code>--deep</code> also runs one tiny task ("reply OK") on each provider and checks the agent's own line</td></tr>
 <tr><td><code>just mcp-add</code> / <code>mcp-remove</code></td><td>Register or remove the <code>agent-hub</code> client entries</td></tr>
 <tr><td><code>just uninstall</code></td><td>Service, MCP entries, providers, password hash and secret. Paseo and your agent CLIs stay</td></tr>
-<tr><td><code>just test</code> / <code>just scan</code></td><td>Config-template check plus node and python tests; public-repo scan</td></tr>
+<tr><td><code>just test</code> / <code>just scan</code></td><td><code>just test</code> runs the full suite (config-template check, node and python tests, hook tests); <code>just scan</code> scans for private hosts and secrets</td></tr>
 </table></div>
 <div class="pre"><pre><code># first time
 pwsh ./setup.ps1          # Linux/macOS: sh ./setup.sh

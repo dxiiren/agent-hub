@@ -55,7 +55,7 @@ pwsh ./setup.ps1
 just deps && just test
 ```
 
-There is no dev server: `just test` exiting 0 means every config template parses and holds placeholders only. Linux and macOS use `sh ./setup.sh` (or `just install`) instead of step 1.
+There is no dev server: `just test` exiting 0 means the full suite passed: every config template parses and holds placeholders only, plus the gate, routing, usage and hook tests. Linux and macOS use `sh ./setup.sh` (or `just install`) instead of step 1.
 
 ## Benchmarks
 
@@ -161,7 +161,7 @@ Run `just` with no arguments to list every recipe. The ones you'll use daily:
 | --- | --- |
 | `just install` | Install the toolchain (runs `setup.ps1` / `setup.sh`) |
 | `just deps` | Install the npm dependencies |
-| `just test` | Validate every config template (`scripts/check-config.mjs`) |
+| `just test` | Run the full suite (`npm test`): config-template check, gate, routing and usage tests (node and python), and the security-hook tests |
 | `just lint` | Same config check (no code to lint yet) |
 | `just build` | Same config check (plugins land per `tasks.md`) |
 | `just scan` | Scan tracked files for internal hosts, paths and secrets before any push |
@@ -178,7 +178,7 @@ Full-access, bypass and yolo modes are used only with `--new-workspace worktree`
 
 ### The Paseo UI: use the local page, not app.paseo.sh
 
-`just configure` turns on the daemon's own web UI: open `http://127.0.0.1:6767/` (Direct connection, host `127.0.0.1`, port `6767`, the password in `<paseo home>/agent-hub-secret`). The hosted app at app.paseo.sh cannot connect: the daemon answers its WebSocket with `403 Origin not allowed` unless `daemon.cors.allowedOrigins` lists it, and Chrome blocks the call to localhost behind a local-network prompt. Restart the daemon after the first `configure`.
+`just install` (it runs `node scripts/hub.mjs configure`, which you can also run alone) turns on the daemon's own web UI: open `http://127.0.0.1:6767/` (Direct connection, host `127.0.0.1`, port `6767`, the password in `<paseo home>/agent-hub-secret`). The hosted app at app.paseo.sh cannot connect: the daemon answers its WebSocket with `403 Origin not allowed` unless `daemon.cors.allowedOrigins` lists it, and Chrome blocks the call to localhost behind a local-network prompt. Restart the daemon (`just down && just up`) after the first `configure`.
 
 ### `route.mjs ... --new-workspace worktree` seems to hang
 
@@ -187,6 +187,8 @@ Creating the agent can take 2+ minutes while the daemon is saturated or a provid
 ### A task ends as `permission`
 
 Edit task types (`code-edit`, `test-scaffold`) outside `--new-workspace worktree` run without their full-access mode and wait for a permission nobody answers; the trace now says so. Use `--new-workspace worktree`, or a read-only type (`summarise`, `review`), which run in the provider default mode and fail if they changed files in the folder (list: `readOnlyTypes` in the routes file).
+
+**Read-only providers (decided 06-11, live evidence).** A read-only type runs each provider in its read-only mode: `plan` for Claude, OpenCode and the Qwen providers (plus the readguard/hook file boundary), `dontAsk` for Qoder (a Write, a shell command and a Read outside the task folder were all refused live; a Read inside the folder is allowed, so keep secrets out of the task folder). Codex has no read-only mode in Paseo (Default Permissions, Auto-review and Full Access can all write in the folder), so it is not in the `summarise` or `review` chains and a read-only type skips it; the folder-changed post-check stays as the backstop.
 
 ### `just: command not found` right after setup
 

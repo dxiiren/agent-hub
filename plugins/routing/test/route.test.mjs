@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { grantReads, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
-const routes = { slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
+const routes = { readOnlyModes: { codex: "auto", qwen: "plan" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
   const calls = [];
   const f = (args) => { calls.push(args); return args[0] === "ls" ? (script.ls ?? []) : args[0] === "stop" ? {} : script.run(args); };
@@ -286,8 +286,9 @@ test("markActive writes a per-route marker and the slot total; the returned fn r
 });
 
 test("read-only types use each provider's read-only mode, in or out of a worktree, ignoring caller and routes modes", () => {
-  const prov = { claude: "plan", "claude-clean": "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk", codex: "auto" };
+  const prov = { claude: "plan", "claude-clean": "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk" };
   assert.deepEqual(Object.fromEntries(Object.entries(prov).map(([k]) => [k, READ_ONLY_MODES[k]])), prov);
+  assert.equal(READ_ONLY_MODES.codex, undefined);
   for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
     const r2 = { slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
     const f = fake({ run: () => ({ status: "completed", agentId: "A" }) });
@@ -393,7 +394,7 @@ test("grantReads: in-cwd read is allowed and waits again; outside path, no path 
 });
 test("a read-only route whose agent stops on a read of a cwd file completes without a fallback; a read outside cwd or a write still fails", () => {
   const { d, cwd } = sandbox();
-  const r2 = { slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
+  const r2 = { readOnlyModes: { qwen: "plan" }, slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
   let path = j2(cwd, "app.log");
   const p = (a) => {
     if (a[0] === "ls") return [];
@@ -551,4 +552,32 @@ test("read-only task refused a read: the partial answer is returned with status 
   assert.equal(r.used, null); assert.equal(r.status, "permission");
   assert.match(r.partial.answer, /Partial: the file starts with X/); assert.equal(r.partial.refusedRead, true);
   assert.ok(r.trace.some((t) => t.status === "permission"));
+});
+
+import { linkSync } from "node:fs";
+test("readguard: a hardlink inside cwd to a file outside it is denied", (t) => {
+  const d = mk2(j2(tmpdir(), "rg-hl-")); const cwd = j2(d, "cwd"); md2(cwd); md2(j2(d, "outside"));
+  wf2(j2(d, "outside", "data.txt"), "outside"); wf2(j2(cwd, "own.txt"), "own");
+  try { linkSync(j2(d, "outside", "data.txt"), j2(cwd, "hl.txt")); } catch { return t.skip("no hardlink right"); }
+  assert.equal(pathAllowed(j2(cwd, "hl.txt"), [cwd]).ok, false);
+  assert.ok(pathAllowed(j2(cwd, "own.txt"), [cwd]).ok);
+});
+
+import { runRoute as rr6 } from "../route.mjs";
+test("an unknown provider id fails fast, before any daemon call", () => {
+  let calls = 0; const paseo = () => { calls++; return {}; };
+  const r = rr6({ type: "code-edit-easy", prompt: "x", provider: "nosuchprovider", cwd: "." }, paseo, { routes: { "code-edit-easy": ["qwen-laptop"] }, slots: { "qwen-laptop": 1 } });
+  assert.equal(r.used, null); assert.match(r.trace[0].error, /unknown provider id "nosuchprovider"/); assert.equal(calls, 0);
+  const ok = rr6({ type: "code-edit-easy", prompt: "x", provider: "qwen-laptop", cwd: "." }, () => ({ status: "error", error: "stop" }), { routes: { "code-edit-easy": ["qwen-laptop"] }, slots: { "qwen-laptop": 1 } });
+  assert.ok(!/unknown provider/.test(JSON.stringify(ok)));
+});
+
+test("codex has no read-only mode: a read-only type skips it, an edit type still uses it", () => {
+  const rt = { slots: { codex: 1, qwen: 2 }, routes: { summarise: ["codex/a", "qwen-code/b"], edit: ["codex/a"] } };
+  const runs = [];
+  const p = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { status: "completed", agentId: "Z" }; } return a[0] === "ls" ? [] : {}; };
+  const r = runRoute({ type: "summarise", prompt: "x", cwd: process.cwd() }, p, rt);
+  assert.deepEqual(runs, ["qwen-code/b"]); assert.match(JSON.stringify(r.trace), /no read-only mode/);
+  runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: process.cwd(), worktree: true }, p, rt);
+  assert.deepEqual(runs, ["codex/a"]);
 });

@@ -83,7 +83,7 @@ uninstall:
 deps:
     npm install --no-audit --no-fund
 
-# Validate every config template (JSON parses, placeholders only).
+# Run the full suite (npm test): config templates, gate, routing, usage and security-hook tests.
 test:
     npm test
 
