@@ -16,6 +16,20 @@ Agent Hub configures and extends the [Paseo](https://github.com/getpaseo/paseo) 
 > **New developer? Start with [`.docs/tldr.md`](.docs/tldr.md)** — every doc summarised on one
 > page. The full guide lives in [`.docs/`](.docs/README.md).
 
+| Agents running through the hub | A finished task: verdict and diff |
+| --- | --- |
+| ![Terminal listing of seven agents across qoder, codex, claude and qwen-code providers, three running and four idle](docs/images/agents.png) | ![A finished task result with a PASS gate verdict, a passing test line and a six-line unified diff](docs/images/task-result.png) |
+
+| `just doctor` | Statusline `hub` line |
+| --- | --- |
+| ![just doctor output: daemon, MCP and every provider check passing, laptop provider disabled by the GPU guard](docs/images/doctor.png) | ![Claude Code statusline with a second line showing tokens per provider, credits and estimated cost for the session](docs/images/statusline.png) |
+
+| Grafana usage dashboard (demo data) |
+| --- |
+| ![Grafana dashboard with tokens per provider, model and dev as bars, and a per-day stacked chart by provider](docs/images/grafana-usage.png) |
+
+Screenshots use demo data; site: https://dxiiren.github.io/agent-hub/.
+
 ## Prerequisites
 
 | Tool | Version | Installed by |
