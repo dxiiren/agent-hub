@@ -49,7 +49,10 @@ export function runGate(cwd, opts = {}) {
   const { cmd, maxLines = 400, forbid = null, allow = null } = opts;
   const reasons = [];
   let diff = "", files = [];
-  try {
+  // an agent made over MCP with no workspace lands in a plain folder: nothing to diff, so only the caller's cmd can gate it
+  let inRepo = true;
+  try { git(cwd, ["rev-parse", "--is-inside-work-tree"]); } catch { inRepo = false; }
+  if (inRepo) try {
     git(cwd, ["add", "-N", "."]); // intent-to-add so new files show in the diff
     diff = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"]);
     files = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--name-only"]).split("\n").filter((f) => f && !f.includes("__pycache__") && !f.endsWith(".pyc"));

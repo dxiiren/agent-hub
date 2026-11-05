@@ -110,3 +110,9 @@ test("a repo with a malicious core.fsmonitor / diff.external / textconv does not
 test("pattern length is capped", () => {
   assert.throws(() => repoGate({ gates: [{ match: "a".repeat(300) }] }, "/x"), /too long/);
 });
+
+test("a folder that is not a git repo is not failed for the missing diff", async () => {
+  const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "nogit-"));
+  const r = runGate(d, {}); assert.equal(r.status, "PASS"); assert.deepEqual(r.reasons, []);
+});
