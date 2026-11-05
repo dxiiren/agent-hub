@@ -4,7 +4,7 @@
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
 // Usage: route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -124,6 +124,18 @@ export function headSha(cwd) {
   return r.status === 0 ? r.stdout.trim() : EMPTY_TREE;
 }
 
+/** Qwen Code in plan mode reads files without a permission request, so readguard never sees an in-cwd `.env`. Its own workspace settings can DENY them: for a read-only Qwen task write <cwd>/.qwen/settings.json with the Claude read-only deny list (sensitive Read globs + shell/write/recursive tools), merged into any existing file, and put the original back (or delete ours) when the run ends. Returns the restore function. Live proof 06-11: with it the same prompt gets "cannot read the .env file due to permission restrictions". */
+export function qwenReadDeny(cwd, templatePath = new URL("../../config/claude-clean/readonly-settings.template.json", import.meta.url)) {
+  const f = join(cwd, ".qwen", "settings.json");
+  const had = existsSync(f); const orig = had ? readFileSync(f, "utf8") : null; const dirHad = existsSync(join(cwd, ".qwen"));
+  const reads = JSON.parse(readFileSync(templatePath, "utf8")).permissions.deny.filter((d) => d.startsWith("Read("));
+  const deny = ["Bash", "Shell", "run_shell_command", "Edit", "Write", "ReadManyFiles", "Grep", ...reads, ...reads.map((r) => r.replace("Read(", "ReadFile(", 1))];
+  let cur = {}; try { if (orig) cur = JSON.parse(orig); } catch { cur = {}; }
+  cur.permissions = { ...(cur.permissions ?? {}), deny: [...new Set([...(cur.permissions?.deny ?? []), ...deny])] };
+  mkdirSync(join(cwd, ".qwen"), { recursive: true }); writeFileSync(f, JSON.stringify(cur, null, 2));
+  return () => { try { if (had) writeFileSync(f, orig); else { rmSync(f, { force: true }); if (!dirHad) rmdirSync(join(cwd, ".qwen")); } } catch { /* shortcut: a locked file stays; the changed-files check then fails the task loudly */ } };
+}
+
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
 export function snapshot(dir, max = 5000) {
   const out = []; const walk = (d) => { let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
@@ -200,13 +212,16 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.gate || o.base) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base);
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
+    if (ro && base(prov).startsWith("qwen") && o.worktree) { trace.push({ provider: prov, skip: "read-only Qwen task cannot use --new-workspace worktree (the read deny file is written to --cwd only)" }); continue; }
     const guard = ro ? snapshot(o.cwd) : null;
-    let j = paseo([...args, o.prompt]);
+    const undeny = ro && base(prov).startsWith("qwen") ? qwenReadDeny(o.cwd) : () => {};
+    let j; try { j = paseo([...args, o.prompt]); } catch (e) { undeny(); throw e; }
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
     if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"), { cwd: o.cwd, allow: routes.readAllow });
+    undeny();
     const hint = j.status === "permission" ? { error: `agent asked for a permission its mode does not grant (type ${o.type}, mode ${mode ?? "provider default"}). Edit types (code-edit, test-scaffold) need --new-workspace worktree (full-access is dropped outside one, decision 21); read-only types run in the provider read-only mode and cannot edit.` } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {

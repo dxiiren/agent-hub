@@ -291,6 +291,7 @@ test("read-only types use each provider's read-only mode, in or out of a worktre
   assert.deepEqual(Object.fromEntries(Object.entries(prov).map(([k]) => [k, READ_ONLY_MODES[k]])), prov);
   assert.equal(READ_ONLY_MODES.codex, undefined);
   for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
+    if (worktree && p.startsWith("qwen")) continue; // read-only Qwen needs --cwd (deny file), refused with a worktree
     const r2 = { readOnlyEnforced: ALL, slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
     const f = fake({ run: () => ({ status: "completed", agentId: "A" }) });
     runRoute({ ...o, type: "summarise", mode: "bypassPermissions", worktree }, f, r2);
@@ -606,4 +607,26 @@ test("no read-only chain in routes.template.json / routes.local.json holds an un
       assert.ok(b === "claude" || READ_ONLY_ENFORCED.includes(b), `${f} ${t}: ${e}`);
     }
   }
+});
+
+test("qwenReadDeny writes the sensitive-read deny into <cwd>/.qwen/settings.json, merges an existing file, and restores it", async () => {
+  const { qwenReadDeny } = await import("../route.mjs");
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "qd-")); const f = join(d, ".qwen", "settings.json");
+  const undo = qwenReadDeny(d);
+  const deny = JSON.parse(readFileSync(f, "utf8")).permissions.deny;
+  for (const x of ["Read(.env)", "Read(**/.env)", "Read(**/credentials*)", "Read(**/*secret*)", "Bash", "Write"]) assert.ok(deny.includes(x), x);
+  undo(); assert.ok(!existsSync(f) && !existsSync(join(d, ".qwen")));
+  mkdirSync(join(d, ".qwen")); writeFileSync(f, JSON.stringify({ theme: "x", permissions: { deny: ["Foo"] } }));
+  const undo2 = qwenReadDeny(d); const m = JSON.parse(readFileSync(f, "utf8"));
+  assert.equal(m.theme, "x"); assert.ok(m.permissions.deny.includes("Foo") && m.permissions.deny.includes("Read(.env)"));
+  undo2(); assert.equal(JSON.parse(readFileSync(f, "utf8")).permissions.deny.join(), "Foo");
+});
+test("a read-only Qwen run leaves no .qwen folder behind and the changed-files check stays clean", async () => {
+  const { mkdtempSync, existsSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "qr-"));
+  let seen = false;
+  const p = fake({ run: () => { seen = seen || existsSync(join(d, ".qwen", "settings.json")); return { status: "completed", agentId: "A" }; } });
+  const r = runRoute({ ...o, type: "summarise", cwd: d, provider: "qwen-code" }, p, { slots: {}, routes: { summarise: [] } });
+  assert.equal(r.status, "completed"); assert.ok(seen); assert.ok(!existsSync(join(d, ".qwen")));
 });
