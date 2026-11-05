@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-// claude-clean launcher: claude <args> with the hub's read rules merged into whatever --settings Paseo passes (Paseo adds its own
+// claude-clean launcher: claude <args>, with the hub's read-only rules merged into whatever --settings Paseo passes (Paseo adds its own
 // --settings after ours and the last one wins, so a plain extra --settings flag is silently dropped).
+// The rules apply only in a read-only permission mode (plan, default): code-edit tasks run in bypassPermissions and keep every tool.
+// In that case project and local settings are also dropped (--setting-sources=user), so a project .claude allow rule cannot re-enable a tool; deny rules win over user allows anyway.
 // Usage: claude-wrap.mjs <claude-binary> <mcp-config> <rules.json> [claude args...]
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+
+export const READONLY_MODES = ["plan", "default"];
+export const modeOf = (args) => { const i = args.findIndex((a) => a === "--permission-mode" || a.startsWith("--permission-mode=")); if (i < 0) return undefined; return args[i].includes("=") ? args[i].split("=")[1] : args[i + 1]; };
 
 export function mergeSettings(args, rules) {
   const out = []; const merged = JSON.parse(JSON.stringify(rules));
@@ -16,11 +21,18 @@ export function mergeSettings(args, rules) {
   return [...out, "--settings", JSON.stringify(merged)];
 }
 
+/** Final claude args for this launch. */
+export function buildArgs(rest, rules, mcp) {
+  if (rest[0] === "--version") return rest;
+  const base = ["--strict-mcp-config", "--mcp-config", mcp];
+  if (!READONLY_MODES.includes(modeOf(rest))) return [...base, ...rest];
+  const noProject = rest.map((a) => (a.startsWith("--setting-sources=") ? "--setting-sources=user" : a));
+  return [...base, ...mergeSettings(noProject, rules)];
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const [bin, mcp, rulesFile, ...rest] = process.argv.slice(2);
-  const rules = JSON.parse(readFileSync(rulesFile, "utf8"));
-  const args = rest[0] === "--version" ? rest : ["--strict-mcp-config", "--mcp-config", mcp, ...mergeSettings(rest, rules)];
-  const c = spawn(bin, args, { stdio: "inherit" });
+  const c = spawn(bin, buildArgs(rest, JSON.parse(readFileSync(rulesFile, "utf8")), mcp), { stdio: "inherit" });
   c.on("exit", (code, sig) => process.exit(code ?? (sig ? 1 : 0)));
   c.on("error", (e) => { console.error(String(e)); process.exit(127); });
 }

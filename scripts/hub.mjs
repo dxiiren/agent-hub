@@ -106,7 +106,7 @@ function providers() {
   const empty = join(HUB_DIR, 'empty-mcp.json'); writeJson(empty, { mcpServers: {} });
   const claude = which('claude');
   if (claude) {
-    const ro = join(HUB_DIR, 'claude-readonly-settings.json'); writeFileSync(ro, readFileSync(join(REPO, 'config', 'claude-clean', 'readonly-settings.template.json'), 'utf8'));
+    const ro = join(HUB_DIR, 'claude-readonly-settings.json'); { const t = JSON.parse(readFileSync(join(REPO, 'config', 'claude-clean', 'readonly-settings.template.json'), 'utf8')); const h = HOME.split(String.fromCharCode(92)).join('/'); t.permissions.deny.push(`Read(//${h}/agent-hub-secret)`, `Read(//${h}/config.json)`, `Read(//${h}/hub/**)`); writeJson(ro, t); } // the real PASEO_HOME, not only ~/.paseo
     const wrap = join(HUB_DIR, WIN ? 'claude-clean.cmd' : 'claude-clean.sh');
     const js = join(REPO, 'scripts', 'claude-wrap.mjs');
     writeFileSync(wrap, WIN

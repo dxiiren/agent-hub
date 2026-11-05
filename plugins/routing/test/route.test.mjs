@@ -276,7 +276,7 @@ test("markActive writes a per-route marker and the slot total; the returned fn r
 });
 
 test("read-only types use each provider's read-only mode, in or out of a worktree, ignoring caller and routes modes", () => {
-  const prov = { claude: "default", "claude-clean": "default", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk", codex: "auto" };
+  const prov = { claude: "plan", "claude-clean": "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk", codex: "auto" };
   assert.deepEqual(Object.fromEntries(Object.entries(prov).map(([k]) => [k, READ_ONLY_MODES[k]])), prov);
   for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
     const r2 = { slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
@@ -427,4 +427,24 @@ test("claude-wrap merges the hub rules into the --settings Paseo passes, so they
   assert.equal(a.filter((v) => v === "--settings").length, 1);
   const m = JSON.parse(a.at(-1));
   assert.equal(m.fastMode, false); assert.deepEqual(m.permissions.deny, ["Read(.env)"]);
+});
+
+import { readFileSync as rfs } from "node:fs";
+import { SENSITIVE_GLOBS } from "../readguard.mjs";
+const tpl = JSON.parse(rfs(new URL("../../../config/claude-clean/readonly-settings.template.json", import.meta.url), "utf8"));
+test("claude read-only mode is plan or default, and the read-only settings deny every tool that writes or reaches out", async () => {
+  for (const k of ["claude", "claude-clean"]) assert.ok(["plan", "default"].includes(READ_ONLY_MODES[k]), k);
+  for (const t of ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "mcp__*"]) assert.ok(tpl.permissions.deny.includes(t), t);
+  assert.equal(tpl.permissions.allow, undefined, "no allow rule: every non-native read goes through readguard");
+  const { buildArgs } = await import("../../../scripts/claude-wrap.mjs");
+  const ro = buildArgs(["--permission-mode", "plan", "--setting-sources=user,project,local", "--settings", '{"fastMode":false}'], tpl, "m.json");
+  const m = JSON.parse(ro.at(-1));
+  assert.ok(["Bash", "Edit", "Write"].every((t) => m.permissions.deny.includes(t)));
+  assert.ok(ro.includes("--setting-sources=user") && !ro.some((a) => /project/.test(String(a)) && a.startsWith("--setting-sources")));
+  const edit = buildArgs(["--permission-mode", "bypassPermissions", "--setting-sources=user,project,local"], tpl, "m.json");
+  assert.ok(!edit.includes("--settings") && edit.includes("--setting-sources=user,project,local"), "edit tasks keep every tool");
+});
+test("the settings template denies at least everything readguard denies", () => {
+  for (const g of SENSITIVE_GLOBS) for (const r of [`Read(${g})`, `Read(**/${g})`]) assert.ok(tpl.permissions.deny.includes(r), r);
+  for (const d of ["~/.ssh", "~/.claude", "~/.codex", "~/.qoder"]) assert.ok(tpl.permissions.deny.some((x) => x.startsWith(`Read(${d}`)), d);
 });

@@ -72,7 +72,7 @@ export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 // Read-only task types never get an unsafe mode outside a worktree (same rule as every type): a "summarise" prompt must not be able to edit files. They run in the provider's default mode, and a post-check fails the task if the folder changed.
 export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["summarise", "review"]).includes(type);
 /** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has no read-only mode: "auto" is its default-permissions mode, the post-check is the backstop. Override per provider with routes.readOnlyModes. */
-export const READ_ONLY_MODES = { claude: "default", "claude-clean": "default", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
+export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
 export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {

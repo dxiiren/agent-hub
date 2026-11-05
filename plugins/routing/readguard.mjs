@@ -7,6 +7,8 @@ import os from "node:os";
 
 // shortcut: tool names differ per provider; this list is the ones seen live (read_file, glob, grep, ls). Add a name only after seeing its pending request carry a path.
 export const READ_TOOLS = /^(read|read_?file)$/i; // single-file reads only: grep, glob, ls, list, read_many_files recurse into dot-folders and credentials
+/** The same rules as globs: config/claude-clean/readonly-settings.template.json must deny every one (a test checks). */
+export const SENSITIVE_GLOBS = [".env", ".env.*", "credentials*", "creds*", "*secret*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "id_rsa*", "id_ed25519*", "id_ecdsa*", "id_dsa*", ".*", ".*/**"];
 const SENSITIVE_NAME = /^(credentials|creds)|\.(pem|key|p12|pfx|jks|keystore)$|^\.env|^id_(rsa|ed25519|ecdsa|dsa)|secret/i;
 
 const real = (p) => { try { return realpathSync.native(p); } catch { return null; } };
