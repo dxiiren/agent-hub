@@ -8,7 +8,7 @@ export function evaluate({ dir, id, cwd, routes }) {
   const mine = (state[id] ??= { attempts: 0, cmd: claimRequest(dir, cwd)?.cmd ?? null });
   const res = runGate(cwd, gateOpts(routes, cwd, mine.cmd));
   const d = decide(mine.attempts, res, routes.gateRetry === false);
-  if (res.noRepo) d.reprompt = false; // the agent cannot fix a missing repo; the FAIL label is the signal, no tokens burned
+  if (res.noRepo) { d.reprompt = false; d.status = "FAIL"; } // the agent cannot fix a missing repo; the FAIL label is the signal, no tokens burned
   mine.attempts = d.attempts; mine.status = d.status;
   saveState(dir, state);
   const mirror = { "gate/status": d.status, "gate/reasons": res.reasons.join(" | ").slice(0, 400), "gate/attempts": String(d.attempts), "gate/diff": `${res.files} files, ${res.changed} lines` };

@@ -129,3 +129,10 @@ test("no repo + cmd only: PASS, but a secret in the folder FAILs (c)", () => {
   const r = runGate(plain({ "k.txt": "key = AKIAABCDEFGHIJKLMNOP" }), { cmd: OK });
   assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /secret pattern in k\.txt/);
 });
+
+test("hook: an agent in a plain folder is labelled FAIL at once and never re-prompted", async () => {
+  const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "nogit-")), st = mkdtempSync(join(tmpdir(), "gstate-"));
+  const r = evaluate({ dir: st, id: "P", cwd: d, routes: {} });
+  assert.equal(r.d.status, "FAIL"); assert.equal(r.d.reprompt, false); assert.match(r.mirror["gate/reasons"], /nothing to verify/);
+});
