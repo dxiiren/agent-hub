@@ -265,8 +265,9 @@ async function doctor(deep) {
   row(dp.state === 'up', 'daemon health', `127.0.0.1:${PORT}`);
   if (dp.state !== 'up') { console.log(daemonAdvice(dp)); process.exit(1); }
   if (process.env.AGENT_HUB_NO_USAGE_STACK !== '1') { // the one usage UI: collector + Prometheus + Grafana must answer
-    const { probeStack } = await import('./usage-stack.mjs');
-    for (const x of await probeStack()) row(x.ok, `usage stack ${x.name}`, x.ok ? x.url : `${x.url} not answering: run \`just up\` (starts Docker and the stack)`);
+    const { probeStack, usageModeFromFiles } = await import('./usage-stack.mjs');
+    const mode = usageModeFromFiles();
+    for (const x of await probeStack()) row(x.ok, `usage stack (${mode}) ${x.name}`, x.ok ? x.url : `${x.url} not answering: run \`just up\` (${mode === 'native' ? 'starts the native stack, no Docker' : 'starts Docker and the stack'})`);
   }
   row((await http('/mcp/agents', {}, '{}')).status === 401, 'MCP refuses a call without the password');
   const t = await http('/mcp/agents', { authorization: `Bearer ${s}` }, JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));

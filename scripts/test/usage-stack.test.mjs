@@ -14,3 +14,12 @@ test('probeStack reports a dead stack as not ok and a live one as ok', async () 
   const down = await probeStack({ collector: base + '/', grafana: base + '/api/health' });
   assert.ok(down.every((x) => !x.ok), JSON.stringify(down));
 });
+
+test('usageMode: native on Windows, docker elsewhere, USAGE_MODE wins, junk values fall back', async () => {
+  const { usageMode } = await import('../usage-stack.mjs');
+  assert.equal(usageMode({}, 'win32'), 'native');
+  assert.equal(usageMode({}, 'linux'), 'docker');
+  assert.equal(usageMode({ USAGE_MODE: 'docker' }, 'win32'), 'docker');
+  assert.equal(usageMode({ USAGE_MODE: 'NATIVE' }, 'linux'), 'native');
+  assert.equal(usageMode({ USAGE_MODE: 'bogus' }, 'win32'), 'native');
+});

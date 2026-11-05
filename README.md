@@ -112,6 +112,10 @@ Credits charged per task: verified against Qoder billing 05-11: charged = record
 
 Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
 
+## Changes 06-11
+
+- **Usage stack without Docker on Windows.** `just up` and the logon task now run the collector, Prometheus and Grafana as native processes (`deploy/usage/native.ps1`): binaries, data and generated configs live in `%LOCALAPPDATA%\agent-hub\usage`, downloaded once with SHA-256 verification (`native.ps1 install`, also run on first start). Same pinned versions, same configs, rules and dashboard as `compose.yaml`; ports stay 3000, 9090, 4317 and 4318. `USAGE_MODE=native|docker` (environment or `deploy/usage/.env`) picks the mode: native is the default on Windows, `docker` (compose.yaml) is for servers and Linux. `just doctor` probes the active mode and fails when the collector, Prometheus or Grafana is down.
+
 ## Changes 05-11
 
 - **Laptop watchdog false-idle kill fixed.** The two laptop llama-server deaths during the benchmark (21:36, 21:45) were the hub watchdog judging a freshly started agent idle and stopping the shared server, not a GPU driver reset. Idle is now based on in-flight markers and shared last-use state, and CPU is not judged while the model loads (a5acf73, 3d9a87e).
