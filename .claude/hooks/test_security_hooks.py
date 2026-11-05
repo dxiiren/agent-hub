@@ -171,6 +171,15 @@ for c in ["ls $(pwd)/src", "echo $(date)", "git log -n $(echo 3)", "cat `which l
     check("r3c subst allowed " + c, g.blocked(c) is None)
 
 
+# round 1 (final): ssh key names, leading-dot credentials, standalone substitutions, assigned variables
+for c in ["cat ~/.ssh/id_ed25519", "cat ~/.ssh/id_ecdsa", "cat ~/.ssh/id_dsa", "cat ~/.ssh/id_foo", "cat key.ppk", "cat ~/.ssh/id_ed25519.pub",
+          "cat ~/.claude/.credentials.json", "cat .credentials.json", "cat $(echo .env)", "cat `echo .env`", "cat $(echo $(echo .env))",
+          "cat $(printf '.en''v')", "x=.e; cat ${x}nv", "a=.e; b=${a}n; cat ${b}v", "export x=id_; cat ${x}rsa", "cat ${x}nv", "cat $f.pem"]:
+    check("r1 block " + c, g.blocked(c) is not None)
+for c in ["git status", "cat README.md", "ls *.md", "echo $(date)", "ls $(pwd)/src", "cat $HOME/x.txt", "cat $f.txt", "git log -n $(echo 3)",
+          "cat id_mapping.csv", "ls $(git rev-parse --show-toplevel)", "x=src; ls $x/lib", "echo $x"]:
+    check("r1 allow " + c, g.blocked(c) is None)
+
 # round 3d: normal commands pass; a crashing hook and unparsable input block
 for c in ["git status", "cat README.md", "ls *.md", "git log --oneline -5", "python -m pytest tests/"]:
     check("r3d normal passes " + c, g.blocked(c) is None)

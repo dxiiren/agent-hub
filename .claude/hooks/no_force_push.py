@@ -233,9 +233,12 @@ def check(command, depth=0):
 def main():
     try:
         payload = json.load(sys.stdin)
-    except ValueError:
-        return 0
-    command = (payload.get("tool_input") or {}).get("command") or ""
+        command = payload["tool_input"]["command"]
+        if not isinstance(command, str):
+            raise TypeError("command is not a string")
+    except (ValueError, KeyError, TypeError):
+        print("FORCE-PUSH GUARD: unreadable hook input, blocked (fail closed)", file=sys.stderr)
+        return 2
     bad = check(command)
     if bad:
         print(f"FORCE-PUSH GUARD: blocked `git push` with {bad!r} - pushes here never rewrite or delete a "

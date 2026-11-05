@@ -12,8 +12,10 @@ import time
 
 SAFE = re.compile(r"\.(?:example|sample|stub|template)$", re.I)
 SPLIT = re.compile(r"[\s'\"=<>@:,;|&()`]+")
-PLAIN = re.compile(r"^(?:\.env(?:\..*)?|.*\.(?:pem|key)|id_rsa.*|credentials.*)$", re.I)
-SAMPLES = (".env", ".env.local", ".env.production", "server.pem", "server.key", "id_rsa", "credentials.json")
+# keys: any ssh key name (id_rsa/dsa/ecdsa/ed25519/xmss with any suffix, any extensionless id_*, id_*.ppk/pem/key), *.ppk;
+# credentials with an optional leading dot (~/.claude/.credentials.json)
+PLAIN = re.compile(r"^(?:\.env(?:\..*)?|.*\.(?:pem|key|ppk|p12|pfx)|id_(?:rsa|dsa|ecdsa|ed25519|xmss).*|id_[^.]*|id_.*\.(?:ppk|pem|key)|\.?credentials.*)$", re.I)
+SAMPLES = (".env", ".env.local", ".env.production", "server.pem", "server.key", "server.ppk", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "credentials.json", ".credentials.json")
 
 
 _BUDGET = 5000  # max directory entries looked at per token
@@ -79,13 +81,56 @@ def _subst_glued(command: str) -> bool:
     return False
 
 
-def blocked(command: str) -> str | None:
+VARREF = re.compile(r"\$\{[^}]*\}|\$[A-Za-z_]\w*")
+ASSIGN = re.compile(r"(?:^|[;&|\s])(?:export\s+|declare\s+|local\s+|typeset\s+)?([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]*)")
+SUBST_WORDS = re.compile(r"\benv\b|\.env|pem|\bkey|id_|cred|ppk|secret|passw", re.I)
+
+
+def _expand_assignments(command: str) -> str:
+    """Expand simple in-command assignments (`x=.e; cat ${x}nv`) so the real name is scanned; chains are followed a few passes."""
+    vals = {m.group(1): m.group(2).strip("'\"") for m in ASSIGN.finditer(command)}
+    out = command
+    for _ in range(4):
+        prev = out
+        for k, v in vals.items():
+            out = re.sub(r"\$\{" + re.escape(k) + r"\}|\$" + re.escape(k) + r"(?![A-Za-z0-9_])", lambda _m, v=v: v, out)
+        if out == prev:
+            break
+    return out
+
+
+def _var_glued(command: str) -> str | None:
+    """A variable glued to a name fragment (`${x}nv`, `$a.pem`) can build a secret name from a value we cannot see (set earlier, exported):
+    fail closed when the last path component, with each variable as a wildcard, could be a secret file name."""
+    for tok in re.split(r"[\s;|&<>()'\"=,:@`]+", command):
+        comp = tok.rsplit("/", 1)[-1]
+        if not VARREF.search(comp) or re.fullmatch(r"(?:\$\{IFS\}|\$IFS)+", comp):
+            continue
+        glob = VARREF.sub("*", comp.replace("${IFS}", " ")).lower()
+        if len(glob.replace("*", "")) >= 2 and any(fnmatch.fnmatchcase(s, glob) for s in SAMPLES):
+            return tok
+    return None
+
+
+def blocked(command: str, _depth: int = 0) -> str | None:
     if _subst_glued(command):  # what a substitution prints is unknown: fail closed on secret-ish tokens
         return "command substitution inside a path-like token"
-    for text in _variants(command):
-        for tok in SPLIT.split(text):
-            if _hit(tok):
-                return tok
+    expanded = _expand_assignments(command)
+    for text in (command, expanded):
+        for m in SUBST.finditer(text):  # a standalone substitution: scan its body, block secret-ish words (nested ones are found inner-first)
+            body = m.group(0)[2:-1] if m.group(0).startswith("$(") else m.group(0)[1:-1]
+            if _depth < 5 and blocked(body, _depth + 1):
+                return "command substitution: " + body[:40]
+            if SUBST_WORDS.search(body):
+                return "command substitution mentions a secret-ish word: " + body[:40]
+    glued = _var_glued(command)
+    if glued:
+        return glued
+    for base in {command, expanded}:
+        for text in _variants(base):
+            for tok in SPLIT.split(text):
+                if _hit(tok):
+                    return tok
     return None
 
 

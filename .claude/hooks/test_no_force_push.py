@@ -98,6 +98,11 @@ else:
                              capture_output=True, env=env).returncode
         if got != want:
             miss.append(f"wired hook: {tool} {c!r} exit {got}, want {want}")
+# unparsable or malformed hook input fails closed (rc 2), like secret_path_guard
+for inp in ["not json", "", "[]", "null", "{}", '{"tool_input": {}}', '{"tool_input": {"command": 5}}', '{"tool_input": null}']:
+    got = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "no_force_push.py")], input=inp, text=True, capture_output=True).returncode
+    if got != 2:
+        miss.append(f"malformed stdin {inp!r} exit {got}, want 2")
 for c in miss:
     print("MISCLASSIFIED:", c)
 print(f"{len(BLOCK)} block + {len(ALLOW)} allow cases + 5 wired-hook runs, {len(miss)} misclassified")
