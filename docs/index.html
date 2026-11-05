@@ -455,36 +455,48 @@ docker compose up -d --build</code></pre></div>
 <h3>Method</h3>
 <p>Every run is <code>paseo run --provider P/M --new-workspace worktree --json --no-wait</code>, then <code>paseo wait</code>, then <code>paseo inspect</code> for usage, then the gate on the worktree, then <code>paseo delete</code>. A throwaway daemon, one try per cell unless a repeat is stated, a cap of 600 s (420 s on the laptop, 900 s on the office servers). Claude agents ran with a clean config directory. Every task's starting state was shown to fail its own gate before the run. A pass means the task's own gate passed; a start failure of the harness is dropped, not counted as a model fail. A pass after the cap still counts as a pass and is marked "late".</p>
 <ul>
-<li><b>Set A</b>: 7 small Python tasks (fix a test, add a function and test, rename across 3 files, summarise a log, an off-by-one, a new script, input validation). A bash gate each. Run on the laptop and the office servers only.</li>
+<li><b>Set A</b>: 7 small Python tasks (fix a test, add a function and test, rename across 3 files, summarise a log, an off-by-one, a new script, input validation). A bash gate each. Now run for every latest model.</li>
 <li><b>Set B</b>: 10 harder code-edit tasks; the gate is the fix commit's own tests. This is the "can it really edit code" set.</li>
 <li><b>Set C</b>: 3 tasks: c1 a log summary (required facts), c2 a test scaffold (tests pass on the original and kill 3 mutants), c3 a code review (names the planted bug and the fix). c2 is the hardest: a surviving mutant fails it.</li>
 </ul>
 <p>Wall time is the median seconds per task. Tokens are the daemon's last-turn counters, so they under-count multi-turn runs; Qwen Code and Qoder expose none. Qoder is billed in credits, Claude in dollars including cache reads; Codex, the office servers and the laptop are flat-rate or local. Most cells are n=1 or 2, so differences of one task are noise.</p>
 
-<h3>Capability table: latest models (set B / set C / set A)</h3>
+<h3>Capability table: latest models (set A / set B / set C)</h3>
 <div class="tbl"><table>
-<tr><th>Model</th><th>Harness</th><th class="num">Set B (10)</th><th class="num">Set C (3)</th><th class="num">Set A (7)</th><th class="num">Median s</th><th>Cost / notes</th></tr>
-<tr><td>Claude Sonnet 5.5</td><td>Claude</td><td class="num pass">10/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">70</td><td>$0.235 per task (total cost incl. cache reads)</td></tr>
-<tr><td>Claude Haiku 5.5</td><td>Claude</td><td class="num pass">9/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">100</td><td>$0.020 per task</td></tr>
-<tr><td>Claude Opus 5.5</td><td>Claude</td><td class="num pass">10/10</td><td class="num partial">2/3</td><td class="num">n/a</td><td class="num">95</td><td>$0.530 per task; c2 failed twice; not routed for bulk</td></tr>
-<tr><td>Codex gpt-6.1-terra</td><td>Codex</td><td class="num pass">10/10 and 10/10 (two runs)</td><td class="num partial">2/3</td><td class="num">n/a</td><td class="num">71 / 51</td><td>best value; about 27k input tokens (mostly cached) per task. Set C was run once (2/3), not repeated.</td></tr>
-<tr><td>Codex gpt-6.1-sol</td><td>Codex</td><td class="num pass">10/10 and 9/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">84 / 63</td><td>about 29k input tokens per task</td></tr>
-<tr><td>Codex gpt-6-luna (newest luna)</td><td>Codex</td><td class="num partial">8/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">80</td><td></td></tr>
-<tr><td>Qoder Efficient</td><td>Qoder (ACP)</td><td class="num pass">9/10</td><td class="num">3/3</td><td class="num">n/a</td><td class="num">238</td><td>free tier, no timeouts; credits not exposed</td></tr>
-<tr><td>Qwen3.8-27B, office GPU server A (shared)</td><td>Qwen Code</td><td class="num">7/10</td><td class="num">2/3</td><td class="num">7/7</td><td class="num">115</td><td>900 s cap; shared with other users, so slow on busy days</td></tr>
-<tr><td>Qwen3.8-27B, office GPU server B (2-GPU cluster)</td><td>Qwen Code</td><td class="num partial">9/10</td><td class="num">2/3</td><td class="num">6/7</td><td class="num">109</td><td>best office cell; 900 s cap</td></tr>
-<tr><td>Qwen3.5-9B on the laptop GPU, 64k context</td><td>Qwen Code</td><td class="num partial">4/10</td><td class="num">n/a</td><td class="num">n/a</td><td class="num">198</td><td>420 s cap; 100% on the GPU</td></tr>
-<tr><td>Qwen3.5-9B on the laptop GPU, 32k context (the default)</td><td>Qwen Code</td><td class="num fail">1/10</td><td class="num pass">3/3</td><td class="num pass">7/7</td><td class="num">71 (set A) / 143 (set B)</td><td>easy edits, summaries, scaffolds and reviews only</td></tr>
+<tr><th>Model</th><th>Harness</th><th class="num">Set A (7)</th><th class="num">Set B (10)</th><th class="num">Set C (3)</th><th class="num">Median s</th><th class="num">Qoder credit multiplier</th><th class="num">Credits per task (measured)</th></tr>
+<tr><td>Codex gpt-6.1-terra</td><td>Codex</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">67</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Codex gpt-6.1-sol</td><td>Codex</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">10/10</td><td class="num">3/3</td><td class="num">86</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Codex gpt-6-luna</td><td>Codex</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">8/10</td><td class="num">3/3</td><td class="num">73</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Claude Sonnet 5.5</td><td>Claude</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">10/10</td><td class="num">3/3</td><td class="num">70</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Claude Haiku 5.5</td><td>Claude</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">96</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Claude Opus 5.5</td><td>Claude</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">70</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Qoder Efficient</td><td>Qoder</td><td class="num">2/2, running (2 of 7 done)</td><td class="num">pending</td><td class="num">pending</td><td class="num">54</td><td class="num">0.00x</td><td class="num">0.35</td></tr>
+<tr><td>Qoder Fast</td><td>Qoder</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">83</td><td class="num">0.80x</td><td class="num">6.82</td></tr>
+<tr><td>Qoder DeepSeek-Flash</td><td>Qoder</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">99</td><td class="num">0.10x</td><td class="num">0.71</td></tr>
+<tr><td>Qoder Qwen3.8-Flash</td><td>Qoder</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">8/10</td><td class="num">2/3</td><td class="num">186</td><td class="num">0.10x</td><td class="num">0.92</td></tr>
+<tr><td>Qoder GLM-5.3-Flash</td><td>Qoder</td><td class="num">2/2, running (2 of 7 done)</td><td class="num">3/10</td><td class="num">3/3</td><td class="num">241</td><td class="num">0.10x</td><td class="num">0.68</td></tr>
+<tr><td>Qoder MiniMax-M3.1-Flash</td><td>Qoder</td><td class="num">2/2, running (2 of 7 done)</td><td class="num">6/10</td><td class="num">3/3</td><td class="num">188</td><td class="num">0.10x</td><td class="num">1.90</td></tr>
+<tr><td>Qoder DeepSeek-V4-Pro</td><td>Qoder</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">4/10</td><td class="num">2/3</td><td class="num">189</td><td class="num">0.50x</td><td class="num">3.50</td></tr>
+<tr><td>Qoder Qwen3.8-Max</td><td>Qoder</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">5/10</td><td class="num">3/3</td><td class="num">268</td><td class="num">0.50x</td><td class="num">16.77</td></tr>
+<tr><td>Qoder GLM-5.3</td><td>Qoder</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">189</td><td class="num">0.80x</td><td class="num">9.85</td></tr>
+<tr><td>Qoder Kimi-K3.1-Pro</td><td>Qoder</td><td class="num">3/3, running (3 of 7 done)</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">147</td><td class="num">1.00x</td><td class="num">8.10</td></tr>
+<tr><td>Qwen3.8-27B (single GPU)</td><td>Qwen Code</td><td class="num">7/7</td><td class="num">7/10</td><td class="num">2/3</td><td class="num">115</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Qwen3.8-27B-NVFP (2-node cluster)</td><td>Qwen Code</td><td class="num">6/7</td><td class="num">9/10</td><td class="num">2/3</td><td class="num">109</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Qwen3.5-9B laptop, 32k (default)</td><td>Qwen Code</td><td class="num">7/7</td><td class="num">1/10</td><td class="num">3/3</td><td class="num">76</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Qwen3.5-9B laptop, 64k (partial)</td><td>Qwen Code</td><td class="num">4/4, running (4 of 7 done)</td><td class="num">4/10</td><td class="num">pending</td><td class="num">143</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Qwen3.5-9B laptop, 64k (partial)</td><td>OpenCode</td><td class="num">1/1, running (1 of 7 done)</td><td class="num">1/10</td><td class="num">pending</td><td class="num">119</td><td class="num">-</td><td class="num">-</td></tr>
+<tr><td>Qwen3.5-9B laptop, 32k (partial)</td><td>OpenCode</td><td class="num">1/1, running (1 of 7 done)</td><td class="num">pending</td><td class="num">1/3</td><td class="num">60</td><td class="num">-</td><td class="num">-</td></tr>
 </table></div>
+<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. Qoder credit multiplier is the "x Credit" label each model carries in the <code>qodercli</code> 1.1.81 ACP model list (Efficient 0.00x is the free tier); credits per task is the measured mean from the run records. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
 
 <h3>Harness comparison for the same model</h3>
 <p>The same Qwen3.8-27B served by an office server, driven by three different harnesses (all 20 cells per harness and host ran; the median is for set B):</p>
 <div class="tbl"><table>
 <tr><th>Host</th><th>Harness</th><th class="num">Set B</th><th class="num">Set C</th><th class="num">Median s</th><th>Notes</th></tr>
-<tr><td>Office server A</td><td>OpenCode</td><td class="num pass">9/10</td><td class="num">2/3</td><td class="num">592</td><td>9 of 10 passed the gate, 6 inside 900 s</td></tr>
-<tr><td>Office server A</td><td>Codex</td><td class="num partial">6/10</td><td class="num">1/3</td><td class="num">691</td><td>only 3 of 10 inside 900 s; not usable on this host</td></tr>
-<tr><td>Office server B</td><td>OpenCode</td><td class="num">6/10</td><td class="num">2/3</td><td class="num">446</td><td>6 of 10, all inside the cap</td></tr>
-<tr><td>Office server B</td><td>Codex</td><td class="num pass">8/10</td><td class="num">2/3</td><td class="num">534</td><td>8 of 10, all inside the cap</td></tr>
+<tr><td>Qwen3.8-27B</td><td>OpenCode</td><td class="num pass">9/10</td><td class="num">2/3</td><td class="num">592</td><td>9 of 10 passed the gate, 6 inside 900 s</td></tr>
+<tr><td>Qwen3.8-27B</td><td>Codex</td><td class="num partial">6/10</td><td class="num">1/3</td><td class="num">691</td><td>only 3 of 10 inside 900 s; not usable on this host</td></tr>
+<tr><td>Qwen3.8-27B-NVFP (2-node cluster)</td><td>OpenCode</td><td class="num">6/10</td><td class="num">2/3</td><td class="num">446</td><td>6 of 10, all inside the cap</td></tr>
+<tr><td>Qwen3.8-27B-NVFP (2-node cluster)</td><td>Codex</td><td class="num pass">8/10</td><td class="num">2/3</td><td class="num">534</td><td>8 of 10, all inside the cap</td></tr>
 <tr><td>Laptop 9B, 64k</td><td>Qwen Code</td><td class="num partial">4/10</td><td class="num">n/a</td><td class="num">198</td><td>no malformed calls, no timeouts</td></tr>
 <tr><td>Laptop 9B, 64k</td><td>OpenCode</td><td class="num fail">1/10</td><td class="num">n/a</td><td class="num">138</td><td>wrong output, not infrastructure</td></tr>
 <tr><td>Laptop 9B, 32k</td><td>OpenCode</td><td class="num">n/a</td><td class="num fail">1/3</td><td class="num">52</td><td>set C only</td></tr>
@@ -514,15 +526,15 @@ docker compose up -d --build</code></pre></div>
 <tr><td>Codex gpt-5.6-sol</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">85</td><td>gpt-6.1-sol is newer</td></tr>
 <tr><td>Codex gpt-5.6-terra</td><td class="num">8/10</td><td class="num">3/3</td><td class="num">152</td><td>gpt-6.1-terra is newer; partial run</td></tr>
 <tr><td>Codex gpt-5.6-luna, Qoder Kimi-K2.8-Preview</td><td class="num">not run</td><td class="num">not run</td><td class="num">-</td><td>a newer version exists; skipped on purpose</td></tr>
-<tr><td>Qwen Code on office server A, first bench (600 s cap)</td><td class="num">1/10</td><td class="num">n/a</td><td class="num">730</td><td>cap too short; re-run at 900 s</td></tr>
+<tr><td>Qwen Code on Qwen3.8-27B, first bench (600 s cap)</td><td class="num">1/10</td><td class="num">n/a</td><td class="num">730</td><td>cap too short; re-run at 900 s</td></tr>
 </table></div>
 
 <h3>The routing this produced</h3>
 <ul>
-<li><b>Hard code edits:</b> Codex terra (20 of 20 over two runs), then sol, then Claude Sonnet, then the cheap Qoder tier DeepSeek-Flash, then the free lanes: Qwen Code on office server B, then server A (Qwen Code for every Qwen model, never Codex or OpenCode on the office models). Gate first, then cost, then speed.</li>
+<li><b>Hard code edits:</b> Codex terra (20 of 20 over two runs), then sol, then Claude Sonnet, then the cheap Qoder tier DeepSeek-Flash, then the free lanes: Qwen Code on Qwen3.8-27B-NVFP, then Qwen3.8-27B (Qwen Code for every Qwen model, never Codex or OpenCode on the office models). Gate first, then cost, then speed.</li>
 <li><b>Easy edits, summaries, reviews:</b> the laptop 9B first (free), then Qoder and the office servers, then a cheap Codex or Haiku. Edits are limited to one small file with one visible test.</li>
 <li><b>Test scaffolds (c2):</b> avoid Opus and Codex terra for this task; the laptop 9B, Qoder Efficient and Codex sol passed it.</li>
-<li>Office server B (9/10 via Qwen Code) goes before server A (7/10, all inside the 15-minute cap); both are long-timeout lanes. Final ordering for hard edits: Codex terra, Codex sol, Claude Sonnet, Qoder DeepSeek-Flash, Qwen Code on server B, Qwen Code on server A.</li>
+<li>Qwen3.8-27B-NVFP (2-node cluster) (9/10 via Qwen Code) goes before Qwen3.8-27B (7/10, all inside the 15-minute cap); both are long-timeout lanes. Final ordering for hard edits: Codex terra, Codex sol, Claude Sonnet, Qoder DeepSeek-Flash, Qwen Code on Qwen3.8-27B-NVFP, Qwen Code on Qwen3.8-27B.</li>
 </ul>
 
 <h3>Laptop engine choice (set A, 7 tasks, one try)</h3>
