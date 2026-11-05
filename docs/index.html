@@ -3,88 +3,561 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Hub</title>
-<meta name="description" content="Agent Hub configures the Paseo agent daemon so any AI client can hand a task to any agent provider and get a verdict plus a diff back.">
+<title>Agent Hub: how it works</title>
+<meta name="description" content="A technical guide to Agent Hub: routing, the gate plugin, usage tracking, the laptop GPU guard, security, install and the measured benchmarks, all read from the code.">
 <style>
-:root{--bg:#f7f8fa;--fg:#1a2330;--mut:#5b6877;--card:#fff;--line:#dde2e9;--acc:#0b7a75;--code:#0f141a;--codefg:#d6deeb}
-@media (prefers-color-scheme:dark){:root{--bg:#10151b;--fg:#e4e9f0;--mut:#9aa7b6;--card:#171e26;--line:#2a3441;--acc:#4fd1c5;--code:#0a0e13;--codefg:#d6deeb}}
+:root{--bg:#f7f8fa;--fg:#17202b;--mut:#566474;--card:#fff;--line:#d9dfe7;--acc:#0b6f6a;--acc2:#0b6f6a1a;--code:#0f141a;--codefg:#d6deeb;--ok:#1b7f3b;--warn:#a15c00;--bad:#b3261e;--hl:#e6f4f2;--pl:#eef0fb;--gr:#e9f6ec;--wn:#fff3df;--fl:#fde8e6}
+@media (prefers-color-scheme:dark){:root{--bg:#10151b;--fg:#e4e9f0;--mut:#9fabba;--card:#171e26;--line:#2a3441;--acc:#4fd1c5;--acc2:#4fd1c522;--code:#0a0e13;--codefg:#d6deeb;--ok:#6fd48a;--warn:#f0b35a;--bad:#ff8a80;--hl:#143432;--pl:#1d2140;--gr:#14301c;--wn:#3a2c10;--fl:#3a1a18}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.w{max-width:980px;margin:0 auto;padding:0 16px}
-header{padding:48px 0 24px}
-h1{font-size:2.2rem;margin:0 0 8px}
-h2{margin:40px 0 12px;font-size:1.4rem}
-p.lead{font-size:1.1rem;color:var(--mut);margin:0 0 16px}
+html{scroll-behavior:smooth;scroll-padding-top:16px}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
 a{color:var(--acc)}
+code{font:.88em/1.4 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;background:var(--acc2);padding:.1em .35em;border-radius:4px;overflow-wrap:anywhere}
+.layout{max-width:1180px;margin:0 auto;padding:0 16px;display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 0}
+nav.toc .brand{font-weight:700;font-size:1.05rem;margin-bottom:10px;display:block;text-decoration:none;color:var(--fg)}
+nav.toc ol{list-style:none;margin:0;padding:0;font-size:.92rem}
+nav.toc li a{display:block;padding:5px 10px;border-left:2px solid var(--line);text-decoration:none;color:var(--mut)}
+nav.toc li a:hover{color:var(--fg)}
+nav.toc li a.on{border-left-color:var(--acc);color:var(--fg);font-weight:600;background:var(--acc2)}
+nav.toc summary{display:none}
+main{min-width:0;padding-bottom:64px}
+header.hero{padding:40px 0 12px}
+h1{font-size:2.3rem;line-height:1.2;margin:0 0 10px}
+.lead{font-size:1.12rem;color:var(--mut);margin:0 0 16px;max-width:60ch}
+h2{font-size:1.6rem;line-height:1.25;margin:56px 0 8px;padding-top:8px;border-top:1px solid var(--line)}
+h2 .n{color:var(--acc);margin-right:8px}
+h3{font-size:1.15rem;margin:30px 0 6px}
+p,li{max-width:74ch}
+ul,ol{padding-left:1.3em}
 .btn{display:inline-block;padding:8px 16px;border:1px solid var(--acc);border-radius:6px;text-decoration:none;font-weight:600;margin:0 8px 8px 0}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-.card h3{margin:0 0 6px;font-size:1rem}
-.card p{margin:0;color:var(--mut);font-size:.95rem}
-figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+.btn.p{background:var(--acc);color:var(--bg)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:16px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card b{display:block;margin-bottom:4px}
+.card span{color:var(--mut);font-size:.93rem}
+.tbl{overflow-x:auto;margin:14px 0;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{background:var(--acc2);font-weight:600;white-space:nowrap}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.pass{color:var(--ok);font-weight:600}.partial{color:var(--warn);font-weight:600}.fail{color:var(--bad);font-weight:600}
+.pre{position:relative;margin:14px 0}
+pre{background:var(--code);color:var(--codefg);padding:14px 16px;border-radius:8px;overflow-x:auto;font:.86rem/1.5 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;margin:0;tab-size:2}
+pre code{background:none;padding:0;color:inherit}
+.cp{position:absolute;top:6px;right:6px;font:600 .75rem system-ui,sans-serif;background:#ffffff1f;color:#d6deeb;border:1px solid #ffffff40;border-radius:5px;padding:3px 9px;cursor:pointer}
+.cp:hover{background:#ffffff38}
+.note{border-left:4px solid var(--acc);background:var(--card);padding:10px 14px;border-radius:0 8px 8px 0;margin:16px 0;max-width:80ch}
+.note.warn{border-left-color:var(--warn)}
+.note b:first-child{display:block;margin-bottom:2px}
+figure{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
 figure img{width:100%;height:auto;display:block;border-radius:6px}
-figcaption{font-size:.9rem;color:var(--mut);padding:8px 4px 2px}
-pre{background:var(--code);color:var(--codefg);padding:14px 16px;border-radius:8px;overflow-x:auto;font-size:.9rem}
-svg{width:100%;height:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}
-svg text{fill:var(--fg);font:13px system-ui,sans-serif}
-svg .b{fill:var(--bg);stroke:var(--acc);stroke-width:1.5}
-svg .l{stroke:var(--mut);stroke-width:1.5;fill:none}
-svg .s{fill:var(--mut);font-size:11px}
-footer{margin:48px 0 32px;color:var(--mut);font-size:.9rem}
+figcaption{font-size:.88rem;color:var(--mut);padding:8px 4px 2px}
+.fig{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;margin:16px 0}
+.fig svg{display:block;width:100%;height:auto}
+svg .b{fill:var(--card);stroke:var(--mut);stroke-width:1.2}
+svg .bh{fill:var(--hl);stroke:var(--acc);stroke-width:1.6}
+svg .bp{fill:var(--pl);stroke:#6b72d6;stroke-width:1.4}
+svg .bg{fill:var(--gr);stroke:var(--ok);stroke-width:1.4}
+svg .bw{fill:var(--wn);stroke:var(--warn);stroke-width:1.4}
+svg .bf{fill:var(--fl);stroke:var(--bad);stroke-width:1.4}
+svg .grp{fill:none;stroke:var(--acc);stroke-width:1.4;stroke-dasharray:6 4}
+svg .l{stroke:var(--mut);stroke-width:1.4;fill:none}
+svg .dash{stroke-dasharray:5 4}
+svg .life{stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 4}
+svg .note{fill:var(--wn);stroke:var(--warn)}
+svg .ah{fill:var(--mut)}
+svg .t{fill:var(--fg);font:13px system-ui,sans-serif}
+svg .tb{font-weight:700}
+svg .ts{fill:var(--mut);font-size:11.5px}
+details.faq{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:10px 0;padding:0 14px}
+details.faq summary{cursor:pointer;font-weight:600;padding:12px 0}
+details.faq[open] summary{border-bottom:1px solid var(--line);margin-bottom:8px}
+footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:.9rem}
+@media (max-width:900px){
+ .layout{display:block}
+ nav.toc{position:static;max-height:none;padding:12px 0 0}
+ nav.toc summary{display:block;cursor:pointer;font-weight:700;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+ nav.toc details[open] summary{margin-bottom:8px}
+ nav.toc .brand{display:none}
+ h1{font-size:1.8rem}
+ h2{font-size:1.4rem}
+ .fig svg{min-width:640px}
+ .tbl table:has(th:nth-child(3)){min-width:560px}
+}
+@media print{nav.toc,.cp{display:none}.layout{display:block}}
 </style>
 </head>
 <body>
-<div class="w">
-<header>
-<h1>Agent Hub</h1>
-<p class="lead">Hand a task from any AI client to any agent provider and get a verdict plus a diff back. Agent Hub configures and extends the <a href="https://github.com/getpaseo/paseo">Paseo</a> agent daemon.</p>
-<a class="btn" href="https://github.com/dxiiren/agent-hub">View on GitHub</a><a class="btn" href="#start">Quick start</a>
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+<a class="brand" href="#top">Agent Hub</a>
+<details id="tocd" open><summary>Contents</summary>
+<ol>
+<li><a href="#why">1. What it is and why</a></li>
+<li><a href="#arch">2. Architecture</a></li>
+<li><a href="#life">3. Life of a task</a></li>
+<li><a href="#routing">4. Routing</a></li>
+<li><a href="#gate">5. The gate</a></li>
+<li><a href="#usage">6. Usage and cost</a></li>
+<li><a href="#laptop">7. The laptop model</a></li>
+<li><a href="#security">8. Security model</a></li>
+<li><a href="#ops">9. Install and operations</a></li>
+<li><a href="#multi">10. Multi-user</a></li>
+<li><a href="#bench">11. Benchmarks</a></li>
+<li><a href="#decisions">12. Decisions and rejections</a></li>
+<li><a href="#faq">13. FAQ</a></li>
+</ol></details>
+</nav>
+<main id="top">
+<header class="hero">
+<h1>Agent Hub, under the hood</h1>
+<p class="lead">Agent Hub lets any AI client hand a task to any agent provider and get a verdict plus a diff back. It is configuration and plugins on top of the <a href="https://github.com/getpaseo/paseo">Paseo</a> agent daemon, with no change to Paseo's own code. This guide is read from the code and config in the repository: what runs, in what order, and why.</p>
+<a class="btn p" href="#life">Follow one task</a><a class="btn" href="https://github.com/dxiiren/agent-hub">Source on GitHub</a>
+<div class="cards">
+<div class="card"><b>Plugins, 0 core diff</b><span>A gate plugin, a usage plugin and a routing wrapper on Paseo 0.15.0 (pinned by the installer).</span></div>
+<div class="card"><b>Two doors</b><span>MCP at <code>/mcp/agents</code>, or the <code>paseo</code> CLI. Five clients tested as callers.</span></div>
+<div class="card"><b>Counts only</b><span>Tokens and credits are recorded. Prompts and session ids never leave the machine in metrics.</span></div>
+</div>
 </header>
 
-<h2>What it is</h2>
-<div class="grid">
-<div class="card"><h3>Any client, any provider</h3><p>Claude Code, Codex, Qoder, OpenCode or Qwen Code can delegate to Codex, Qoder, Claude, Qwen Code, an office SGLang server or a laptop llama.cpp server.</p></div>
-<div class="card"><h3>Gate plugin</h3><p>After each turn: secret scan, diff-size and path check, one re-prompt, then a clear PASS or FAIL verdict.</p></div>
-<div class="card"><h3>Usage plugin</h3><p>Counts only, never prompt text. Feeds an OTel, Prometheus and Grafana stack and a per-session statusline line.</p></div>
-<div class="card"><h3>Routing and pre-flight</h3><p>A routing table picks the provider chain and falls back on failure. A laptop pre-flight keeps a GPU-less machine from running a model.</p></div>
+<section id="why">
+<h2><span class="n">1</span>What it is and why</h2>
+<h3>The problem it replaces</h3>
+<p>Before this, delegating work to a cheaper model meant a Claude session sat in the middle of every task. It read the task, called a home-built router, waited, read the result and judged it. That cost lead tokens on every delegated task, and it tied delegation to one client. The router itself was home-built too: a gateway with slots, a circuit breaker, budgets and a ledger. Usage was scattered over several tools, so nobody could see tokens per model in one place.</p>
+<h3>The goals (from the spec)</h3>
+<ul>
+<li><b>Any client, any provider.</b> Claude Code, Codex, Qoder, OpenCode and Qwen Code can all be the caller. Codex, Claude, Qoder, Qwen Code, OpenCode, an office SGLang server and a laptop llama.cpp server can all be the worker. Nothing in the glue is specific to one client.</li>
+<li><b>No lead in the middle.</b> The caller dispatches straight to a provider. Zero Claude-lead tokens on the path.</li>
+<li><b>Verdict and diff back.</b> A gate checks the result on the daemon side, so it applies whoever sent the task.</li>
+<li><b>One usage view.</b> Tokens per model, provider, developer and day, plus credits where a provider bills in credits.</li>
+<li><b>Laptop model 100% on the GPU.</b> A Qwen3.5-9B model plus a 32k KV cache has to fit in 8 GB of VRAM, with no CPU or RAM offload.</li>
+<li><b>Adopt, do not invent.</b> v1 is a thin layer on Paseo: plugins, config and scripts. The Paseo trademark is not used, hence the name <code>agent-hub</code>.</li>
+<li><b>Safe by default.</b> Loopback bind, a password, full-access modes only inside a throwaway worktree, a secret scan on every result.</li>
+</ul>
+<div class="tbl"><table>
+<tr><th>Old pool</th><th>Agent Hub</th></tr>
+<tr><td>A Claude lead reads, routes and judges every task</td><td>The caller talks to the daemon directly; the gate plugin judges</td></tr>
+<tr><td>Home-built router, slots, breaker, budgets</td><td>A routing table (<code>route.mjs</code>), a slot cap per provider, next-entry fallback</td></tr>
+<tr><td>Edits happen in the caller's folder</td><td>One throwaway git worktree per task</td></tr>
+<tr><td>Usage in separate ledgers</td><td>One record per turn, OTLP to Prometheus and Grafana, a per-session file for the statusline</td></tr>
+</table></div>
+</section>
+
+<section id="arch">
+<h2><span class="n">2</span>Architecture</h2>
+<p>The daemon is the only long-lived process. Everything else is a file it reads, a plugin it loads, or a CLI it launches. Dashed arrows are optional or asynchronous paths.</p>
+<div class="fig"><svg viewBox="0 0 760 690" role="img" aria-label="Agent Hub component diagram" style="min-width:640px"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs><rect class="b" x="20" y="20" width="132" height="40" rx="8"/><text class="t tb" x="86.0" y="45.0" text-anchor="middle">Claude Code</text><rect class="b" x="164" y="20" width="132" height="40" rx="8"/><text class="t tb" x="230.0" y="45.0" text-anchor="middle">Codex</text><rect class="b" x="308" y="20" width="132" height="40" rx="8"/><text class="t tb" x="374.0" y="45.0" text-anchor="middle">Qoder</text><rect class="b" x="452" y="20" width="132" height="40" rx="8"/><text class="t tb" x="518.0" y="45.0" text-anchor="middle">OpenCode</text><rect class="b" x="596" y="20" width="132" height="40" rx="8"/><text class="t tb" x="662.0" y="45.0" text-anchor="middle">Qwen Code</text><rect class="bh" x="20" y="104" width="230" height="56" rx="8"/><text class="t tb" x="135.0" y="129.0" text-anchor="middle">MCP door</text><text class="t ts" x="135.0" y="145.0" text-anchor="middle">POST /mcp/agents, bearer secret</text><rect class="bh" x="270" y="104" width="220" height="56" rx="8"/><text class="t tb" x="380.0" y="129.0" text-anchor="middle">CLI door</text><text class="t ts" x="380.0" y="145.0" text-anchor="middle">paseo run | wait | logs --json</text><rect class="bp" x="510" y="104" width="230" height="56" rx="8"/><text class="t tb" x="625.0" y="129.0" text-anchor="middle">route.mjs (wrapper)</text><text class="t ts" x="625.0" y="145.0" text-anchor="middle">task type to provider chain</text><line class="l" x1="86" y1="60" x2="135" y2="104" marker-end="url(#ar)"/><line class="l" x1="230" y1="60" x2="135" y2="104" marker-end="url(#ar)"/><line class="l" x1="374" y1="60" x2="380" y2="104" marker-end="url(#ar)"/><line class="l" x1="518" y1="60" x2="625" y2="104" marker-end="url(#ar)"/><line class="l" x1="662" y1="60" x2="625" y2="104" marker-end="url(#ar)"/><line class="l" x1="490" y1="132" x2="510" y2="132" marker-end="url(#ar)"/><rect class="grp" x="20" y="190" width="720" height="190" rx="12"/><text class="t tb" x="34" y="212" text-anchor="start">Paseo daemon, bound to 127.0.0.1:6767 (one per developer)</text><rect class="b" x="40" y="226" width="200" height="58" rx="8"/><text class="t tb" x="140.0" y="252.0" text-anchor="middle">agent manager</text><text class="t ts" x="140.0" y="268.0" text-anchor="middle">run, send, stop, labels</text><rect class="b" x="260" y="226" width="200" height="58" rx="8"/><text class="t tb" x="360.0" y="252.0" text-anchor="middle">worktree per task</text><text class="t ts" x="360.0" y="268.0" text-anchor="middle">throwaway git worktree</text><rect class="b" x="480" y="226" width="240" height="58" rx="8"/><text class="t tb" x="600.0" y="252.0" text-anchor="middle">plugin host</text><text class="t ts" x="600.0" y="268.0" text-anchor="middle">agent.turn.before / .after</text><rect class="bp" x="40" y="300" width="330" height="62" rx="8"/><text class="t tb" x="205.0" y="328.0" text-anchor="middle">gate plugin</text><text class="t ts" x="205.0" y="344.0" text-anchor="middle">secret scan, diff size, path, command, re-prompt once</text><rect class="bp" x="390" y="300" width="330" height="62" rx="8"/><text class="t tb" x="555.0" y="328.0" text-anchor="middle">usage plugin</text><text class="t ts" x="555.0" y="344.0" text-anchor="middle">record per turn, OTLP, side channels</text><line class="l" x1="135" y1="160" x2="135" y2="190" marker-end="url(#ar)"/><line class="l" x1="380" y1="160" x2="380" y2="190" marker-end="url(#ar)"/><line class="l" x1="625" y1="160" x2="625" y2="190" marker-end="url(#ar)"/><rect class="b" x="20" y="420" width="112" height="38" rx="8"/><text class="t tb" x="76.0" y="444.0" text-anchor="middle">codex</text><line class="l dash" x1="80" y1="380" x2="80" y2="420" marker-end="url(#ar)"/><rect class="b" x="142" y="420" width="112" height="38" rx="8"/><text class="t tb" x="198.0" y="444.0" text-anchor="middle">claude-clean</text><line class="l dash" x1="202" y1="380" x2="202" y2="420" marker-end="url(#ar)"/><rect class="b" x="264" y="420" width="112" height="38" rx="8"/><text class="t tb" x="320.0" y="444.0" text-anchor="middle">qoder</text><line class="l dash" x1="324" y1="380" x2="324" y2="420" marker-end="url(#ar)"/><rect class="b" x="386" y="420" width="112" height="38" rx="8"/><text class="t tb" x="442.0" y="444.0" text-anchor="middle">qwen-code</text><line class="l dash" x1="446" y1="380" x2="446" y2="420" marker-end="url(#ar)"/><rect class="b" x="508" y="420" width="112" height="38" rx="8"/><text class="t tb" x="564.0" y="444.0" text-anchor="middle">opencode</text><line class="l dash" x1="568" y1="380" x2="568" y2="420" marker-end="url(#ar)"/><rect class="b" x="630" y="420" width="112" height="38" rx="8"/><text class="t tb" x="686.0" y="444.0" text-anchor="middle">qwen-laptop</text><line class="l dash" x1="690" y1="380" x2="690" y2="420" marker-end="url(#ar)"/><rect class="b" x="20" y="496" width="240" height="54" rx="8"/><text class="t tb" x="140.0" y="520.0" text-anchor="middle">Subscription CLIs</text><text class="t ts" x="140.0" y="536.0" text-anchor="middle">own login per developer</text><rect class="b" x="280" y="496" width="220" height="54" rx="8"/><text class="t tb" x="390.0" y="520.0" text-anchor="middle">Office SGLang</text><text class="t ts" x="390.0" y="536.0" text-anchor="middle">OpenAI-compatible, 27B</text><rect class="bg" x="520" y="496" width="220" height="54" rx="8"/><text class="t tb" x="630.0" y="520.0" text-anchor="middle">laptop-agent.mjs</text><text class="t ts" x="630.0" y="536.0" text-anchor="middle">GPU guard + llama-server 9B</text><line class="l" x1="80" y1="458" x2="140" y2="496" marker-end="url(#ar)"/><line class="l" x1="202" y1="458" x2="160" y2="496" marker-end="url(#ar)"/><line class="l" x1="324" y1="458" x2="190" y2="496" marker-end="url(#ar)"/><line class="l" x1="446" y1="458" x2="390" y2="496" marker-end="url(#ar)"/><line class="l" x1="568" y1="458" x2="390" y2="496" marker-end="url(#ar)"/><line class="l" x1="690" y1="458" x2="630" y2="496" marker-end="url(#ar)"/><text class="t tb" x="20" y="590" text-anchor="start">Usage pipeline</text><rect class="b" x="20" y="602" width="220" height="50" rx="8"/><text class="t tb" x="130.0" y="624.0" text-anchor="middle">usage.jsonl + sessions/*.sum.json</text><text class="t ts" x="130.0" y="640.0" text-anchor="middle">statusline read path</text><rect class="b" x="260" y="602" width="220" height="50" rx="8"/><text class="t tb" x="370.0" y="624.0" text-anchor="middle">OTLP to collector</text><text class="t ts" x="370.0" y="640.0" text-anchor="middle">Prometheus then Grafana</text><rect class="b" x="500" y="602" width="240" height="50" rx="8"/><text class="t tb" x="620.0" y="624.0" text-anchor="middle">host pollers :9109</text><text class="t ts" x="620.0" y="640.0" text-anchor="middle">Qoder credits, OpenCode, limit %</text><path class="l dash" d="M720 331 H753 V627 H742" marker-end="url(#ar)"/><text class="t ts" x="20" y="400" text-anchor="start">providers: ACP or CLI, run inside the task worktree</text><line class="l" x1="500" y1="627" x2="480" y2="627" marker-end="url(#ar)"/><text class="t ts" x="380" y="676" text-anchor="middle">usage plugin feeds the files and OTLP; pollers feed Prometheus</text></svg></div>
+<h3>The pieces and where they live</h3>
+<div class="tbl"><table>
+<tr><th>Piece</th><th>Where</th><th>Job</th></tr>
+<tr><td>Paseo daemon</td><td>installed by <code>npm i -g @getpaseo/cli@0.15.0</code></td><td>Runs agents, makes worktrees, hosts plugins, serves MCP and the web UI</td></tr>
+<tr><td>Config writer</td><td><code>scripts/hub.mjs</code></td><td><code>configure</code>, <code>mcp add|remove</code>, <code>plugins</code>, <code>doctor</code>, <code>unconfigure</code></td></tr>
+<tr><td>Routing wrapper</td><td><code>plugins/routing/route.mjs</code></td><td>Task type to ordered provider chain, slot check, fallback, gate request</td></tr>
+<tr><td>Gate plugin</td><td><code>plugins/gate/</code></td><td>Hook on <code>agent.turn.after</code>; checks the diff, re-prompts once</td></tr>
+<tr><td>Usage plugin</td><td><code>plugins/usage-otel/</code></td><td>Hook on <code>agent.turn.before/after</code>; records and exports usage</td></tr>
+<tr><td>Laptop launcher</td><td><code>deploy/laptop/</code></td><td>Pre-flight, lazy llama-server start, runtime GPU watchdog</td></tr>
+<tr><td>Service wrappers</td><td><code>deploy/service/</code></td><td>Task Scheduler (Windows) or systemd user unit (Linux)</td></tr>
+<tr><td>Usage stack</td><td><code>deploy/usage/</code></td><td>Collector, Prometheus, Grafana, host pollers</td></tr>
+<tr><td>Shared server</td><td><code>deploy/shared/</code></td><td>One container per developer behind a login proxy</td></tr>
+</table></div>
+<h3>The two doors</h3>
+<p><b>MCP door.</b> The daemon exposes <code>POST /mcp/agents</code>. <code>doctor</code> proves it refuses a call with no password (401) and answers <code>tools/list</code> with the bearer secret (more than 10 tools; a manual count in the lab found 40). The installer registers an <code>agent-hub</code> entry in each installed client's own config, in that client's own shape: <code>type: http</code> for Claude Code, <code>httpUrl</code> for Qwen Code, <code>type: remote</code> for OpenCode, a marked TOML block for Codex. The files are written directly so the secret never appears in a process argument list, and the original is backed up once to <code>&lt;file&gt;.agent-hub.bak</code>.</p>
+<p><b>CLI door.</b> <code>paseo run</code>, <code>paseo wait</code>, <code>paseo logs --json</code>. Any shell-capable client can use it with no MCP setup. <code>route.mjs</code> is built on this door.</p>
+<div class="note"><b>Routing is a wrapper, not a daemon hook.</b>The code says so: the daemon's <code>agent.create.before</code> hook has no labels and cannot spawn a replacement agent, so the routing table lives in <code>route.mjs</code>. A client that calls MCP <code>create_agent</code> directly picks its own provider. The gate and usage plugins still fire for that agent, because they sit on the turn hooks, not on the router.</div>
+</section>
+
+<section id="life">
+<h2><span class="n">3</span>Life of a task, step by step</h2>
+<p>This is the path of one task through <code>route.mjs</code>. Solid arrows are calls, dashed arrows are replies or follow-ups.</p>
+<div class="fig"><svg viewBox="0 0 760 700" role="img" aria-label="Sequence diagram: life of a task" style="min-width:700px"><defs><marker id="sq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs><rect class="b" x="2" y="20" width="100" height="30" rx="8"/><text class="t tb" x="52.0" y="40.0" text-anchor="middle">Caller</text><line class="life" x1="52" y1="50" x2="52" y2="690"/><rect class="b" x="118" y="20" width="100" height="30" rx="8"/><text class="t tb" x="168.0" y="40.0" text-anchor="middle">route.mjs</text><line class="life" x1="168" y1="50" x2="168" y2="690"/><rect class="b" x="246" y="20" width="100" height="30" rx="8"/><text class="t tb" x="296.0" y="40.0" text-anchor="middle">Paseo daemon</text><line class="life" x1="296" y1="50" x2="296" y2="690"/><rect class="b" x="380" y="20" width="100" height="30" rx="8"/><text class="t tb" x="430.0" y="40.0" text-anchor="middle">Provider</text><line class="life" x1="430" y1="50" x2="430" y2="690"/><rect class="bp" x="510" y="20" width="100" height="30" rx="8"/><text class="t tb" x="560.0" y="40.0" text-anchor="middle">Gate plugin</text><line class="life" x1="560" y1="50" x2="560" y2="690"/><rect class="bp" x="640" y="20" width="100" height="30" rx="8"/><text class="t tb" x="690.0" y="40.0" text-anchor="middle">Usage plugin</text><line class="life" x1="690" y1="50" x2="690" y2="690"/><line class="l" x1="52" y1="84" x2="168" y2="84" marker-end="url(#sq)"/><text class="t ts" x="58" y="78" text-anchor="start">1  type + prompt (or MCP create_agent)</text><line class="l" x1="168" y1="128" x2="296" y2="128" marker-end="url(#sq)"/><text class="t ts" x="174" y="122" text-anchor="start">2  paseo run --provider ... --new-workspace worktree</text><rect class="note" x="290" y="158" width="12" height="20" rx="3"/><text class="t ts" x="310" y="173" text-anchor="start">3  git worktree created</text><line class="l" x1="296" y1="216" x2="430" y2="216" marker-end="url(#sq)"/><text class="t ts" x="302" y="210" text-anchor="start">4  start agent (ACP / CLI), send prompt</text><line class="l dash" x1="430" y1="260" x2="296" y2="260" marker-end="url(#sq)"/><text class="t ts" x="302" y="254" text-anchor="start">5  turn completed</text><line class="l" x1="296" y1="304" x2="560" y2="304" marker-end="url(#sq)"/><text class="t ts" x="302" y="298" text-anchor="start">6  agent.turn.after</text><rect class="note" x="554" y="334" width="12" height="20" rx="3"/><text class="t ts" x="574" y="349" text-anchor="start">7  git diff, scan, size, path, command</text><line class="l dash" x1="560" y1="392" x2="430" y2="392" marker-end="url(#sq)"/><text class="t ts" x="436" y="386" text-anchor="start">8  first failure: re-prompt once</text><line class="l" x1="560" y1="436" x2="296" y2="436" marker-end="url(#sq)"/><text class="t ts" x="302" y="430" text-anchor="start">9  update_agent: gate/* labels</text><line class="l" x1="296" y1="480" x2="690" y2="480" marker-end="url(#sq)"/><text class="t ts" x="302" y="474" text-anchor="start">10  agent.turn.after</text><line class="l dash" x1="690" y1="524" x2="296" y2="524" marker-end="url(#sq)"/><text class="t ts" x="302" y="518" text-anchor="start">11  get_agent_status (usage, labels)</text><rect class="note" x="684" y="554" width="12" height="20" rx="3"/><text class="t ts" x="704" y="569" text-anchor="start">12  jsonl + sum.json + OTLP</text><line class="l" x1="52" y1="612" x2="296" y2="612" marker-end="url(#sq)"/><text class="t ts" x="58" y="606" text-anchor="start">13  get_agent_status (poll) / paseo wait</text><line class="l dash" x1="296" y1="656" x2="52" y2="656" marker-end="url(#sq)"/><text class="t ts" x="58" y="650" text-anchor="start">14  status + labels (verdict, diff stat)</text></svg></div>
+<ol>
+<li><b>Call.</b> The caller runs <code>route.mjs &lt;type&gt; "&lt;prompt&gt;" --cwd &lt;repo&gt; [--gate CMD] [--provider P/M] --new-workspace worktree</code>, or calls MCP <code>create_workspace</code> then <code>create_agent</code>.</li>
+<li><b>Routing.</b> The type picks an ordered chain from the routes file (section 4). A provider already at its slot limit is skipped. Labels <code>route/type</code>, <code>route/provider</code>, <code>dev</code>, <code>caller</code> and <code>session</code> are attached to the agent. If <code>--gate</code> was given, the command is written to the gate plugin's own store, keyed by the working directory, before the agent exists.</li>
+<li><b>Worktree.</b> <code>--new-workspace worktree</code> makes the daemon create a throwaway git worktree for the task. Full-access, bypass and yolo modes are allowed only when this flag is present; otherwise <code>route.mjs</code> drops the mode and records a note in its trace.</li>
+<li><b>Provider runs.</b> The daemon starts the provider as an ACP agent or a CLI process inside the worktree: Codex, <code>claude-clean</code>, <code>qodercli --acp</code>, Qwen Code on the office server, OpenCode, or <code>qwen-laptop</code> (which passes through the GPU guard first).</li>
+<li><b>Turn completes.</b> The daemon fires <code>agent.turn.after</code> with an outcome. Both plugins ignore any outcome that is not <code>completed</code>.</li>
+<li><b>Gate.</b> The gate plugin runs the checks (section 5). On the first failure it sends the agent a follow-up message with the reasons; the agent works another turn and the hook runs again. On the second failure the status is <code>FAIL</code>.</li>
+<li><b>Verdict.</b> The plugin mirrors the result into agent labels through the daemon's own MCP <code>update_agent</code>: <code>gate/status</code> (PASS, RETRY, FAIL or ERROR), <code>gate/reasons</code>, <code>gate/attempts</code>, <code>gate/diff</code> (for example "3 files, 41 lines").</li>
+<li><b>Usage.</b> The usage plugin reads the agent's snapshot with <code>get_agent_status</code>, builds one record, fills gaps for Qwen Code and Qoder from their own files, appends it to disk and posts counts as OTLP (section 6).</li>
+<li><b>Caller polls.</b> There is no wait tool over MCP, so an MCP caller polls <code>get_agent_status</code> and reads the labels; a CLI caller uses <code>paseo wait</code>. In the lab matrix an OpenCode caller took 3.6 minutes on an office-server worker and made 16 status polls.</li>
+<li><b>Diff.</b> The caller reads the diff from the worktree or the web UI. <code>route.mjs</code> prints a JSON trace: provider used, agent id, status, and one entry per skipped or failed provider. Exit code 0 means a provider completed, 1 means every entry failed.</li>
+</ol>
+<figure><img src="images/task-result.png" alt="Paseo web UI diff view of a finished task: a three-line fix to calc.py" width="1400" height="800" loading="lazy"><figcaption>The daemon's web UI showing the diff of a finished task. Real capture from a throwaway demo daemon.</figcaption></figure>
+</section>
+
+<section id="routing">
+<h2><span class="n">4</span>Routing</h2>
+<p>The table is a JSON file: <code>config/routes/routes.local.json</code> (git-ignored), else the committed template, or the path in <code>AGENT_HUB_ROUTES</code>. <code>route.mjs</code> and the gate plugin read the same file.</p>
+<h3>Format</h3>
+<div class="pre"><pre><code>{
+  "gateDefault": "&lt;REPO_GATE_COMMAND&gt;",
+  "gates": [
+    { "match": "&lt;REPO_PATH_REGEX&gt;", "cmd": "&lt;REPO_GATE_COMMAND&gt;",
+      "maxLines": 400, "forbid": "^([.]env|[.]github/|.*[.]pem$)" }
+  ],
+  "slots": { "codex": 2, "claude-clean": 2, "qoder": 1, "qwen-code-2": 2, "qwen-laptop": 1 },
+  "modes": { "codex": "full-access", "claude-clean": "bypassPermissions", "qoder": "yolo",
+             "qwen-code": "yolo", "qwen-laptop": "yolo" },
+  "waitTimeout": "15m",
+  "routes": {
+    "code-edit":      ["codex/gpt-6.1-terra", "codex/gpt-6.1-sol", "claude-clean/claude-sonnet-5-5", "qoder/efficient", "qwen-code-2"],
+    "code-edit-easy": ["qwen-laptop", "qwen-code-2", "qoder/efficient", "codex/gpt-6-luna"],
+    "summarise":      ["qwen-laptop", "qoder/efficient", "qwen-code-2", "codex/gpt-6-luna"],
+    "test-scaffold":  ["qwen-laptop", "qoder/efficient", "codex/gpt-6.1-sol", "claude-clean/claude-haiku-5-5"],
+    "review":         ["qwen-laptop", "qoder/efficient", "qwen-code-2", "claude-clean/claude-haiku-5-5"]
+  }
+}</code></pre></div>
+<p>Each entry is <code>provider/model</code> as the daemon config names them; <code>paseo provider models &lt;id&gt;</code> lists them. The provider part is everything before the first <code>/</code>, and that is the key into <code>slots</code> and <code>modes</code>. The defaults come from the capability bench in section 11: gate pass first, then cost, then speed.</p>
+<h3>What <code>runRoute</code> does, in order</h3>
+<ol>
+<li><b>Chain.</b> With <code>--provider P/M</code> the chain is that single entry. Otherwise it is <code>routes[type]</code>; an unknown type returns an error trace and exit 1.</li>
+<li><b>Busy check.</b> For each entry it runs <code>paseo ls</code> and counts agents whose status is <code>running</code> and whose provider equals the entry's provider part. If the count is at or above <code>slots[provider]</code> (99 when unset), the entry is skipped with a trace line like <code>busy 2/2</code>.</li>
+<li><b>Mode.</b> Order of precedence: the <code>--mode</code> flag, then <code>modes[provider]</code>, then the global <code>mode</code>. A mode matching <code>full-access</code>, <code>bypass</code> or <code>yolo</code> is only passed when <code>--new-workspace worktree</code> was given.</li>
+<li><b>Labels and gate.</b> Labels are set (only those with a value), and a caller gate is written to the plugin store.</li>
+<li><b>Run.</b> <code>paseo run --cwd ... --provider P/M --wait-timeout 15m [--new-workspace worktree] [--mode M] --label k=v ... "&lt;prompt&gt;" --json</code>. A completed status ends the loop.</li>
+<li><b>Fallback.</b> Any other status (error, timeout, refused) goes in the trace, the stray agent is stopped with <code>paseo stop</code> so it does not keep working, and the next entry is tried.</li>
+</ol>
+<div class="note warn"><b>Two behaviours to know</b>A caller override is a chain of one, so an override has no fallback. And the slot count is read from <code>paseo ls</code> at decision time, so two callers racing can both see a free slot; for the laptop model the serial queue inside llama-server is the real limiter (section 7).</div>
+<h3>Example call</h3>
+<div class="pre"><pre><code>node plugins/routing/route.mjs code-edit "Fix the failing test in calc.py" \
+  --cwd /path/to/repo --new-workspace worktree --gate "python -m pytest -q" \
+  --session $SESSION_ID --client claude-code</code></pre></div>
+<div class="pre"><pre><code>{"used":"codex/gpt-6.1-terra","agentId":"...","status":"completed",
+ "trace":[{"provider":"codex/gpt-6.1-terra","status":"completed"}]}</code></pre></div>
+<p>On Windows the npm shim <code>paseo.cmd</code> cuts multi-line arguments at the first newline, so <code>route.mjs</code> finds the shim with <code>where</code> and runs the CLI's JavaScript entry through <code>node</code> directly. <code>PASEO_BIN</code> overrides all of this.</p>
+</section>
+<section id="gate">
+<h2><span class="n">5</span>The gate in depth</h2>
+<p>The gate is a hook on <code>agent.turn.after</code>. It is a follow-up, not a veto: the daemon has already finished the turn, so the gate cannot undo it. What it can do is mark the result, and send the agent back to work once.</p>
+<div class="fig"><svg viewBox="0 0 760 316" role="img" aria-label="Gate decision flow" style="min-width:640px"><defs><marker id="gt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs><rect class="b" x="20" y="20" width="200" height="44" rx="8"/><text class="t tb" x="120.0" y="39.0" text-anchor="middle">turn completed</text><text class="t ts" x="120.0" y="55.0" text-anchor="middle">outcome.kind == completed</text><rect class="b" x="250" y="20" width="220" height="44" rx="8"/><text class="t tb" x="360.0" y="39.0" text-anchor="middle">pick the command</text><text class="t ts" x="360.0" y="55.0" text-anchor="middle">caller request &gt; gates row &gt; gateDefault</text><rect class="bp" x="500" y="20" width="240" height="44" rx="8"/><text class="t tb" x="620.0" y="39.0" text-anchor="middle">run checks in the worktree</text><text class="t ts" x="620.0" y="55.0" text-anchor="middle">hardened git, no labels read</text><line class="l" x1="220" y1="42" x2="250" y2="42" marker-end="url(#gt)"/><line class="l" x1="470" y1="42" x2="500" y2="42" marker-end="url(#gt)"/><rect class="b" x="20" y="100" width="230" height="42" rx="8"/><text class="t tb" x="135.0" y="126.0" text-anchor="middle">secret regex on added lines</text><rect class="b" x="262" y="100" width="230" height="42" rx="8"/><text class="t tb" x="377.0" y="126.0" text-anchor="middle">added + removed lines &gt; maxLines</text><rect class="b" x="504" y="100" width="230" height="42" rx="8"/><text class="t tb" x="619.0" y="126.0" text-anchor="middle">ignored files scanned for secrets</text><rect class="b" x="20" y="154" width="230" height="42" rx="8"/><text class="t tb" x="135.0" y="180.0" text-anchor="middle">.gitignore edited</text><rect class="b" x="262" y="154" width="230" height="42" rx="8"/><text class="t tb" x="377.0" y="180.0" text-anchor="middle">forbid / allow path regex</text><rect class="b" x="504" y="154" width="230" height="42" rx="8"/><text class="t tb" x="619.0" y="180.0" text-anchor="middle">gate command exit != 0 (120 s cap)</text><line class="l dash" x1="620" y1="64" x2="620" y2="92" marker-end="url(#gt)"/><rect class="bg" x="20" y="224" width="220" height="44" rx="8"/><text class="t tb" x="130.0" y="243.0" text-anchor="middle">no reasons</text><text class="t ts" x="130.0" y="259.0" text-anchor="middle">status PASS</text><rect class="bw" x="270" y="224" width="220" height="44" rx="8"/><text class="t tb" x="380.0" y="243.0" text-anchor="middle">reasons, attempt 1</text><text class="t ts" x="380.0" y="259.0" text-anchor="middle">status RETRY + re-prompt</text><rect class="bf" x="520" y="224" width="220" height="44" rx="8"/><text class="t tb" x="630.0" y="243.0" text-anchor="middle">reasons, attempt 2</text><text class="t ts" x="630.0" y="259.0" text-anchor="middle">status FAIL, back to caller</text><line class="l" x1="130" y1="208" x2="130" y2="224" marker-end="url(#gt)"/><line class="l" x1="380" y1="208" x2="380" y2="224" marker-end="url(#gt)"/><line class="l" x1="630" y1="208" x2="630" y2="224" marker-end="url(#gt)"/><text class="t ts" x="20" y="300" text-anchor="start">State (attempts, status, caller command) is written to the plugin store; labels are only a mirror.</text></svg></div>
+<h3>Why labels are not trusted</h3>
+<p>An agent runs with write access to its worktree and, through <code>injectIntoAgents</code>, can call the daemon's own MCP tools, including <code>update_agent</code>. So it can rewrite its own labels. The first version of the gate kept its state in labels. It was replaced: <code>hook.mjs</code> reads <em>no</em> agent label at all.</p>
+<div class="tbl"><table>
+<tr><th>Fact</th><th>Where it comes from</th></tr>
+<tr><td>Gate command</td><td>The caller's request in the plugin store, else the matching <code>gates</code> row, else <code>gateDefault</code> (ignored while it still starts with <code>&lt;</code>, the template placeholder)</td></tr>
+<tr><td><code>maxLines</code>, <code>forbid</code>, <code>allow</code></td><td>The <code>gates</code> row from the routes file (default 400 lines)</td></tr>
+<tr><td>Attempts and status</td><td><code>&lt;gate dir&gt;/state.json</code>, keyed by agent id</td></tr>
+<tr><td>Labels <code>gate/*</code></td><td>Written by the plugin, for display in <code>get_agent_status</code> only; never read back</td></tr>
+</table></div>
+<h3>The state store</h3>
+<p>The gate directory is <code>AGENT_HUB_GATE_DIR</code>, else <code>&lt;paseo home&gt;/gate</code>. The daemon and <code>route.mjs</code> must see the same value.</p>
+<ul>
+<li><code>requests/&lt;sha1&gt;.json</code>: written by <code>route.mjs --gate</code> before it creates the agent. The key is the SHA-1 of the working directory with backslashes turned to slashes, trailing slashes cut and lower-cased, so both sides compute the same name on Windows.</li>
+<li>The first agent that finishes a turn in that directory <em>claims</em> the request: it is read and deleted in one step, and copied into that agent's entry in <code>state.json</code>. One request therefore binds to one agent.</li>
+<li><code>state.json</code>: written to a temp file and renamed, so a crash cannot leave half a file.</li>
+</ul>
+<h3>The checks</h3>
+<p>Run in the worktree after <code>git add -N .</code> (intent-to-add, so new files appear in the diff):</p>
+<div class="tbl"><table>
+<tr><th>Check</th><th>Rule</th></tr>
+<tr><td>Secret scan</td><td>Regex over added diff lines: AWS key ids (<code>AKIA</code> plus 16), PEM private-key headers, GitHub tokens (<code>gh[pousr]_</code> plus 30), <code>sk-</code> keys (20+), and <code>api_key / token / secret / password</code> assigned to a quoted 16+ character string</td></tr>
+<tr><td>Diff size</td><td>Added plus removed lines greater than <code>maxLines</code> fails</td></tr>
+<tr><td>Hidden files</td><td>Files ignored by git are listed with <code>ls-files -o -i</code> and scanned for secrets too, because an agent can hide a file behind <code>.gitignore</code>; editing <code>.gitignore</code> is itself a failure</td></tr>
+<tr><td>Paths</td><td><code>forbid</code>: no changed file may match. <code>allow</code>: every changed file must match. <code>__pycache__</code> and <code>.pyc</code> are ignored</td></tr>
+<tr><td>Command</td><td>Run through the shell in the worktree with a 120 s timeout; a non-zero exit adds the last 300 characters of its output to the reasons</td></tr>
+</table></div>
+<h3>Attempt logic</h3>
+<p><code>decide()</code> is a three-line function. A pass is <code>PASS</code>. The first failure is <code>RETRY</code> and sends "Your work failed the gate: ... Fix it and finish." to the agent. The second failure is <code>FAIL</code> and the task goes back to the caller with the reasons. <code>"gateRetry": false</code> in the routes file turns the re-prompt off. If the gate itself throws, the labels say <code>ERROR</code>, never <code>PASS</code>: it fails closed.</p>
+<h3>Hardened git</h3>
+<p>The worktree is untrusted: a bad agent can write <code>.git/config</code>. Running <code>git diff</code> there must not execute anything it planted.</p>
+<div class="pre"><pre><code>git -c core.fsmonitor=false -c core.hooksPath=&lt;empty dir&gt; -c diff.external= -c core.pager=cat \
+    diff --no-ext-diff --no-textconv HEAD
+# env: GIT_CONFIG_NOSYSTEM=1  GIT_CONFIG_GLOBAL=&lt;empty file&gt;  GIT_TERMINAL_PROMPT=0</code></pre></div>
+<h3>The regex cap</h3>
+<p><code>forbid</code>, <code>allow</code> and <code>match</code> are regex sources from the routes file. <code>rx()</code> rejects anything that is not a string or is longer than 200 characters, so a bad config cannot compile a huge expression.</p>
+<h3>The attack it resists</h3>
+<ol>
+<li><b>Self-reported success.</b> The agent sets <code>gate/status=PASS</code> or resets <code>gate/attempts=0</code> to get unlimited retries. Nothing reads those labels, so it changes nothing.</li>
+<li><b>Swapping the command.</b> The agent writes a label naming a harmless gate command. Commands come only from the routes file or the caller's request in a directory the agent has no reason to know.</li>
+<li><b>Hiding a secret.</b> The agent writes a key into a git-ignored file. Ignored files are scanned, and the <code>.gitignore</code> edit is flagged.</li>
+<li><b>Running code through git.</b> The agent plants <code>core.fsmonitor</code>, a hooks path, an external diff or a textconv driver. The gate overrides each, and ignores user and system config.</li>
+</ol>
+<div class="note warn"><b>Limits, stated plainly</b>The secret scan is a regex over text, so it does not read binary files and will miss a secret that does not look like the patterns. The gate command is trusted configuration: it runs with a shell. The gate marks a result; it does not revert it.</div>
+</section>
+
+<section id="usage">
+<h2><span class="n">6</span>Usage and cost tracking</h2>
+<p>Every CLI reports usage differently, and two report none through the daemon. The usage plugin therefore combines what the daemon knows with each tool's own files, and everything ends in one pipeline.</p>
+<div class="fig"><svg viewBox="0 0 760 336" role="img" aria-label="Usage pipeline" style="min-width:640px"><defs><marker id="us" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs><rect class="bp" x="20" y="20" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="46.0" text-anchor="middle">Usage plugin, per turn</text><text class="t ts" x="140.0" y="62.0" text-anchor="middle">fills Qwen / Qoder from their own files</text><rect class="b" x="20" y="100" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="126.0" text-anchor="middle">Claude Code, Codex, Qwen Code</text><text class="t ts" x="140.0" y="142.0" text-anchor="middle">native OTLP metrics</text><rect class="b" x="20" y="180" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="206.0" text-anchor="middle">Host pollers on :9109</text><text class="t ts" x="140.0" y="222.0" text-anchor="middle">Qoder credits, OpenCode, limit %</text><rect class="b" x="20" y="260" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="286.0" text-anchor="middle">SGLang, llama-server</text><text class="t ts" x="140.0" y="302.0" text-anchor="middle">/metrics scrape (server-wide)</text><rect class="bp" x="330" y="20" width="190" height="58" rx="8"/><text class="t tb" x="425.0" y="46.0" text-anchor="middle">usage.jsonl + sessions/</text><text class="t ts" x="425.0" y="62.0" text-anchor="middle">&lt;id&gt;.sum.json</text><rect class="bp" x="330" y="100" width="190" height="58" rx="8"/><text class="t tb" x="425.0" y="126.0" text-anchor="middle">OTel collector</text><text class="t ts" x="425.0" y="142.0" text-anchor="middle">allow-list, strip identity</text><rect class="bp" x="330" y="190" width="190" height="58" rx="8"/><text class="t tb" x="425.0" y="216.0" text-anchor="middle">Prometheus</text><text class="t ts" x="425.0" y="232.0" text-anchor="middle">hub_tokens_total rule</text><rect class="bg" x="570" y="20" width="170" height="58" rx="8"/><text class="t tb" x="655.0" y="46.0" text-anchor="middle">statusline</text><text class="t ts" x="655.0" y="62.0" text-anchor="middle">60 ms budget</text><rect class="bg" x="570" y="190" width="170" height="58" rx="8"/><text class="t tb" x="655.0" y="216.0" text-anchor="middle">Grafana</text><text class="t ts" x="655.0" y="232.0" text-anchor="middle">provider and dev vars</text><line class="l" x1="260" y1="49" x2="330" y2="49" marker-end="url(#us)"/><line class="l" x1="260" y1="66" x2="330" y2="114" marker-end="url(#us)"/><line class="l" x1="260" y1="129" x2="330" y2="129" marker-end="url(#us)"/><line class="l" x1="425" y1="158" x2="425" y2="190" marker-end="url(#us)"/><line class="l" x1="260" y1="209" x2="330" y2="214" marker-end="url(#us)"/><line class="l" x1="260" y1="290" x2="330" y2="236" marker-end="url(#us)"/><line class="l" x1="520" y1="49" x2="570" y2="49" marker-end="url(#us)"/><line class="l" x1="520" y1="219" x2="570" y2="219" marker-end="url(#us)"/></svg></div>
+<h3>Per CLI: how the numbers arrive</h3>
+<div class="tbl"><table>
+<tr><th>Source</th><th>Path</th><th>What you get</th></tr>
+<tr><td>Codex, Claude</td><td>The daemon's <code>lastUsage</code> in <code>get_agent_status</code>, read by the usage plugin each turn</td><td>input, output, cached tokens, USD cost</td></tr>
+<tr><td>Qwen Code</td><td>The plugin reads the session's chat file under <code>~/.qwen/projects/*/chats/&lt;session&gt;.jsonl</code> and sums each request's <code>usageMetadata</code></td><td>tokens exact per task; the daemon reports 0 for this CLI</td></tr>
+<tr><td>Qoder</td><td>Per-message <code>usage.credits</code> from <code>~/.qoder/projects/*/&lt;session&gt;.jsonl</code> (fractional). Fallback: account credits before and after the turn, from a poller</td><td>credits, not tokens</td></tr>
+<tr><td>OpenCode</td><td>Its own OTel has no token attributes, so <code>opencode_export.py</code> runs <code>opencode session list</code> and <code>opencode export &lt;id&gt;</code> and sums assistant messages</td><td><code>opencode_tokens_total{provider,model,type,dev}</code></td></tr>
+<tr><td>Office SGLang, llama-server</td><td>Prometheus scrapes <code>/metrics</code></td><td>server-wide totals and running/queued requests, no per-developer split</td></tr>
+<tr><td>Claude Code, Codex, Qwen Code (direct use)</td><td>Native OTLP metrics straight to the collector</td><td><code>claude_code_token_usage_tokens_total</code>, <code>codex_turn_token_usage_sum</code>, <code>qwen_code_token_usage_total</code></td></tr>
+</table></div>
+<p>The Qwen Code and Qoder files are cumulative per session, so <code>fillRecord()</code> keeps a cursor file (<code>cursor.json</code>) and books only the delta since the agent's previous turn. A source that reports nothing is shown as "not captured" rather than as zero.</p>
+<h3>The record and where it goes</h3>
+<p>One JSON line per finished turn: timestamp, agent, session, provider, model, dev, calling client, task type, input/output/cached tokens, <code>cost_usd</code>, <code>credits</code>. A subagent's <code>parent_session</code> label wins over <code>session</code>, so subagent work rolls up to the parent. It is appended to <code>usage.jsonl</code> and <code>sessions/&lt;session&gt;.jsonl</code>, and folded into <code>sessions/&lt;session&gt;.sum.json</code>.</p>
+<p>The OTLP body carries five counters (<code>agent_hub.tokens.input|output|cached</code>, <code>agent_hub.cost.usd</code>, <code>agent_hub.credits</code>) with the attributes provider, model, dev and client. The session id is left out on purpose: it would explode metric cardinality and identify a person's work. The prompt is never read.</p>
+<h3>The statusline read path, and its 60 ms budget</h3>
+<p>A statusline refreshes constantly and cannot wait for Grafana. <code>bin/agent_hub_usage.py usage --session &lt;id&gt; --json</code> opens one file, <code>sessions/&lt;id&gt;.sum.json</code>, and prints it: no JSON parsing in the fast path, only the stdlib, and heavy imports are deferred. Measured at about 42 ms. Calling the <code>.py</code> directly is faster than the <code>.cmd</code> wrapper, which adds about 45 ms of <code>cmd.exe</code> start-up. Without <code>--json</code> it prints a single line: <code>hub  codex 12345 | qoder 4000 | 0.31cr ~$0.05</code>.</p>
+<figure><img src="images/statusline.png" alt="Claude Code statusline with a second line showing tokens per provider, credits and estimated cost for the session" width="900" height="108" loading="lazy"><figcaption>The statusline's second line, fed by the per-session file.</figcaption></figure>
+<h3>The pipeline behind Grafana</h3>
+<ul>
+<li><b>Collector.</b> A metrics pipeline only. There is no logs or traces pipeline, so prompts, subagent results and tool output are dropped on arrival. An allow-list keeps just the token and cost families. Identity attributes (<code>user.email</code>, <code>user.id</code>, account and organisation ids, <code>session.id</code>, <code>conversation.id</code>, <code>host.name</code>) are deleted. <code>dev</code> is set by the client, or filled with a default if missing. A <code>deltatocumulative</code> step turns the plugin's per-turn deltas into the cumulative counters Prometheus needs.</li>
+<li><b>Prometheus.</b> Recording rules join the sources into one series, <code>hub_tokens_total{provider,model,dev,type}</code>. Token types stay split (input, output, cacheRead) because vendors count cache differently; a single summed number across vendors would mislead.</li>
+<li><b>Host pollers.</b> <code>pollers.py</code> serves one text endpoint on <code>:9109</code>. Each poller refreshes on its own timer and the endpoint serves the cache, because <code>opencode export</code> plus the Qoder call can take more than 10 s and Prometheus times out at 10 s. <code>hub_poller_up{poller}</code> is 0 when a source failed, and the dashboard shows it as "not captured". Limit percentages (5-hour and weekly) come from a separate local usage monitor.</li>
+<li><b>Qoder poller.</b> Uses <code>qoder_agent_sdk</code> <code>get_usage_info()</code> and reuses the <code>qodercli</code> login; no secret is read. It reports credits used, remaining, used today and the reset time.</li>
+<li><b>Grafana.</b> Provisioned from <code>usage.json</code>. Panels: tokens today; Qoder credits used, remaining, per day and reset; tokens per provider, model and dev; token-type split; Claude/Codex limit % and resets; server slot use (running and queued, visible only, no target); server-wide tokens per minute; source health. Variables: <code>provider</code> and <code>dev</code>. Anonymous viewers are read-only (everyone sees everyone); analytics and update checks are off.</li>
+</ul>
+<figure><img src="images/grafana-usage.png" alt="Grafana dashboard with tokens per provider, model and dev as bars, and a per-day stacked chart by provider" width="1500" height="378" loading="lazy"><figcaption>The dashboard with demo data.</figcaption></figure>
+<div class="note warn"><b>Known limits</b>The per-day panel shows the highest counter value reached that day, not a delta, so a counter that first appears with a value gives <code>increase()</code> no baseline; exact per-task deltas come from the plugin's own files. Qoder reports credits only, never tokens. SGLang counters carry no user label.</div>
+</section>
+
+<section id="laptop">
+<h2><span class="n">7</span>The laptop model</h2>
+<p>The laptop runs Qwen3.5-9B (UD-Q4_K_XL) through llama.cpp's <code>llama-server</code>, driven by Qwen Code over ACP. One rule shapes everything: <b>the model must load 100% on the GPU</b>. A model that spills to the CPU is slow, hot, and eats RAM that the developer needs, so the hub would rather refuse than degrade.</p>
+<h3>Layer 1: install time</h3>
+<p><code>hub.mjs configure</code> asks <code>nvidia-smi</code> for total VRAM and registers the <code>qwen-laptop</code> provider only if it is at least 7500 MiB (override with <code>LAPTOP_MIN_VRAM_MIB</code>). The 9B model needs about 6.3 GB. No GPU, no provider.</p>
+<h3>Layer 2: the pre-flight (<code>laptop-agent.mjs</code>)</h3>
+<p>Every launch runs these checks in order. A failure exits with code <code>3</code> and a one-line reason on stderr, which the router sees as a failed provider and moves on to the next entry.</p>
+<ol>
+<li><b>GPU present.</b> The NVIDIA display adapter must report PnP status <code>OK</code> (after a sleep the card can sit at <code>Unknown</code> or vanish), and <code>nvidia-smi</code> must answer. Otherwise: <code>GPU missing -&gt; provider disabled</code>.</li>
+<li><b>Heavy-run lock.</b> If a file matching <code>HEAVY_LOCK_GLOB</code> (one <code>*</code> wildcard) exists, other heavy work owns the machine. Otherwise: <code>heavy-run lock present</code>.</li>
+<li><b>Free RAM.</b> At least 3 GB (<code>LAPTOP_MIN_FREE_GB</code>), checked only when the server is not already up.</li>
+</ol>
+<p><code>--check</code> runs only this stage; <code>just doctor</code> uses it and prints a <code>WARN</code> (not a failure) when the guard correctly refuses.</p>
+<figure><img src="images/doctor.png" alt="just doctor output: daemon, MCP and every provider check passing, laptop provider disabled by the GPU guard" width="900" height="339" loading="lazy"><figcaption><code>just doctor</code> on a machine where the guard refused the laptop model. That is correct behaviour, so it is a warning.</figcaption></figure>
+<h3>Layer 3: lazy start with one starter</h3>
+<p>Paseo probes each provider's status at start-up by sending only <code>initialize</code>. The launcher holds the model server back until the first <code>session/prompt</code> arrives on stdin, so a probe never loads 6 GB. When it does start, it takes an exclusive lock file (<code>wx</code>; stale after 180 s) because three parallel callers once started six servers. It also refuses if another process already holds more than 600 MiB of VRAM.</p>
+<div class="pre"><pre><code>llama-server -m $LAPTOP_MODEL_PATH --jinja -ngl 99 -c 32768 -np 1 -fa on \
+  --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off \
+  --temp 0.7 --top-p 0.8 --top-k 20 \
+  --device CUDA0 --load-mode none \
+  --host 127.0.0.1 --port 8089 --alias qwen35-9b --metrics</code></pre></div>
+<ul>
+<li><code>-ngl 99</code> puts every layer on the GPU; <code>-c 32768 -np 1</code> is one 32k slot. With <code>-np 2</code> at 2 x 16k every request failed, because Qwen Code's own prompt is about 19k tokens. Extra concurrency is a queue inside llama-server, not a refusal.</li>
+<li><code>--device CUDA0</code> selects the first CUDA device explicitly instead of letting the build pick a backend.</li>
+<li><code>--load-mode none</code> avoids memory-mapping the GGUF into system RAM. Measured: the working set fell from 7.1 GB to 1.1 GB and free RAM rose from 3.4 GB to 9.8 GB, with the model still 100% on the GPU.</li>
+<li><code>--metrics</code> exposes the Prometheus endpoint the usage stack scrapes. The server binds to loopback.</li>
+</ul>
+<h3>Layer 4: the runtime watchdog</h3>
+<p>A card can disappear while the server keeps running on the CPU. Every 15 s (<code>LAPTOP_WATCHDOG_MS</code>) <code>judge()</code> in <code>gpu-guard.mjs</code> looks at the live state:</p>
+<div class="tbl"><table>
+<tr><th>Signal</th><th>Verdict</th><th>Strikes needed</th></tr>
+<tr><td>PnP status is not OK</td><td>card lost</td><td>1</td></tr>
+<tr><td><code>nvidia-smi</code> fails</td><td>driver or card lost</td><td>1</td></tr>
+<tr><td>Server pid not among GPU compute apps and under 1000 MiB of GPU memory in use</td><td>running on the CPU</td><td>2 in a row</td></tr>
+<tr><td>Server idle for 5 minutes and burning more than 60% CPU</td><td>running on the CPU</td><td>2 in a row</td></tr>
+</table></div>
+<p>The pid check is deliberately lenient: on Windows (WDDM) the pid may not be listed, so "not listed" only counts when no model-sized GPU memory is in use either. On a verdict the watchdog stops the server by exact pid, kills the Qwen Code child and exits <code>3</code> with <code>LAPTOP-REFUSED: GPU missing -&gt; provider disabled (reason)</code>.</p>
+<h3>When the GPU is lost</h3>
+<p>The task fails with a clear reason, <code>route.mjs</code> records it in the trace and tries the next entry. The default chains put the office server and Qoder behind the laptop for exactly this. Measured on the target laptop (8 GB card): 7 of 7 easy tasks passed, 6.22 GB VRAM, about 48 tokens per second, roughly 7.3 GiB of dedicated VRAM usable by one process before spilling. A 64k context (needed by OpenCode, whose prompt alone is about 33k) uses 6.92 GB, which is why 32k is the default.</p>
+</section>
+<section id="security">
+<h2><span class="n">8</span>Security model</h2>
+<p>The daemon can start processes with write access, so the defaults are conservative and each control is a line of code, not a policy document.</p>
+<div class="tbl"><table>
+<tr><th>Control</th><th>Where</th><th>What it stops</th></tr>
+<tr><td>Loopback bind</td><td><code>configure</code> sets <code>daemon.listen</code> to <code>127.0.0.1:&lt;port&gt;</code>; the relay is disabled</td><td>Anyone on the network reaching the MCP door</td></tr>
+<tr><td>Password on the MCP door</td><td>A random 24-byte hex secret; only its bcrypt hash goes into the daemon config. <code>doctor</code> checks that a call without it gets 401</td><td>Open <code>/mcp/agents</code> (with no password it answers anyone who can reach the port)</td></tr>
+<tr><td>Owner-only files</td><td><code>agent-hub-secret</code> and every client config holding the bearer are written <code>0600</code> on POSIX and with <code>icacls</code> (current user only) on Windows</td><td>Other local users reading the secret</td></tr>
+<tr><td>No secret in process args</td><td>Client configs are written directly instead of through <code>claude mcp add</code>-style commands; <code>daemon-run.ps1</code> removes <code>PASEO_PASSWORD</code> from the daemon's environment</td><td>The secret showing in a process list, or being inherited by every agent the daemon spawns</td></tr>
+<tr><td>Plugins read the secret file</td><td><code>hubPassword()</code> reads <code>&lt;paseo home&gt;/agent-hub-secret</code></td><td>Having to export the password to agents</td></tr>
+<tr><td>Full access only in a worktree</td><td><code>unsafeMode()</code> in <code>route.mjs</code> drops <code>full-access</code>, <code>bypass</code> and <code>yolo</code> unless <code>--new-workspace worktree</code></td><td>A bypass-permissions agent editing a real checkout</td></tr>
+<tr><td>Clean Claude config</td><td>The <code>claude-clean</code> provider wraps <code>claude --strict-mcp-config --mcp-config &lt;empty&gt;</code></td><td>Worker agents inheriting the developer's MCP servers (and the memory they cost)</td></tr>
+<tr><td>Secret-path hooks</td><td><code>.claude/hooks/secret_path_guard.py</code> blocks shell commands that name <code>.env</code>, <code>*.pem</code>, <code>*.key</code>, <code>id_rsa*</code> or <code>credentials*</code> (templates and samples allowed; fails closed on unparsable input); <code>no_force_push.py</code> blocks force pushes</td><td>An agent reading secrets with <code>cat</code> or <code>curl</code> where read-deny rules do not reach</td></tr>
+<tr><td>Secret scan on results</td><td>The gate (section 5)</td><td>A key committed into a diff</td></tr>
+<tr><td>Public-repo scan</td><td><code>just scan</code> greps tracked files for internal addresses, personal paths and secret patterns</td><td>Publishing infrastructure details</td></tr>
+<tr><td>Reversible install</td><td><code>mcp remove</code> deletes only the <code>agent-hub</code> entry; <code>unconfigure</code> disables MCP when it removes the password</td><td>Leaving MCP open without auth after an uninstall</td></tr>
+</table></div>
+<h3>The telemetry stance</h3>
+<ul>
+<li>Counts only. Prompts are never read; the session id is not an OTLP attribute; identity attributes are deleted in the collector; the collector has no logs pipeline.</li>
+<li>Qwen Code: metrics only, prompt logging off. Codex: <code>log_user_prompt</code> never set. Claude Code: prompt and tool-detail logging left unset.</li>
+<li>OpenCode runs with <code>OPENCODE_DISABLE_TELEMETRY=1</code>, <code>share: disabled</code>, <code>autoupdate: false</code>, <code>OPENCODE_DISABLE_MODELS_FETCH=1</code> and external skills off. Grafana analytics and update checks are off.</li>
+<li>Our tools never call a server's admin endpoints. The office server's mutating routes (cache flush, weight updates and more) are open on its LAN by the server owner's choice; the hub only uses chat completions and reads <code>/metrics</code>.</li>
+<li>Data rule: customer data may go to any configured provider; credentials never go into a prompt, and the gate's secret scan is the daemon-side enforcement.</li>
+</ul>
+</section>
+
+<section id="ops">
+<h2><span class="n">9</span>Install and operations</h2>
+<h3>What <code>setup.ps1</code> / <code>setup.sh</code> do</h3>
+<p>Both are idempotent. <code>setup.sh --check</code> (or <code>--dry-run</code>) reports without changing anything.</p>
+<ol>
+<li>Install or check Git, Node 20+, Claude Code, uv, just, gh.</li>
+<li>Install Paseo at the pinned version (<code>0.15.0</code>) with npm. The plugins declare <code>"paseo": "&gt;=0.15.0"</code>.</li>
+<li>Note which agent CLIs exist (<code>codex</code>, <code>claude</code>, <code>qodercli</code>, <code>qwen</code>, <code>opencode</code>). A provider is registered only for a CLI that is present; each developer logs in to their own.</li>
+<li><code>hub.mjs configure</code>: write the daemon config (loopback, MCP on, <code>injectIntoAgents</code> on, bcrypt hash), the providers and wrappers. Host-specific values come from environment variables or <code>config/hub.local.json</code> (git-ignored); a provider whose input is missing is skipped with a line saying why.</li>
+<li><code>hub.mjs mcp add</code>: register <code>agent-hub</code> in each installed client (<code>-NoMcp</code> / <code>--no-mcp</code> skips).</li>
+<li>Put <code>plugins/usage-otel/bin</code> on the user PATH for the <code>agent-hub</code> CLI.</li>
+<li>Install the service (<code>-NoService</code> / <code>--no-service</code> skips).</li>
+</ol>
+<h3>Service mode</h3>
+<p><b>Windows: a per-user Task Scheduler task, no admin.</b> It has two triggers: at logon, and every minute. The task is set to <code>MultipleInstances=IgnoreNew</code>, so the every-minute trigger does nothing while the daemon runs and restarts it within a minute if it dies. The two-trigger design exists because the obvious setting, restart-on-failure, did <em>not</em> restart a killed daemon when tested. The task runs <code>daemon-run.ps1</code>, which sets the plugin environment (<code>AGENT_HUB_MCP</code>, <code>AGENT_HUB_ROUTES</code>, <code>AGENT_HUB_OTLP</code>, <code>AGENT_HUB_POLLER_DIR</code>), puts Git Bash ahead of System32's WSL <code>bash.exe</code> on PATH so hooks and gates run the right shell, and starts the daemon in its own hidden console and process group.</p>
+<p><b>Linux: a systemd user unit</b> (<code>Restart=on-failure</code>, <code>RestartSec=5</code>) plus <code>loginctl enable-linger</code> so it starts at boot without a login. On a host without a systemd user session (a container) the scripts print a skip and <code>just up</code> runs <code>paseo daemon start</code>.</p>
+<h3>Recipes</h3>
+<div class="tbl"><table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>just up</code></td><td>Enable and start the scheduled task or systemd unit, or fall back to <code>paseo daemon start</code></td></tr>
+<tr><td><code>just down</code></td><td><em>Disable</em> the task and stop it, then <code>paseo daemon stop</code>. Disabling matters: otherwise the every-minute trigger would revive the daemon</td></tr>
+<tr><td><code>just status</code></td><td>Task last-run info plus <code>paseo daemon status</code></td></tr>
+<tr><td><code>just plugins</code></td><td>Set <code>pluginsEnabled</code> in the daemon config and install the gate and usage plugins (daemon must be running)</td></tr>
+<tr><td><code>just doctor [--deep]</code></td><td>PASS/FAIL per check and per provider; <code>--deep</code> also runs one tiny task ("reply OK") on each provider and checks the agent's own line</td></tr>
+<tr><td><code>just mcp-add</code> / <code>mcp-remove</code></td><td>Register or remove the <code>agent-hub</code> client entries</td></tr>
+<tr><td><code>just uninstall</code></td><td>Service, MCP entries, providers, password hash and secret. Paseo and your agent CLIs stay</td></tr>
+<tr><td><code>just test</code> / <code>just scan</code></td><td>Config-template check plus node and python tests; public-repo scan</td></tr>
+</table></div>
+<div class="pre"><pre><code># first time
+pwsh ./setup.ps1          # Linux/macOS: sh ./setup.sh
+just up
+just plugins
+just doctor --deep</code></pre></div>
+<p>Test overrides that never touch real configs: <code>AGENT_HUB_HOME</code> (daemon home), <code>AGENT_HUB_PORT</code>, <code>AGENT_HUB_CLIENT_ROOT</code> (every client config under one folder), <code>AGENT_HUB_TASK</code> (task name).</p>
+<h3>Troubleshooting</h3>
+<div class="tbl"><table>
+<tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+<tr><td><code>doctor</code> prints <code>WARN laptop: GPU missing</code>; the laptop provider is not used</td><td>The NVIDIA device is not <code>OK</code> in PnP (after sleep or a power change) or <code>nvidia-smi</code> fails. This is the guard working</td><td>Restore the GPU (restart the device or reboot); the router uses the next provider meanwhile. A heavy-run lock or low free RAM prints the same kind of warning with its own reason</td></tr>
+<tr><td>The daemon stops with a Ctrl-C style exit when something else runs</td><td>A stray console control event aimed at another console group reached the daemon</td><td>Already handled: <code>daemon-run.ps1</code> starts the daemon in its own hidden console and process group. Start it with <code>just up</code>, not from a shared terminal</td></tr>
+<tr><td><code>just down</code> printed errors and exited 1 although the daemon stopped</td><td>PowerShell 5.1 with <code>$ErrorActionPreference=Stop</code> turns native stderr lines into terminating errors</td><td>Fixed: <code>Invoke-Paseo</code> runs the CLI with errors set to Continue and only warns on a non-zero exit code</td></tr>
+<tr><td>OpenCode hangs and never reaches the model</td><td>It downloads a model catalog from <code>models.dev</code> at start-up; on a network where that host is unreachable the fetch blocks the whole run</td><td>Set <code>OPENCODE_DISABLE_MODELS_FETCH=1</code> (the installer sets it in the provider env). With it a reply came back in 6 s</td></tr>
+<tr><td>OpenCode fails with context overflow on the laptop</td><td>Its system prompt plus tools is about 33k tokens, over the 32k default</td><td>Use a 64k context, or the Qwen Code harness. Keep global skills out with an empty <code>XDG_CONFIG_HOME</code> (done by the installer)</td></tr>
+<tr><td>Agent shows a plugin as missing or gate labels never appear</td><td><code>pluginsEnabled</code> is off, or the daemon was not restarted</td><td><code>just plugins</code>, then <code>just down</code> and <code>just up</code></td></tr>
+<tr><td>Multi-line prompts arrive cut after the first line on Windows</td><td><code>codex.cmd</code> / <code>qwen.cmd</code> npm shims split arguments</td><td>Pass the prompt on stdin, or run the CLI's JS entry with node (what <code>route.mjs</code> does)</td></tr>
+<tr><td>A client cannot reach MCP by host name</td><td>The daemon accepts only localhost and IP <code>Host</code> headers by default</td><td>Use the IP form, or add the name to <code>daemon.hostnames</code></td></tr>
+<tr><td><code>just scan</code> flags a file</td><td>An internal address, personal path or secret pattern is tracked</td><td>Replace it with a placeholder such as <code>&lt;OFFICE_QWEN_URL&gt;</code></td></tr>
+</table></div>
+</section>
+
+<section id="multi">
+<h2><span class="n">10</span>Multi-user: one container per developer</h2>
+<p>Paseo is a single-user daemon: its agents, logins and worktrees all belong to one account. Rather than patch user accounts into its core (estimated at 16 to 40 hours, plus a rebase burden on every release), the shared server runs <b>one daemon per developer in its own container</b>, behind one login proxy.</p>
+<div class="pre"><pre><code>cd deploy/shared
+node gen.mjs dev1 dev2 dev3        # writes compose.yaml, Caddyfile, .env.template, env/&lt;dev&gt;.env.template
+docker run --rm caddy:2 caddy hash-password    # one hash per developer, into .env
+docker compose up -d --build</code></pre></div>
+<ul>
+<li><b>Generated, not hand-written.</b> <code>gen.mjs</code> emits the compose file, the proxy config and the env templates from a list of names.</li>
+<li><b>Isolation.</b> Each developer has a volume at <code>/home/paseo</code> (config, worktrees, CLI logins) and a network of its own on a fixed <code>10.79.n.0/24</code> range. A container cannot reach another one. One developer's logins never touch another's.</li>
+<li><b>Login proxy.</b> Caddy routes by host name (<code>dev1.&lt;domain&gt;</code>) to that developer's container and requires basic auth with that developer's bcrypt hash; the same URL plus <code>/mcp/agents</code> is the MCP door for that developer's clients. Wrong credentials, or one developer's credentials on another's host name, get 401. The proxy is the only published port and binds to loopback unless told otherwise.</li>
+<li><b>First start.</b> The entrypoint seeds the config inside the volume once (the office server as an OpenCode provider when its URL is set, MCP injection on, the web UI on) and runs the daemon in the foreground. A throwaway git repo is created so agents have somewhere to work.</li>
+<li><b>Always on.</b> <code>restart: unless-stopped</code> brings a crashed container back with its agents and config intact. Docker must start at logon and the host must stay awake.</li>
+<li><b>Cost.</b> About 0.4 GB idle and about 1 GB with one running agent per container, measured in the spike. RAM therefore grows with developers and agents.</li>
+</ul>
+<div class="note warn"><b>The proxy is the only barrier</b>Inside a container the daemon has no password of its own. Add one as a second layer before exposing the proxy beyond a trusted network.</div>
+<p>True in-process multi-user stays out of scope for v1. Per-container is simple to reason about: the isolation boundary is Docker's, not application code.</p>
+</section>
+
+<section id="bench">
+<h2><span class="n">11</span>Benchmarks</h2>
+<h3>Method</h3>
+<p>Every run is <code>paseo run --provider P/M --new-workspace worktree --json --no-wait</code>, then <code>paseo wait</code>, then <code>paseo inspect</code> for usage, then the gate on the worktree, then <code>paseo delete</code>. A throwaway daemon, one try per cell, a 600 s cap (420 s on the laptop). Claude agents ran with a clean config directory. Every task's starting state was shown to fail its own gate before the run.</p>
+<ul>
+<li><b>Set A</b>: 7 small Python tasks (fix a test, add a function and test, rename across 3 files, summarise a log, an off-by-one, a new script, input validation). A bash gate each.</li>
+<li><b>Set B</b>: 10 harder code-edit tasks from an earlier bench; the gate is the fix commit's own tests.</li>
+<li><b>Set C</b>: 3 tasks: a log summary (required facts), a test scaffold (tests pass on the original and kill 3 mutants), a code review (names the planted bug and the fix).</li>
+</ul>
+<h3>Capability table (through the daemon)</h3>
+<div class="tbl"><table>
+<tr><th>Model / harness</th><th class="num">Set B</th><th class="num">Set C</th><th class="num">Median s</th><th>Notes</th></tr>
+<tr><td>Claude Sonnet</td><td class="num pass">10/10</td><td class="num">3/3</td><td class="num">70</td><td>costs Claude tokens</td></tr>
+<tr><td>Codex gpt-6.1-sol</td><td class="num pass">10/10</td><td class="num">3/3</td><td class="num">84</td><td></td></tr>
+<tr><td>Codex gpt-6.1-terra</td><td class="num pass">10/10</td><td class="num">2/3</td><td class="num">71</td><td>fastest of the 10/10 group</td></tr>
+<tr><td>Claude Haiku</td><td class="num pass">9/10</td><td class="num">3/3</td><td class="num">100</td><td></td></tr>
+<tr><td>Codex gpt-5.6-sol</td><td class="num pass">9/10</td><td class="num">3/3</td><td class="num">85</td><td></td></tr>
+<tr><td>Codex gpt-6-sol</td><td class="num pass">9/10</td><td class="num">2/3</td><td class="num">116</td><td>1 malformed call</td></tr>
+<tr><td>Codex gpt-6-luna</td><td class="num partial">8/10</td><td class="num">3/3</td><td class="num">80</td><td></td></tr>
+<tr><td>Qoder Efficient</td><td class="num pass">9/10</td><td class="num">3/3</td><td class="num">326</td><td>no timeouts; credits not exposed through the daemon</td></tr>
+<tr><td>Qwen3.8-27B, 2-GPU cluster host, via Qwen Code</td><td class="num partial">8/10</td><td class="num">2/3</td><td class="num">334</td><td>3 malformed calls</td></tr>
+<tr><td>Qwen3.8-27B, shared single-GPU host, via Qwen Code (900 s cap)</td><td class="num partial">7/10</td><td class="num">2/3</td><td class="num">654</td><td>2 timeouts under other users' load; not a pure capability verdict</td></tr>
+<tr><td>Qwen3.5-9B on the laptop GPU, via Qwen Code</td><td class="num fail">1/10</td><td class="num pass">3/3</td><td class="num">142</td><td>Set A: 7/7 (71 s median). Easy edits, summaries, scaffolds and reviews only</td></tr>
+<tr><td>Qwen3.8-27B via OpenCode / Codex harness on the shared host</td><td class="num fail">0 to 1/10</td><td class="num">0 to 1/3</td><td class="num">363+</td><td>mostly 600 s timeouts under load; not routed</td></tr>
+</table></div>
+<p>Tokens per task are the daemon's last-turn counters, so they under-count multi-turn runs; Qwen Code and Qoder rows have no daemon numbers (see section 6). Most cells are n=1 or 2.</p>
+<h3>The routing this produced</h3>
+<ul>
+<li><b>Hard code edits:</b> Codex terra, then sol, then Claude Sonnet, then the free tiers (Qoder, Qwen on the cluster host). Gate first, then cost, then speed.</li>
+<li><b>Easy edits, summaries, test scaffolds, reviews:</b> the laptop 9B first (free), then Qoder and the office server, then a cheap Codex or Haiku. Edits are limited to one small file with one visible test: a multi-file fix goes to the hard row.</li>
+<li>The shared-load office host stays out of the default chain.</li>
+</ul>
+<h3>Laptop engine choice (set A, 7 tasks, one try)</h3>
+<div class="tbl"><table>
+<tr><th>Setup</th><th class="num">Pass</th><th class="num">Wall, all 7</th><th class="num">VRAM</th><th class="num">Free RAM</th></tr>
+<tr><td>Ollama + Qwen Code, 32k</td><td class="num">7/7</td><td class="num">418 s</td><td class="num">6.48 GB</td><td class="num">2.2 GB</td></tr>
+<tr><td><b>llama-server + Qwen Code, 32k (chosen)</b></td><td class="num">7/7</td><td class="num">199 s</td><td class="num">6.22 GB</td><td class="num">4.9 GB</td></tr>
+<tr><td>llama-server + OpenCode, 64k</td><td class="num">7/7</td><td class="num">223 s</td><td class="num">6.92 GB</td><td class="num">3.6 GB</td></tr>
+</table></div>
+<h3>Done-bar</h3>
+<p>The acceptance spec has four conditions. Here is what the repository's measurements show for each, and what they do not.</p>
+<div class="tbl"><table>
+<tr><th>Bar</th><th>Result</th></tr>
+<tr><td><b>A1: 5x5 matrix</b>: each of 5 clients sends a task to each of 5 providers</td><td class="pass">25 of 25 cells pass. A cell passes only when the worker's file exists in the worktree with exactly the expected text; the client's own verdict line was not trusted. Clients that polled to their own cap reported "running" for agents that had finished</td></tr>
+<tr><td><b>A2: gate pass</b>: 7/7 laptop tasks and at least 9/10 on the code-edit set</td><td class="pass">7/7 on the laptop (set A). Set B at 9/10 or better: Sonnet, Codex terra and sol (10/10), Haiku, Qoder, Codex 5.6-sol and 6-sol (9/10). Not met: the 27B office model (7 to 8/10) and the laptop 9B (not meant for set B)</td></tr>
+<tr><td><b>A3: cost per delegated task</b>, zero Claude-lead tokens</td><td class="partial">The target is the old Haiku-lead figure of $0.0113 per code-edit task (total cost including cache reads; Sonnet alone was $0.2282 at 4/10). A Codex-dispatched task has no Claude lead at all, so its Claude cost is zero by construction. A full live cost run through the hub is not recorded in the repository</td></tr>
+<tr><td><b>A4: usage view</b>: every source live or "not captured"</td><td class="pass">Verified end to end on a lab stack: Claude Code, Codex and Qwen Code land in Prometheus with model labels, OpenCode (34,617 tokens in one check), Qoder credits per day, SGLang and llama-server scrapes, limit %; a marker string placed in every prompt appeared 0 times in the metrics, the Prometheus data or the Grafana database</td></tr>
+</table></div>
+</section>
+
+<section id="decisions">
+<h2><span class="n">12</span>Design decisions and rejected options</h2>
+<p>The method was to research what already exists first, then test the candidates on a real laptop with a time box. Each row below was tried or read, not guessed.</p>
+<div class="tbl"><table>
+<tr><th>Option</th><th>Verdict</th><th>Why</th></tr>
+<tr><td><b>Paseo</b></td><td class="pass">Adopted</td><td>Apache-2.0; runs natively on Windows; a worktree per task; every agent CLI we use works; a diff view; an MCP endpoint and a CLI; plugin hooks. Gaps are filled by plugins, so the core stays untouched and upgrades are a version bump plus the test matrix</td></tr>
+<tr><td>A2A protocol</td><td class="fail">Rejected</td><td>No coding CLI speaks it natively; only community adapters exist. Direct CLI-to-CLI calls (<code>codex exec</code>, <code>qwen -p</code>, <code>opencode run</code>) give a better harness today. <code>codex mcp-server</code> has been removed</td></tr>
+<tr><td>LiteLLM / Bifrost gateway</td><td class="fail">Rejected</td><td>A limit proxy was ruled out. Subscription CLIs cannot be routed through a proxy without breaking their login. Two LiteLLM PyPI releases (1.82.7 and 1.82.8) shipped credential-stealing malware, so any use would need a vetted pin. Per-user usage comes from the usage plugin instead</td></tr>
+<tr><td>AionUi</td><td class="fail">Rejected</td><td>No worktree per task (all three agents edited the one folder in place); one shared admin account; recent builds need a vendor sign-in and have no binaries on GitHub; Qwen Code through its UI ignored our endpoint</td></tr>
+<tr><td>Forge</td><td class="fail">Rejected on Windows</td><td>Its gate never ran there: <code>bash</code> resolves to the WSL launcher, so the review gate looped. A fix needs a source patch or WSL/Docker. 29 stars; a fork estimated at 60 to 120 hours. Agents, worktrees, diff and REST/MCP did work</td></tr>
+<tr><td>ghost-infer, MoE expert offload</td><td class="fail">Rejected</td><td>The laptop model must load 100% on the GPU. Offloading experts to RAM breaks that rule by design. The project was also 8 days old with one author and only the author's own benchmarks</td></tr>
+<tr><td>Bigger MoE models on the 8 GB card</td><td class="fail">Excluded</td><td>Qwen3-Coder-30B, Qwen3.6-35B-A3B, 24B and 27B dense models do not fit without offload. A 9B dense model is the largest class that fits. A 30B coder passed 1 of 7 on the laptop at 13 times the wall time</td></tr>
+<tr><td>EXL3 / ExLlamaV3</td><td class="fail">Rejected</td><td>No Windows support, no 8 GB or Qwen3.5 evidence</td></tr>
+<tr><td>Vibe Kanban</td><td class="fail">Rejected</td><td>Sunsetting</td></tr>
+<tr><td>Ollama as the laptop engine</td><td class="partial">Replaced</td><td>Same pass rate, but 2.1 times slower on the same tasks and it dipped free RAM to 2.2 GB</td></tr>
+<tr><td>Routing as a daemon hook</td><td class="partial">Wrapper instead</td><td><code>agent.create.before</code> has no labels and cannot spawn a replacement agent. Move it into a plugin if the hook grows</td></tr>
+<tr><td>Multi-user inside the daemon</td><td class="partial">Deferred</td><td>Container per developer (section 10)</td></tr>
+</table></div>
+</section>
+
+<section id="faq">
+<h2><span class="n">13</span>FAQ</h2>
+<details class="faq"><summary>Does the gate stop a bad change from landing?</summary><p>No. It is a follow-up on a finished turn. It marks the result PASS, RETRY, FAIL or ERROR and re-prompts once. The caller decides what to do with a FAIL, and the work is in a throwaway worktree, not your checkout.</p></details>
+<details class="faq"><summary>Can I use the hub without route.mjs?</summary><p>Yes. Call MCP <code>create_agent</code> or <code>paseo run</code> yourself and name the provider. You lose the slot check, the fallback and the caller-supplied gate command; you keep the repo default gate and the usage records.</p></details>
+<details class="faq"><summary>Where do real hosts and keys live?</summary><p>Outside the repo. Templates hold <code>&lt;PLACEHOLDER&gt;</code> values only, <code>just test</code> fails on a literal URL in a template, and real values go in git-ignored <code>*.local.*</code> files or environment variables. Agent CLI logins stay in each developer's own home.</p></details>
+<details class="faq"><summary>What does the daemon pin protect against?</summary><p>Paseo ships every few days and the plugin hook API is new. The installer pins the daemon version, each plugin declares a minimum version, and the plan is a rebase job per release that runs the 5x5 matrix before a human approves.</p></details>
+<details class="faq"><summary>Why does a Claude agent use a "clean" config?</summary><p>A default Claude agent inherits the developer's MCP servers and plugins and costs about 2 GB for its process tree. <code>claude-clean</code> starts it with an empty MCP set.</p></details>
+<details class="faq"><summary>Why only one laptop slot?</summary><p>One 9B model with a 32k context uses about 6.2 GB of an 8 GB card. Two slots either failed (2 x 16k cannot hold the client's own 19k prompt) or pushed VRAM past the safe limit and slowed both tasks. Extra callers queue in llama-server instead.</p></details>
+<details class="faq"><summary>Why are tokens for Qwen Code and Qoder missing from the daemon?</summary><p>The daemon reports 0 for those CLIs. The usage plugin reads each tool's own session file and books the difference since the previous turn. Qoder bills in credits, so its rows show credits.</p></details>
+<details class="faq"><summary>Can a developer see another developer's usage?</summary><p>On the shared dashboard, yes by design: counts per provider, model and developer, never prompts. Each developer's daemon, logins and worktrees are separate.</p></details>
+<details class="faq"><summary>How do I undo the install?</summary><p><code>just uninstall</code> removes the service, the <code>agent-hub</code> MCP entries (the originals are in <code>.agent-hub.bak</code> files), the providers, the password hash and the secret. Paseo and your agent CLIs stay.</p></details>
+<details class="faq"><summary>How do I add a new task type?</summary><p>Add a key under <code>routes</code> in <code>routes.local.json</code> with an ordered list of <code>provider/model</code> entries, and optionally a <code>slots</code> or <code>modes</code> row for a new provider. No code change.</p></details>
+</section>
+
+<footer>
+<p>Agent Hub is Apache-2.0. It configures and extends <a href="https://github.com/getpaseo/paseo">Paseo</a>, which is credited in the repository's NOTICE. Everything above was read from <a href="https://github.com/dxiiren/agent-hub">the repository</a>: <code>plugins/</code>, <code>scripts/hub.mjs</code>, <code>deploy/</code>, <code>config/</code>, <code>specs/001-agent-hub/</code> and <code>.docs/</code>. Benchmark figures come from the lab runs summarised in the spec work; models were run once or twice per cell, so treat small differences as noise.</p>
+</footer>
+</main>
 </div>
-
-<h2>Architecture</h2>
-<svg viewBox="0 0 900 330" role="img" aria-label="Clients call the Paseo daemon through routing; the gate and usage plugins run after each turn; providers do the work; usage flows to OTel, Prometheus and Grafana">
-<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7b8896"/></marker></defs>
-<rect class="b" x="20" y="30" width="170" height="130" rx="8"/><text x="105" y="55" text-anchor="middle" font-weight="700">AI clients</text>
-<text class="s" x="105" y="82" text-anchor="middle">Claude Code</text><text class="s" x="105" y="100" text-anchor="middle">Codex · Qoder</text><text class="s" x="105" y="118" text-anchor="middle">OpenCode · Qwen Code</text>
-<rect class="b" x="260" y="30" width="170" height="130" rx="8"/><text x="345" y="55" text-anchor="middle" font-weight="700">Routing + MCP</text>
-<text class="s" x="345" y="82" text-anchor="middle">provider chain</text><text class="s" x="345" y="100" text-anchor="middle">busy skip, fallback</text><text class="s" x="345" y="118" text-anchor="middle">labels: dev, session</text>
-<rect class="b" x="500" y="30" width="170" height="130" rx="8"/><text x="585" y="55" text-anchor="middle" font-weight="700">Paseo daemon</text>
-<text class="s" x="585" y="82" text-anchor="middle">runs the agent task</text><text class="s" x="585" y="100" text-anchor="middle">gate plugin: verdict</text><text class="s" x="585" y="118" text-anchor="middle">usage plugin: counts</text>
-<rect class="b" x="730" y="30" width="150" height="130" rx="8"/><text x="805" y="55" text-anchor="middle" font-weight="700">Providers</text>
-<text class="s" x="805" y="82" text-anchor="middle">Codex · Qoder · Claude</text><text class="s" x="805" y="100" text-anchor="middle">Qwen Code · OpenCode</text><text class="s" x="805" y="118" text-anchor="middle">SGLang · llama.cpp</text>
-<path class="l" d="M190 95H258" marker-end="url(#a)"/><path class="l" d="M430 95H498" marker-end="url(#a)"/><path class="l" d="M670 95H728" marker-end="url(#a)"/>
-<rect class="b" x="500" y="230" width="110" height="60" rx="8"/><text x="555" y="266" text-anchor="middle">OTel collector</text>
-<rect class="b" x="650" y="230" width="100" height="60" rx="8"/><text x="700" y="266" text-anchor="middle">Prometheus</text>
-<rect class="b" x="790" y="230" width="90" height="60" rx="8"/><text x="835" y="266" text-anchor="middle">Grafana</text>
-<path class="l" d="M585 160V228" marker-end="url(#a)"/><path class="l" d="M610 260H648" marker-end="url(#a)"/><path class="l" d="M750 260H788" marker-end="url(#a)"/>
-<text class="s" x="20" y="260">Result back to the caller:</text><text class="s" x="20" y="278">verdict (PASS / FAIL) + diff</text>
-</svg>
-
-<h2>Screenshots</h2>
-<div class="grid">
-<figure><img src="images/agents.png" alt="Paseo web UI with two demo workspaces and the agent reply for one finished task" loading="lazy"><figcaption>Paseo web UI: agents and a task</figcaption></figure>
-<figure><img src="images/task-result.png" alt="Paseo web UI diff view of a finished task" loading="lazy"><figcaption>Paseo web UI: diff of a finished task</figcaption></figure>
-<figure><img src="images/doctor.png" alt="just doctor output with every check passing" loading="lazy"><figcaption><code>just doctor</code></figcaption></figure>
-<figure><img src="images/statusline.png" alt="Statusline with a hub line showing tokens per provider" loading="lazy"><figcaption>Statusline <code>hub</code> line</figcaption></figure>
-</div>
-<p></p>
-<figure><img src="images/grafana-usage.png" alt="Grafana usage dashboard: tokens per provider, model and dev, and a per-day chart" loading="lazy"><figcaption>Grafana usage dashboard (demo data)</figcaption></figure>
-
-<h2 id="start">Quick start</h2>
-<pre>pwsh ./setup.ps1         # one-time machine setup (Linux/macOS: sh ./setup.sh)
-just deps &amp;&amp; just test  # install dependencies, validate every config template
-just doctor              # check the daemon, MCP and each provider</pre>
-<p>Usage stack: copy <code>deploy/usage/.env.template</code> to <code>.env</code>, then run <code>docker compose up -d</code> in <code>deploy/usage</code>. Full docs are in the <a href="https://github.com/dxiiren/agent-hub#readme">README</a>.</p>
-
-<footer>Agent Hub · <a href="https://github.com/dxiiren/agent-hub">github.com/dxiiren/agent-hub</a></footer>
-</div>
+<script>
+(function(){
+ // copy buttons
+ document.querySelectorAll('.pre').forEach(function(w){
+  var b=document.createElement('button');b.className='cp';b.type='button';b.textContent='Copy';
+  b.addEventListener('click',function(){
+   var t=w.querySelector('pre').innerText;
+   var done=function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1500)};
+   if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){fallback(t);done()})}else{fallback(t);done()}
+  });
+  w.appendChild(b);
+ });
+ function fallback(t){var a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(e){}document.body.removeChild(a)}
+ // TOC: collapsed on phones, highlight current section
+ var d=document.getElementById('tocd');
+ if(window.matchMedia('(max-width:900px)').matches){d.removeAttribute('open')}
+ var links=[].slice.call(document.querySelectorAll('nav.toc a[href^="#"]')).filter(function(a){return a.hash!=='#top'});
+ var map={};links.forEach(function(a){map[a.hash.slice(1)]=a});
+ if('IntersectionObserver' in window){
+  var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){links.forEach(function(a){a.classList.remove('on')});var a=map[e.target.id];if(a)a.classList.add('on')}})},{rootMargin:'0px 0px -70% 0px'});
+  document.querySelectorAll('main section[id]').forEach(function(s){io.observe(s)});
+ }
+ links.forEach(function(a){a.addEventListener('click',function(){if(window.matchMedia('(max-width:900px)').matches){d.removeAttribute('open')}})});
+})();
+</script>
 </body>
 </html>
