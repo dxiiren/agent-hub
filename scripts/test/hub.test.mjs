@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, delimiter, resolve, dirname, basename } from 'node:path';
@@ -66,4 +67,18 @@ test('configure: qoder uses the pinned qodercli-1.1.81 binary when it sits next 
   const r = s.hub('configure'); assert.equal(r.status, 0, r.stdout + r.stderr);
   const q = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents.providers.qoder.command;
   assert.ok(basename(q[0]).startsWith('qodercli-1.1.81'), q[0]);
+});
+
+test('configure: daemon password hash uses the cheap bcrypt cost, and re-hashes a costly one (every MCP call pays this cost)', () => {
+  const s = sandbox();
+  assert.equal(s.hub('configure').status, 0);
+  const f = join(s.t, 'home/config.json');
+  const h1 = JSON.parse(readFileSync(f, 'utf8')).daemon.auth.password;
+  assert.match(h1, /^\$2[aby]\$04\$/);
+  const secret = readFileSync(join(s.t, 'home/agent-hub-secret'), 'utf8').trim();
+  const bc = createRequire(import.meta.url)(execFileSync('npm', ['root', '-g'], { shell: process.platform === 'win32' }).toString().trim() + '/@getpaseo/cli/node_modules/bcryptjs');
+  assert.ok(bc.compareSync(secret, h1));
+  const c = JSON.parse(readFileSync(f, 'utf8')); c.daemon.auth.password = bc.hashSync(secret, 10); writeFileSync(f, JSON.stringify(c));
+  assert.equal(s.hub('configure').status, 0);
+  assert.match(JSON.parse(readFileSync(f, 'utf8')).daemon.auth.password, /^\$2[aby]\$04\$/);
 });

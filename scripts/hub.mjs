@@ -68,6 +68,8 @@ function protect(file) {
 }
 const writeSecretFile = (file, text) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text, { mode: 0o600 }); protect(file); };
 
+const BCRYPT_COST = 4;
+
 function secret() {
   if (existsSync(SECRET_FILE)) { protect(SECRET_FILE); return readFileSync(SECRET_FILE, 'utf8').trim(); }
   mkdirSync(HOME, { recursive: true });
@@ -167,7 +169,10 @@ function configure() {
   c.daemon.mcp = { ...c.daemon.mcp, enabled: true, injectIntoAgents: true };
   c.daemon.relay = { ...c.daemon.relay, enabled: false };
   const h = c.daemon.auth?.password;
-  if (!h || !bc.compareSync(s, h)) c.daemon.auth = { ...c.daemon.auth, password: bc.hashSync(s, 10) };
+  // Paseo bcrypt-checks the bearer on EVERY /mcp/agents request, in the daemon's one event loop. Cost 10 is ~110 ms of CPU per call
+  // (cost 12, the `paseo daemon set-password` default, ~470 ms), so 6 clients polling get_agent_status saturate it and the hub looks
+  // unreachable. The secret is 192 random bits, so the minimum cost (4, ~5 ms) loses nothing. Re-hash an existing higher-cost hash too.
+  if (!h || !bc.compareSync(s, h) || Number(h.slice(4, 6)) > BCRYPT_COST) c.daemon.auth = { ...c.daemon.auth, password: bc.hashSync(s, BCRYPT_COST) };
   const { p, notes } = providers();
   c.agents ??= {}; c.agents.providers = { ...c.agents.providers, ...p };
   writeJson(f, c);
