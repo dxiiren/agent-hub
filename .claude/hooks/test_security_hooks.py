@@ -93,7 +93,7 @@ finally:
 # round 3: guard obfuscation + wildcard-only globs (judged by expansion in the cwd)
 d = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(d)
 try:
-    for c in [r"cat .e\nv", "cat .e${x}nv", "cat${IFS}.env", "cat $'.env'", "cat .{env}", "cat .e$@nv", "cat '.e'nv"]:
+    for c in [r"cat .e\nv", "cat .e${x}nv", "cat${IFS}.env", "cat${IFS}.e${x}nv", "cat$IFS.e$@nv", "cat $'.env'", "cat .{env}", "cat .e$@nv", "cat '.e'nv"]:
         check("r3 obfuscated block " + c, g.blocked(c) is not None)
     check("r3 glob allowed when no secret", g.blocked("cat .*") is None and g.blocked("cat *") is None)
     open(".env", "w").write("x")

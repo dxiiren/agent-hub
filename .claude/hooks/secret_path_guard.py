@@ -39,7 +39,8 @@ def _variants(command: str) -> list[str]:
     raw = re.sub(r"['\"]", "", command)          # backslashes kept as escapes, quotes joined
     no_esc = raw.replace("\\", "")               # drop escape backslashes
     no_var = re.sub(r"\$\{[^}]*\}|\$[@*#?!0-9]|\$[A-Za-z_]\w*", "", no_esc)  # `.e${x}nv`, `.e$@nv`
-    var_sp = re.sub(r"\$\{[^}]*\}|\$[A-Za-z_]\w*", " ", no_esc)  # `cat${IFS}.env`
+    ifs = re.sub(r"\$\{IFS\}|\$IFS(?![A-Za-z0-9_])", " ", no_esc)
+    var_sp = re.sub(r"\$\{[^}]*\}|\$[@*#?!0-9]|\$[A-Za-z_]\w*", "", ifs)  # `cat${IFS}.e${x}nv`
     no_brace = re.sub(r"[{}$]", "", no_var)       # `.{env}`, `$'.env'`
     return [cmd, re.sub(r"['\"]", "", cmd), no_esc, no_var, var_sp, no_brace]
 
