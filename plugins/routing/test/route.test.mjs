@@ -89,7 +89,7 @@ test("aliases resolve; a family without the newest version falls back to the new
   assert.throws(() => resolveEntry("codex/latest-terra", null, env));
 });
 test("claude and qoder aliases use the provider model list", () => {
-  const p = (a) => (a[2] === "claude-clean" ? [{ id: "claude-sonnet-5" }, { id: "claude-sonnet-5-5" }, { id: "claude-haiku-5-5" }] : [{ id: "efficient" }, { id: "fast" }]);
+  const p = (a) => (a[2] === "claude-clean" ? [{ id: "claude-sonnet-5" }, { id: "claude-sonnet-5-5" }, { id: "claude-haiku-5-5" }] : [{ id: "efficient", model: "Efficient" }, { id: "fast", model: "Fast" }]);
   assert.equal(resolveEntry("claude/latest-sonnet", p, env), "claude-clean/claude-sonnet-5-5");
   assert.equal(parseClaude(["claude-opus-5-5"])[0].ver.join("."), "5.5");
   assert.equal(resolveEntry("qoder/efficient@latest", p, env), "qoder/efficient");
@@ -97,4 +97,44 @@ test("claude and qoder aliases use the provider model list", () => {
 test("doctor warns on a pinned older model", () => {
   writeFileSync(cacheFile, JSON.stringify({ models: slugs.map((slug) => ({ slug })) }));
   assert.equal(stalePins({ routes: { a: ["codex/latest-sol", "codex/gpt-6-sol"] } }, env).length, 1);
+});
+
+import { parseQoder } from "../resolve.mjs";
+import { servedModel, firstId, modelsUrl, syncOpencode } from "../office.mjs";
+import { compareVersions, parseVersion, verdict } from "../../../scripts/tools.mjs";
+import { readFileSync } from "node:fs";
+
+const qlist = [["fast", "Fast (default)"], ["efficient", "Efficient"], ["q38", "Qwen3.8-Max"], ["q39", "Qwen3.9-Max"], ["qf", "Qwen3.8-Flash"], ["k", "Kimi-K3.1-Pro"], ["d4", "DeepSeek-V4-Pro"], ["d5", "DeepSeek-V5-Pro"], ["df", "DeepSeek-Flash"]].map(([id, model]) => ({ id, model }));
+test("qoder: newest version within a family; unversioned tiers are checked for presence", () => {
+  const p = () => qlist;
+  assert.equal(parseQoder([{ id: "x", model: "Qwen3.9-Max" }])[0].family, "qwen-max");
+  assert.equal(resolveEntry("qoder/latest-qwen-max", p, env), "qoder/q39");
+  assert.equal(resolveEntry("qoder/latest-deepseek-pro", p, env), "qoder/d5");
+  assert.equal(resolveEntry("qoder/q38@latest", p, env), "qoder/q39"); // an old pin moves up
+  assert.equal(resolveEntry("qoder/Qwen3.8-Flash@latest", p, env), "qoder/qf"); // no newer Flash
+  assert.equal(resolveEntry("qoder/efficient@latest", p, env), "qoder/efficient");
+  assert.throws(() => resolveEntry("qoder/latest-nope-max", p, env));
+});
+test("office model id comes from a fake /v1/models, cached, with fallback", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "of-")), "c.json");
+  let n = 0; const f = async () => ({ json: async () => { n++; return { data: [{ id: n === 1 ? "Qwen3.8-27B" : "Qwen3.9-27B" }] }; } });
+  assert.equal(modelsUrl("http://h:1/v1/"), "http://h:1/v1/models");
+  assert.equal(firstId({ data: [{ id: "m" }] }), "m");
+  assert.equal(await servedModel("http://h:1/v1", { f, file, now: 0 }), "Qwen3.8-27B");
+  assert.equal(await servedModel("http://h:1/v1", { f, file, now: 1000 }), "Qwen3.8-27B"); // cached
+  assert.equal(await servedModel("http://h:1/v1", { f, file, now: 11 * 60_000 }), "Qwen3.9-27B"); // expired -> upgraded model picked up
+  const down = async () => { throw new Error("refused"); };
+  assert.equal(await servedModel("http://h:1/v1", { f: down, file, now: 99 * 60_000 }), "Qwen3.9-27B"); // stale cache beats failure
+  assert.equal(await servedModel("http://other/v1", { f: down, file, now: 0, fallback: "fb" }), "fb");
+});
+test("opencode config follows the served model", () => {
+  const f = join(mkdtempSync(join(tmpdir(), "oc-")), "opencode.json");
+  writeFileSync(f, JSON.stringify({ model: "office/A", provider: { office: { models: { A: { name: "A", tool_call: true } } } } }));
+  assert.equal(syncOpencode(f, "B"), true); assert.equal(syncOpencode(f, "B"), false);
+  const j = JSON.parse(readFileSync(f, "utf8")); assert.equal(j.model, "office/B"); assert.deepEqual(Object.keys(j.provider.office.models), ["B"]); assert.equal(j.provider.office.models.B.tool_call, true);
+});
+test("doctor version comparison", () => {
+  assert.equal(parseVersion("codex-cli 0.166.0"), "0.166.0"); assert.equal(parseVersion("2.1.318 (Claude Code)"), "2.1.318");
+  assert.equal(compareVersions("1.18.29", "1.19.5"), -1); assert.equal(compareVersions("0.10.0", "0.9.9"), 1); assert.equal(compareVersions("1.2", "1.2.0"), 0); assert.equal(compareVersions("", "1"), null);
+  assert.deepEqual(["1.0", "2.0", "2.0", ""].map((v, i) => verdict(i === 3 ? "" : v, "2.0")), ["UPDATE", "current", "current", "NOT INSTALLED"]);
 });

@@ -1,8 +1,10 @@
-// "Latest" aliases (owner 05-11): codex/latest[-sol|-terra|-luna], claude/latest-opus|sonnet|haiku, qoder/<tier>@latest.
+// "Latest" aliases (owner 05-11): codex/latest[-sol|-terra|-luna], claude/latest-opus|sonnet|haiku, qoder/<tier>@latest and qoder/latest-<family>
+// (newest version within a family, e.g. latest-qwen-max), opencode/office@latest (served office model).
 // Resolved at dispatch to the highest version the provider lists; results are cached 10 min in a temp file (route.mjs is a new process per task).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { servedModelSync, syncOpencode } from "./office.mjs";
 
 export const EXCLUDED = ["astra"]; // owner-excluded Codex family, never resolved to
 const TTL = 10 * 60_000;
@@ -23,13 +25,19 @@ export function parseClaude(ids) {
   return ids.map((id) => { const m = /^claude-([a-z]+)-(\d+(?:-\d+)*)$/.exec(id); return m ? { id, ver: m[2].split("-").map(Number), family: m[1] } : null; }).filter(Boolean);
 }
 
+/** Qoder models are {id, model}: the id is opaque (qmodel_38max), the display name carries the version ("Qwen3.8-Max", "Kimi-K3.1-Pro", "DeepSeek-V4-Pro").
+ * family = brand-suffix (qwen-max), ver = the number. Unversioned names (Fast, DeepSeek-Flash) have no family. */
+export function parseQoder(items) {
+  return items.map(({ id, model }) => { const m = /^([A-Za-z]+?)-?[A-Z]?(\d+(?:\.\d+)*)(?:-(.+))?$/.exec(String(model ?? "").replace(/ \(default\)$/, "")); return m ? { id, ver: m[2].split(".").map(Number), family: `${m[1]}-${m[3] ?? "base"}`.toLowerCase() } : null; }).filter(Boolean);
+}
+
 export function codexSlugs(env = process.env) {
   const f = env.CODEX_MODELS_CACHE ?? join(homedir(), ".codex", "models_cache.json");
   if (!existsSync(f)) return [];
   return (JSON.parse(readFileSync(f, "utf8")).models ?? []).filter((m) => (m.visibility ?? "list") === "list").map((m) => m.slug);
 }
 
-const ALIAS = /^(codex|claude|qoder)\/(?:latest(?:-([a-z]+))?|([\w.-]+)@latest)$/;
+const ALIAS = /^(codex|claude|qoder|opencode)\/(?:latest(?:-([a-z][a-z-]*))?|([\w.-]+)@latest)$/;
 export const isAlias = (p) => ALIAS.test(p);
 
 /** Resolve one entry; non-aliases pass through. Throws when nothing matches. `paseo(args)` lists claude/qoder models. */
@@ -49,10 +57,23 @@ export function resolveEntry(entry, paseo, env = process.env) {
     if (!pick) throw new Error(`no claude model for ${entry}`);
     return `claude-clean/${pick.id}`;
   }
-  const have = ids("qoder"); // qoder tiers (fast, efficient, ...) carry no version; "@latest" confirms the tier still exists
-  if (!have.includes(tier)) throw new Error(`qoder tier ${tier} not listed`);
-  return `qoder/${tier}`;
+  if (kind === "opencode") { // the office server's own model id; opencode.json is pointed at it before the task starts
+    const base = env.OFFICE_QWEN_URL ?? localCfg().officeQwenUrl;
+    if (tier !== "office" || !base) throw new Error("opencode/office@latest needs OFFICE_QWEN_URL");
+    const id = servedModelSync(base); const f = env.OPENCODE_CONFIG ?? join(homedir(), ".paseo", "hub", "opencode.json");
+    syncOpencode(f, id); return `opencode/office/${id}`;
+  }
+  const lst = paseo(["provider", "models", "qoder"]); const have = Array.isArray(lst) ? lst : []; const all = parseQoder(have);
+  if (fam) { const pick = newest(all, fam); if (!pick) throw new Error(`no qoder model family ${fam}`); return `qoder/${pick.id}`; }
+  const t = tier.toLowerCase(); const is = (x) => x.id.toLowerCase() === t || String(x.model).toLowerCase() === t; // tier = id or display name
+  const own = all.find(is); // a versioned tier moves to the newest version of its family
+  if (own) return `qoder/${newest(all, own.family).id}`;
+  const hit = have.find(is); // unversioned tiers (fast, efficient): confirm it is still listed
+  if (!hit) throw new Error(`qoder tier ${tier} not listed`);
+  return `qoder/${hit.id}`;
 }
+
+const localCfg = () => { try { return JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "config", "hub.local.json"), "utf8")); } catch { return {}; } };
 
 /** Cached resolve: a failure (provider list down) falls back to the last cached value, else the alias fails the entry. */
 export function resolveCached(entry, paseo, env = process.env, now = Date.now()) {

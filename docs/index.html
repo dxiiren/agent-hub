@@ -210,6 +210,8 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
   }
 }</code></pre></div>
 <p>Each entry is <code>provider/model</code> as the daemon config names them; <code>paseo provider models &lt;id&gt;</code> lists them. The provider part is everything before the first <code>/</code>, and that is the key into <code>slots</code> and <code>modes</code>. The defaults come from the capability bench in section 11: gate pass first, then cost, then speed.</p>
+<h3>Latest aliases</h3>
+<p>An entry may be an alias resolved at dispatch and cached 10 minutes: <code>codex/latest[-family]</code> (Codex model cache, version sort, <code>astra</code> never chosen), <code>claude/latest-opus|sonnet|haiku</code> (the provider model list, not a table), <code>qoder/latest-&lt;family&gt;</code> and <code>qoder/&lt;tier&gt;@latest</code> (newest version in a family, read from the display names such as <code>Qwen3.8-Max</code>), and <code>opencode/office@latest</code>. The office Qwen launcher (<code>deploy/office/office-agent.mjs</code>) and the laptop agent read the served model id from <code>GET /v1/models</code> when they start an agent. <code>node plugins/routing/route.mjs --resolve &lt;alias&gt;</code> prints the mapping; <code>just doctor</code> shows the served ids, the laptop GGUF date and each CLI installed vs latest; <code>just update</code> updates the CLIs that are behind (Paseo only with <code>--paseo</code>).</p>
 <h3>What <code>runRoute</code> does, in order</h3>
 <ol>
 <li><b>Chain.</b> With <code>--provider P/M</code> the chain is that single entry. Otherwise it is <code>routes[type]</code>; an unknown type returns an error trace and exit 1.</li>

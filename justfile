@@ -52,6 +52,10 @@ status:
 plugins:
     node scripts/hub.mjs plugins
 
+# Update every CLI that is behind (Codex, Claude Code, Qwen Code, OpenCode, qodercli). Paseo stays pinned unless `just update --paseo`. Manual only, never in the background.
+update *flags:
+    node scripts/hub.mjs update {{flags}}
+
 # PASS/FAIL per check and per provider; add --deep to run one tiny task on each provider.
 doctor *flags:
     node scripts/hub.mjs doctor {{flags}}

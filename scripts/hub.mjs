@@ -3,6 +3,7 @@
 //   node scripts/hub.mjs mcp add|remove     register / remove the agent-hub MCP server in each installed client
 //   node scripts/hub.mjs unconfigure       remove the providers, wrappers and secret that configure wrote
 //   node scripts/hub.mjs doctor [--deep]    PASS/FAIL per check and per provider; --deep runs one tiny task each
+//   node scripts/hub.mjs update [--paseo]   update every CLI that is behind (Paseo only with --paseo; decision 38)
 // Env: AGENT_HUB_HOME (Paseo home, default ~/.paseo), AGENT_HUB_PORT (default 6767),
 //      AGENT_HUB_CLIENT_ROOT (redirect every client config into a temp dir, for tests),
 //      OFFICE_QWEN_URL / OFFICE_QWEN_MODEL / LLAMA_SERVER_BIN / LAPTOP_MODEL_PATH / HEAVY_LOCK_GLOB
@@ -10,9 +11,9 @@
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 process.noDeprecation = true; // shell:true is needed only to run .cmd shims; our args are fixed
@@ -116,13 +117,11 @@ function providers() {
 
   const qwen = which('qwen');
   if (qwen && cfg.officeUrl) {
-    p['qwen-code'] = { extends: 'acp', label: 'Qwen Code (office)', command: [qwen, '--acp', '--auth-type', 'openai',
-      '--openai-base-url', cfg.officeUrl, '--openai-api-key', 'none', '--model', cfg.officeModel] };
+    p['qwen-code'] = { extends: 'acp', label: 'Qwen Code (office)', command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl, cfg.officeModel] }; // model id re-read from /v1/models at spawn; officeModel is the fallback
   } else notes.push('qwen-code needs the qwen CLI and OFFICE_QWEN_URL');
 
   if (qwen && cfg.officeUrl2 && cfg.officeModel2) { // optional second office host (a free tier when the first is loaded)
-    p['qwen-code-2'] = { extends: 'acp', label: 'Qwen Code (office 2)', command: [qwen, '--acp', '--auth-type', 'openai',
-      '--openai-base-url', cfg.officeUrl2, '--openai-api-key', 'none', '--model', cfg.officeModel2] };
+    p['qwen-code-2'] = { extends: 'acp', label: 'Qwen Code (office 2)', command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl2, cfg.officeModel2] };
   }
 
   const oc = which('opencode');
@@ -219,6 +218,26 @@ async function http(path, headers = {}, body) {
     return { status: r.status, text: await r.text() };
   } catch (e) { return { status: 0, text: String(e) }; }
 }
+// Served model ids (GET only), the laptop GGUF, and the CLI versions: installed vs latest published. Read only.
+async function latestChecks(conf) {
+  const { modelsUrl, firstId } = await import('../plugins/routing/office.mjs');
+  const provs = conf.agents?.providers ?? {};
+  for (const id of ['qwen-code', 'qwen-code-2']) {
+    const c = provs[id]?.command; if (!c) continue;
+    const i = c.findIndex((x) => /office-agent[.]mjs$/.test(x)); const base = i >= 0 ? c[i + 2] : c[c.indexOf('--openai-base-url') + 1];
+    try { const served = firstId(await (await fetch(modelsUrl(base), { signal: AbortSignal.timeout(5000) })).json()); console.log(`INFO  ${id} serves ${served || '(none)'} (resolved at dispatch)`); }
+    catch (e) { console.log(`WARN  ${id}: ${modelsUrl(base).replace(/\/\/[^/]+/, '//<host>')} unreachable (${e.message})`); }
+  }
+  const lp = provs['qwen-laptop']?.env;
+  if (lp?.LAPTOP_MODEL_PATH) {
+    try { const st = statSync(lp.LAPTOP_MODEL_PATH); console.log(`INFO  laptop GGUF ${basename(lp.LAPTOP_MODEL_PATH)}, ${(st.size / 2 ** 30).toFixed(1)} GiB, dated ${st.mtime.toISOString().slice(0, 10)}`); }
+    catch { console.log(`WARN  laptop GGUF not found: ${lp.LAPTOP_MODEL_PATH}`); }
+    console.log('NOTE  check for a newer Qwen small model that fits 100% GPU (no auto-download; decision 35)');
+  }
+  const { inventory, table } = await import('./tools.mjs');
+  const rows = inventory(); console.log('\nTOOL         INSTALLED  LATEST     STATE\n' + table(rows));
+  for (const r of rows) if (r.verdict === 'UPDATE') console.log(`NOTE  ${r.name} is behind: \`just update${r.pinned ? ' --paseo' : ''}\``);
+}
 async function doctor(deep) {
   const s = secret();
   const h = await http('/api/health');
@@ -252,6 +271,7 @@ async function doctor(deep) {
     for (const a of aliases) { try { console.log(`INFO  ${a} -> ${resolveCached(a, (x) => lp(x))}`); } catch (e) { console.log(`WARN  ${a} does not resolve: ${e.message}`); } }
     for (const w of stalePins(rt)) console.log(`WARN  ${w}`);
   } catch (e) { console.log(`WARN  alias check failed: ${e.message}`); }
+  await latestChecks(readJson(join(HOME, 'config.json'), {}));
   if (deep) {
     const dir = mkdtempSync(join(tmpdir(), 'hub-doctor-'));
     const model = { codex: 'codex/gpt-6.1-terra', 'claude-clean': 'claude-clean/claude-haiku-5-5' };
@@ -296,5 +316,6 @@ if (cmd === 'configure') configure();
 else if (cmd === 'mcp' && (arg === 'add' || arg === 'remove')) mcp(arg);
 else if (cmd === 'unconfigure') unconfigure();
 else if (cmd === 'plugins') plugins();
+else if (cmd === 'update') (await import('./tools.mjs')).update(process.argv.includes('--paseo'));
 else if (cmd === 'doctor') await doctor(process.argv.includes('--deep'));
-else { console.log('usage: hub.mjs configure | unconfigure | plugins | mcp add|remove | doctor [--deep]'); process.exit(2); }
+else { console.log('usage: hub.mjs configure | unconfigure | plugins | mcp add|remove | doctor [--deep] | update [--paseo]'); process.exit(2); }

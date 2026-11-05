@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { freemem, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { firstId } from '../../plugins/routing/office.mjs';
 import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid } from './gpu-guard.mjs';
 
 const E = process.env;
@@ -58,8 +59,11 @@ async function ensureServer() {
   } finally { if (owner && existsSync(LOCK)) unlinkSync(LOCK); }
 }
 
+// Use the model id llama-server actually serves (GET /v1/models) when it is already up; else the alias it will be started with.
+let model = ALIAS;
+if (await up()) { try { const id = firstId(await (await fetch(`http://127.0.0.1:${PORT}/v1/models`, { signal: AbortSignal.timeout(2000) })).json()); if (id) model = id; } catch { /* keep the alias */ } }
 const win = /\.(cmd|bat)$/i.test(E.QWEN_BIN);
-const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', ALIAS, ...process.argv.slice(2)], { stdio: ['pipe', 'inherit', 'inherit'], shell: win });
+const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'inherit', 'inherit'], shell: win });
 child.on('exit', (c) => process.exit(c ?? 1));
 // Runtime watchdog: the card can vanish after sleep while llama-server keeps running on the CPU.
 let lastPrompt = 0; let strikes = 0; let lastCpu = null;
