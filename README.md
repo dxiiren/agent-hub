@@ -153,6 +153,18 @@ Full-access, bypass and yolo modes are used only with `--new-workspace worktree`
 
 ## Troubleshooting
 
+### The Paseo UI: use the local page, not app.paseo.sh
+
+`just configure` turns on the daemon's own web UI: open `http://127.0.0.1:6767/` (Direct connection, host `127.0.0.1`, port `6767`, the password in `<paseo home>/agent-hub-secret`). The hosted app at app.paseo.sh cannot connect: the daemon answers its WebSocket with `403 Origin not allowed` unless `daemon.cors.allowedOrigins` lists it, and Chrome blocks the call to localhost behind a local-network prompt. Restart the daemon after the first `configure`.
+
+### `route.mjs ... --new-workspace worktree` seems to hang
+
+Creating the agent can take 2+ minutes while the daemon is saturated or a provider stalls at its ACP `initialize` (upstream Paseo: `agent.create.request` shows in `daemon.log` as `ws_slow_request`; not specific to worktrees). `route.mjs` now creates with `--no-wait`, bounds the create call (`AGENT_HUB_CREATE_TIMEOUT_S`, default 240) and returns `CREATE_TIMEOUT: ...` instead of hanging 15 minutes; it does not retry that error. A late agent may still appear in `paseo ls`; stop it by id.
+
+### A task ends as `permission`
+
+Edit task types (`code-edit`, `test-scaffold`) outside `--new-workspace worktree` run without their full-access mode and wait for a permission nobody answers; the trace now says so. Use `--new-workspace worktree`, or a read-only type (`summarise`, `review`), which keeps its configured mode anywhere (override the list with `readOnlyTypes` in the routes file).
+
 ### `just: command not found` right after setup
 
 PATH updates only land in a new shell. Close and reopen PowerShell, or run `powershell -ExecutionPolicy Bypass -File install-just.ps1` first.

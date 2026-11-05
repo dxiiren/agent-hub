@@ -4,7 +4,7 @@
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
 // Usage: route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -33,18 +33,24 @@ export function loadRoutes(env = process.env) {
   throw new Error("no routing file (set AGENT_HUB_ROUTES)");
 }
 
+/** Seconds a `paseo run --no-wait` (agent + worktree creation) may take before the CLI gives up. Upstream Paseo has no bound: under load or a provider ACP init stall the daemon holds the request for 120 s+ (agent.create.request, "Timed out refreshing <provider> ... pending: initialize") and the caller used to hang for the 15 min spawn cap. */
+export const createTimeoutS = (env = process.env) => Number(env.AGENT_HUB_CREATE_TIMEOUT_S) || 240;
+export const toSeconds = (d) => { const m = /^(\d+)\s*(s|m|h)?$/.exec(String(d ?? "").trim()); return m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 }[m[2] ?? "s"]) : 900; };
+
 /** Default CLI runner: parsed JSON of `paseo <args> --json`, or {error}. */
-export function cliPaseo(home, env = process.env) {
+export function cliPaseo(home, env = process.env, spawn = spawnSync) {
   const [cmd, ...pre] = paseoCommand(env);
   return (args) => {
-    const r = spawnSync(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), "--json"], { encoding: "utf8", timeout: 15 * 60_000, env });
+    const create = args[0] === "run" && args.includes("--no-wait");
+    const r = spawn(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), "--json"], { encoding: "utf8", timeout: create ? createTimeoutS(env) * 1000 : 15 * 60_000, env });
+    if (create && r.error?.code === "ETIMEDOUT") return { error: `CREATE_TIMEOUT: the daemon did not create the agent within ${createTimeoutS(env)} s (saturated daemon or a provider that stalls at initialize; upstream Paseo, not a worktree bug). Check \`paseo ls\` and the laptop load, then retry; raise AGENT_HUB_CREATE_TIMEOUT_S if the host is just slow.` };
     const out = r.stdout || "";
     try { return JSON.parse(out.slice(out.search(/[[{]/))); } catch { const t = String(r.stderr || out || "no output"); return { error: `exit=${r.status} ` + (t.length > 500 ? t.slice(0, 300) + " ... " + t.slice(-200) : t) }; }
   };
 }
 
 /** Paseo's 1.5 s status probe fails while the daemon is busy (upstream #6584): retry the call, nothing was started. */
-export const transient = (j) => !j?.agentId && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
+export const transient = (j) => !j?.agentId && !/^CREATE_TIMEOUT/.test(String(j?.error ?? "")) && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
 export function withRetry(paseo, { tries = 6, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), jitter = () => Math.random() * 1000 } = {}) {
   return (args) => {
     let j = paseo(args);
@@ -56,6 +62,8 @@ export function withRetry(paseo, { tries = 6, sleep = (ms) => Atomics.wait(new I
 const base = (p) => p.split("/")[0];
 // Owner decision 21: full-access/bypass/yolo only inside a throwaway worktree; elsewhere drop --mode (provider default).
 export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
+// Read-only task types write nothing, so they get the provider's configured mode anywhere (otherwise the agent waits for a permission nobody answers and the run ends as `permission`).
+export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["summarise", "review"]).includes(type);
 
 /** Run the gate in the agent's cwd with the same options the plugin hook uses (gateOpts). First failure: re-prompt once (decision 47) and block until the agent is idle; freeze it; second gate. */
 export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
@@ -97,13 +105,20 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const mode = o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
     if (o.worktree) args.push("--new-workspace", "worktree");
-    if (mode && (o.worktree || !unsafeMode(mode))) args.push("--mode", mode);
+    if (mode && (o.worktree || !unsafeMode(mode) || readOnlyType(o.type, routes))) args.push("--mode", mode);
     else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: needs --new-workspace worktree` });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels
     if (o.gate) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate);
-    const j = paseo([...args, o.prompt]);
-    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : {}) });
+    // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
+    if (o.worktree) args.push("--no-wait");
+    let j = paseo([...args, o.prompt]);
+    if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
+      const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
+      j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
+    }
+    const hint = j.status === "permission" ? { error: `agent waited for a permission: type ${o.type} edits files, but outside --new-workspace worktree its full-access mode is dropped (decision 21). Run it in a git repo with --new-workspace worktree, or use a read-only type (summarise, review).` } : {};
+    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed") {
       if (!o.gate) return { used: prov, agentId: j.agentId, status: "completed", trace };
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
@@ -116,6 +131,17 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   return { used: null, trace };
 }
 
+/** Statusline source (cheap, no daemon call): one marker file per running route in <home>/usage/active, plus total.json (sum of routes.slots). Best effort; a killed route leaves a file the reader ignores after 30 min. */
+export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage", "active")) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "total.json"), JSON.stringify({ total: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0) }));
+    const f = join(dir, `t-${process.pid}-${Date.now()}.json`);
+    writeFileSync(f, JSON.stringify({ provider: provider ?? null }));
+    return () => { try { rmSync(f, { force: true }); } catch { /* best effort */ } };
+  } catch { return () => {}; }
+}
+
 function main(argv) {
   if (argv[0] === "--resolve") { // print what an alias maps to right now
     try { console.log(resolveCached(argv[1], cliPaseo(process.env.PASEO_HOME))); return 0; } catch (e) { console.error(e.message); return 1; }
@@ -125,11 +151,14 @@ function main(argv) {
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]'); return 2; }
   const home = opt("--home") ?? process.env.PASEO_HOME;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
-  const res = runRoute({
+  const routes = loadRoutes();
+  const unmark = markActive(routes, opt("--provider"));
+  let res;
+  try { res = runRoute({
     type, prompt, provider: opt("--provider"), cwd: opt("--cwd") ?? process.cwd(), gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT,
-  }, withRetry(cliPaseo(home)), loadRoutes());
+  }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
   return res.used && res.status === "completed" ? 0 : 1;
 }

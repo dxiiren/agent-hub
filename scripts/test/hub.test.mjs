@@ -82,3 +82,9 @@ test('configure: daemon password hash uses the cheap bcrypt cost, and re-hashes 
   assert.equal(s.hub('configure').status, 0);
   assert.match(JSON.parse(readFileSync(f, 'utf8')).daemon.auth.password, /^\$2[aby]\$04\$/);
 });
+
+test('configure: enables the daemon web UI (same-origin local page at the daemon port)', () => {
+  const s = sandbox();
+  assert.equal(s.hub('configure').status, 0);
+  assert.equal(JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).features.webUi.enabled, true);
+});

@@ -168,6 +168,8 @@ function configure() {
   c.daemon.listen = `127.0.0.1:${PORT}`;
   c.daemon.mcp = { ...c.daemon.mcp, enabled: true, injectIntoAgents: true };
   c.daemon.relay = { ...c.daemon.relay, enabled: false };
+  // Local web UI on the daemon port (same origin, so no CORS or browser local-network prompt; the hosted app.paseo.sh is refused: 403 Origin not allowed).
+  c.features = { ...c.features, webUi: { ...c.features?.webUi, enabled: true } };
   const h = c.daemon.auth?.password;
   // Paseo bcrypt-checks the bearer on EVERY /mcp/agents request, in the daemon's one event loop. Cost 10 is ~110 ms of CPU per call
   // (cost 12, the `paseo daemon set-password` default, ~470 ms), so 6 clients polling get_agent_status saturate it and the hub looks

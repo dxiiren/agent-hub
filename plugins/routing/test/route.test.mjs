@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runRoute, withRetry, transient } from "../route.mjs";
+import { runRoute, withRetry, transient, readOnlyType, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
 const routes = { slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
@@ -218,4 +218,49 @@ test("paseo CLI crash text (top-level await, no agentId, non-zero exit) is trans
   assert.equal(transient({ error: "Cannot connect to daemon: Connection timed out" }), true);
   const w = []; n = 0; withRetry(() => { n++; return { error: "DAEMON_UNREACHABLE" }; }, { sleep: (ms) => w.push(ms), jitter: () => 7 })(["ls"]);
   assert.equal(n, 6); assert.deepEqual(w, [2007, 4007, 8007, 16007, 32007]);
+});
+
+test("read-only types (summarise, review) keep the unsafe mode outside a worktree; edit types still drop it", () => {
+  const r2 = { ...routes, modes: { codex: "full-access", qwen: "yolo" }, routes: { summarise: ["codex/a"], "code-edit": ["codex/a"] } };
+  const mk = () => fake({ run: () => ({ status: "completed", agentId: "A" }) });
+  let p = mk(); runRoute({ ...o, type: "summarise" }, p, r2);
+  let run = p.calls.find((c) => c[0] === "run");
+  assert.equal(run[run.indexOf("--mode") + 1], "full-access");
+  p = mk(); runRoute({ ...o, type: "code-edit" }, p, r2);
+  assert.ok(!p.calls.find((c) => c[0] === "run").includes("--mode"));
+  assert.ok(readOnlyType("review") && !readOnlyType("test-scaffold") && readOnlyType("x", { readOnlyTypes: ["x"] }));
+});
+test("an edit type that ends in `permission` outside a worktree returns a clear error, not a bare status", () => {
+  const p = fake({ run: () => ({ status: "permission", agentId: "P" }) });
+  const r = runRoute({ ...o, provider: "codex/a" }, p, { ...routes, modes: { codex: "full-access" } });
+  assert.equal(r.used, null);
+  assert.match(r.trace.at(-1).error, /--new-workspace worktree/);
+  assert.match(r.trace.at(-1).error, /code-edit|edit/);
+});
+
+test("worktree run: create is --no-wait, then a separate bounded wait; idle becomes completed", () => {
+  const calls = [];
+  const p = (args) => { calls.push(args); return args[0] === "ls" ? [] : args[0] === "run" ? { agentId: "W1", status: "created" } : args[0] === "wait" ? { status: "idle" } : {}; };
+  const r = runRoute({ ...o, worktree: true, waitTimeout: "2m" }, p, routes);
+  assert.equal(r.status, "completed"); assert.equal(r.agentId, "W1");
+  assert.ok(calls.find((c) => c[0] === "run").includes("--no-wait"));
+  assert.deepEqual(calls.find((c) => c[0] === "wait"), ["wait", "W1", "--timeout", "120"]);
+});
+test("a create call that hangs is cut off with a clear CREATE_TIMEOUT error that is not retried", () => {
+  let n = 0;
+  const spawn = (_c, args, opts) => { n++; assert.equal(opts.timeout, 5000); return { error: { code: "ETIMEDOUT" }, status: null, stdout: "", stderr: "" }; };
+  const p = cliPaseo(undefined, { PASEO_BIN: "paseo", AGENT_HUB_CREATE_TIMEOUT_S: "5" }, spawn);
+  const j = withRetry(p, { sleep: () => {} })(["run", "--new-workspace", "worktree", "--no-wait", "x"]);
+  assert.match(j.error, /^CREATE_TIMEOUT: .*AGENT_HUB_CREATE_TIMEOUT_S/); assert.equal(n, 1); assert.equal(transient(j), false);
+  assert.equal(toSeconds("15m"), 900); assert.equal(toSeconds("30s"), 30);
+});
+
+test("markActive writes a per-route marker and the slot total; the returned fn removes the marker", async () => {
+  const { mkdtempSync, readdirSync, readFileSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "act-"));
+  const done = markActive({ slots: { a: 2, b: 3 } }, "a/x", d);
+  assert.equal(JSON.parse(readFileSync(join(d, "total.json"), "utf8")).total, 5);
+  assert.equal(readdirSync(d).filter((n) => n.startsWith("t-")).length, 1);
+  done();
+  assert.equal(readdirSync(d).filter((n) => n.startsWith("t-")).length, 0);
 });
