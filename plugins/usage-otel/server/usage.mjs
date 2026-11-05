@@ -71,8 +71,8 @@ export function otlpBody(rec) {
   ] }] }] };
 }
 
-export async function emitOtlp(endpoint, rec) {
+export async function emitOtlp(endpoint, rec, timeoutMs = 5_000) {
   if (!endpoint) return false;
-  const r = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(otlpBody(rec)) });
+  const r = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(otlpBody(rec)), signal: AbortSignal.timeout(timeoutMs) });
   return r.ok;
 }

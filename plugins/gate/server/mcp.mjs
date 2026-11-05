@@ -5,7 +5,7 @@ import os from "node:os";
 export async function mcpCall(url, token, tool, args) {
   const h = { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: "Bearer " + token };
   const post = async (body, sid) => {
-    const r = await fetch(url, { method: "POST", headers: sid ? { ...h, "mcp-session-id": sid } : h, body: JSON.stringify(body) });
+    const r = await fetch(url, { method: "POST", headers: sid ? { ...h, "mcp-session-id": sid } : h, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) }); // a stuck daemon must not hold the plugin hook past Paseo's 30 s RPC limit
     const t = await r.text();
     const line = t.split("\n").find((l) => l.startsWith("data:"));
     const raw = (line ? line.slice(5) : t).trim();

@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { appendUsage, otlpBody, toRecord, usageDir } from "../server/usage.mjs";
+import { createServer } from "node:http";
+import { appendUsage, emitOtlp, otlpBody, toRecord, usageDir } from "../server/usage.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const snap = (labels, usage = {}) => ({ id: "a1", provider: "codex", model: "m", labels, lastUsage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 3, totalCostUsd: 0.5, ...usage } });
@@ -73,4 +74,13 @@ test("Qoder session transcript credits are fractional, deduped by message id, bo
   const cur = join(home, "cursor.json"); const base = { agent: "q", in: 0, out: 0, cached: 0, credits: 0 };
   assert.equal(fillRecord({ ...base }, cur, { sessionCredits: 0.375 }).credits, 0.375);
   assert.equal(fillRecord({ ...base }, cur, { sessionCredits: 0.5 }).credits, 0.125);
+});
+
+test("OTLP export gives up on a hung collector instead of holding the hook", async () => {
+  const srv = createServer(() => { /* never answers */ });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const t = Date.now();
+  await assert.rejects(emitOtlp("http://127.0.0.1:" + srv.address().port, toRecord(snap({})), 300));
+  srv.closeAllConnections(); srv.close();
+  assert.ok(Date.now() - t < 3000);
 });
