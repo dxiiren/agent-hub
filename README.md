@@ -16,9 +16,9 @@ Agent Hub configures and extends the [Paseo](https://github.com/getpaseo/paseo) 
 > **New developer? Start with [`.docs/tldr.md`](.docs/tldr.md)** — every doc summarised on one
 > page. The full guide lives in [`.docs/`](.docs/README.md).
 
-| Agents running through the hub | A finished task: verdict and diff |
+| Paseo web UI: agents and a task | Paseo web UI: diff of a finished task |
 | --- | --- |
-| ![Terminal listing of seven agents across qoder, codex, claude and qwen-code providers, three running and four idle](docs/images/agents.png) | ![A finished task result with a PASS gate verdict, a passing test line and a six-line unified diff](docs/images/task-result.png) |
+| ![Paseo web UI: workspace list with two finished demo tasks and the agent reply for the fix-percent task](docs/images/agents.png) | ![Paseo web UI diff view of a finished task: a three-line fix to calc.py](docs/images/task-result.png) |
 
 | `just doctor` | Statusline `hub` line |
 | --- | --- |
@@ -28,7 +28,7 @@ Agent Hub configures and extends the [Paseo](https://github.com/getpaseo/paseo) 
 | --- |
 | ![Grafana dashboard with tokens per provider, model and dev as bars, and a per-day stacked chart by provider](docs/images/grafana-usage.png) |
 
-Screenshots use demo data; site: https://dxiiren.github.io/agent-hub/.
+Screenshots are real captures from a throwaway demo daemon and demo data (the Paseo web UI, `just doctor`, the statusline script and Grafana); site: https://dxiiren.github.io/agent-hub/.
 
 ## Prerequisites
 
