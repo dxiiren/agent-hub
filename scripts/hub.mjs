@@ -258,9 +258,10 @@ async function latestChecks(conf) {
 }
 async function doctor(deep) {
   const s = secret();
-  const h = await http('/api/health');
-  row(h.status === 200, 'daemon health', `127.0.0.1:${PORT}`);
-  if (h.status !== 200) { console.log('daemon is down: run `just up`'); process.exit(1); }
+  const { probeDaemon, daemonAdvice } = await import('./daemon-health.mjs');
+  const dp = await probeDaemon(PORT);
+  row(dp.state === 'up', 'daemon health', `127.0.0.1:${PORT}`);
+  if (dp.state !== 'up') { console.log(daemonAdvice(dp)); process.exit(1); }
   if (process.env.AGENT_HUB_NO_USAGE_STACK !== '1') { // the one usage UI: collector + Prometheus + Grafana must answer
     const { probeStack } = await import('./usage-stack.mjs');
     for (const x of await probeStack()) row(x.ok, `usage stack ${x.name}`, x.ok ? x.url : `${x.url} not answering: run \`just up\` (starts Docker and the stack)`);
