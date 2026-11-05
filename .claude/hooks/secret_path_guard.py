@@ -350,8 +350,10 @@ def main() -> int:
         return _child()
     try:
         payload = json.load(sys.stdin)
-        command = str(payload["tool_input"]["command"])
-    except (ValueError, KeyError, TypeError):
+        command = payload["tool_input"]["command"]
+        if not isinstance(command, str):
+            raise TypeError("command is not a string")
+    except (ValueError, KeyError, TypeError, RecursionError):
         print("secret_path_guard: unreadable hook input, blocked (fail closed)", file=sys.stderr)
         return 2
     if len(command.encode("utf-8", "replace")) > _MAX_BYTES:
@@ -375,5 +377,14 @@ def main() -> int:
     return _block("analysis crashed, blocked (fail closed)")
 
 
+def _safe_main() -> int:
+    """Any crash (null or deeply nested JSON, RecursionError, a bug) blocks with a clear message instead of a traceback and exit 1."""
+    try:
+        return main()
+    except Exception as e:  # noqa: BLE001 - fail closed on everything, RecursionError included
+        print("SECRET PATH GUARD: hook crashed (" + type(e).__name__ + "), blocked (fail closed)", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_safe_main())

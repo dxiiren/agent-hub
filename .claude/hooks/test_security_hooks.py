@@ -297,4 +297,15 @@ check("r5 child keeps CR bytes (no newline translation)", subprocess.run(CH, inp
 rc, dt, _ = run_hook("git status")
 check("r5 normal still passes under 400 ms (%.0f ms)" % (dt * 1000), rc == 0 and dt < 0.4)
 
+
+# round 4: crash inputs exit 2 with a message (no traceback) on all three hooks; scanner knows unquoted and JSON secrets
+for hook in ["no_force_push.py", "secret_path_guard.py", "secret_scanner.py"]:
+    for inp in ["null", '"abc"', "[1]", '{"tool_input":null}', '{"tool_input":{"command":null}}', "[" * 100000,
+                '{"tool_input":{"command":"ls"},"x":' + "[" * 5000 + "]" * 5000 + "}"]:
+        r = subprocess.run([sys.executable, os.path.join(H, hook)], input=inp, text=True, capture_output=True)
+        check(f"r4 {hook} crash input {inp[:20]!r} -> 2 no traceback", r.returncode == 2 and "Traceback" not in r.stderr)
+for line in ["DB_PASSWORD=hunter2hunter2hunter2", '{"token":"abcdefghijklmnopqrstuvwxyz123456"}', "API_KEY = abcdefghijklmnopqrstuv9"]:
+    check("r4 scanner pattern hits " + line[:20], any(p.search(line) for p, _, _ in s._COMPILED))
+for line in ["token = parse_the_user_token_value", "password=short1", "# api_key comes from the environment"]:
+    check("r4 scanner pattern clean " + line[:20], not any(p.search(line) for p, _, _ in s._COMPILED))
 print("FAIL: " + ", ".join(fails) if fails else "ALL PASS"); sys.exit(1 if fails else 0)

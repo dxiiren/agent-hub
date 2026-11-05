@@ -53,6 +53,8 @@ PATTERNS: list[tuple[str, str, bool]] = [
         True,
     ),
     (r"(?i)\b(?:password|passwd)['\"\s]*[=:]\s*['\"][^'\"\s]{8,}['\"]", "hardcoded password", True),
+    # unquoted `.env` lines (DB_PASSWORD=...) and JSON ("token":"..."): 16+ value chars holding a digit, so identifiers stay clean
+    (r"(?i)(?:api[_\-]?key|secret|token|passw(?:or)?d)['\"]?\s*[=:]\s*['\"]?(?=[0-9A-Za-z\-_/+]*\d)[0-9A-Za-z\-_/+]{16,}", "unquoted or JSON secret", True),
 ]
 COMMIT_ALL = re.compile(r"(^|\s)(-[A-Za-z]*a[A-Za-z]*|--all)\b")
 _COMPILED = [(re.compile(p), kind, generic) for p, kind, generic in PATTERNS]
@@ -234,7 +236,11 @@ def main() -> int:
     except ValueError:
         print("secret_scanner: unreadable hook input, blocked (fail closed)", file=sys.stderr)
         return 2
-    command = str(payload.get("tool_input", {}).get("command", ""))
+    ti = payload.get("tool_input", {}) if isinstance(payload, dict) else None
+    if not isinstance(ti, dict) or not isinstance(ti.get("command", ""), str):
+        print("secret_scanner: hook input has no usable tool_input.command, blocked (fail closed)", file=sys.stderr)
+        return 2
+    command = ti.get("command", "")
     if not re.search(r"git(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+commit", command):
         return 0
     findings = [
@@ -259,5 +265,14 @@ def main() -> int:
     return 2
 
 
+def _safe_main() -> int:
+    """Any crash (null or deeply nested JSON, RecursionError, a bug) blocks with a clear message instead of a traceback and exit 1."""
+    try:
+        return main()
+    except Exception as e:  # noqa: BLE001 - fail closed on everything, RecursionError included
+        print("SECRET SCANNER: hook crashed (" + type(e).__name__ + "), blocked (fail closed)", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_safe_main())

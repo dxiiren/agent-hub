@@ -103,6 +103,15 @@ for inp in ["not json", "", "[]", "null", "{}", '{"tool_input": {}}', '{"tool_in
     got = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "no_force_push.py")], input=inp, text=True, capture_output=True).returncode
     if got != 2:
         miss.append(f"malformed stdin {inp!r} exit {got}, want 2")
+# crash inputs (null, bare string, array, deep nesting, a 700 KB command) exit 2 fast with a message, never a traceback
+import time
+HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "no_force_push.py")
+for inp in ["null", '"abc"', "[" * 100000, '{"tool_input":{"command":"ls"},"x":' + "[" * 5000 + "]" * 5000 + "}",
+            json.dumps({"tool_input": {"command": "git log 'a b' \"c d\"; " * 35000}})]:
+    t0 = time.time()
+    r = subprocess.run([sys.executable, HOOK], input=inp, text=True, capture_output=True, timeout=30)
+    if r.returncode != 2 or "Traceback" in r.stderr or time.time() - t0 > 10:
+        miss.append(f"crash/size input {inp[:30]!r}... exit {r.returncode} in {time.time() - t0:.1f}s")
 for c in miss:
     print("MISCLASSIFIED:", c)
 print(f"{len(BLOCK)} block + {len(ALLOW)} allow cases + 5 wired-hook runs, {len(miss)} misclassified")

@@ -25,6 +25,7 @@ import sys
 
 GIT_OPTS_WITH_VALUE = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 SEPARATORS = {"&&", "||", ";", "|", "&", "(", ")", "\n"}
+_MAX_BYTES = 16 * 1024  # a longer command is blocked before analysis (fail closed)
 BAD_LONG = ("--force", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "--prune")
 
 
@@ -236,8 +237,12 @@ def main():
         command = payload["tool_input"]["command"]
         if not isinstance(command, str):
             raise TypeError("command is not a string")
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, RecursionError):
         print("FORCE-PUSH GUARD: unreadable hook input, blocked (fail closed)", file=sys.stderr)
+        return 2
+    if len(command.encode("utf-8", "replace")) > _MAX_BYTES:
+        print(f"FORCE-PUSH GUARD: command over {_MAX_BYTES // 1024} KB, blocked before analysis (the tokeniser is quadratic on quote-heavy input: "
+              "0.13 s at 16 KB, 0.5 s at 32 KB, minutes at 700 KB). Put the long text in a file or run the commands separately.", file=sys.stderr)
         return 2
     bad = check(command)
     if bad:
@@ -247,5 +252,14 @@ def main():
     return 0
 
 
+def _safe_main() -> int:
+    """Any crash (null or deeply nested JSON, RecursionError, a bug) blocks with a clear message instead of a traceback and exit 1."""
+    try:
+        return main()
+    except Exception as e:  # noqa: BLE001 - fail closed on everything, RecursionError included
+        print("FORCE-PUSH GUARD: hook crashed (" + type(e).__name__ + "), blocked (fail closed)", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_safe_main())
