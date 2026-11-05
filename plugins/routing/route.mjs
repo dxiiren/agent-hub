@@ -42,9 +42,11 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
   const [cmd, ...pre] = paseoCommand(env);
   return (args) => {
     const create = args[0] === "run" && args.includes("--no-wait");
-    const r = spawn(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), "--json"], { encoding: "utf8", timeout: create ? createTimeoutS(env) * 1000 : 15 * 60_000, env });
+    const text = args[0] === "logs"; // `paseo logs` has no JSON output: hand back the raw text
+    const r = spawn(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), ...(text ? [] : ["--json"])], { encoding: "utf8", timeout: create ? createTimeoutS(env) * 1000 : 15 * 60_000, env });
     if (create && r.error?.code === "ETIMEDOUT") return { error: `CREATE_TIMEOUT: the daemon did not create the agent within ${createTimeoutS(env)} s (saturated daemon or a provider that stalls at initialize; upstream Paseo, not a worktree bug). Check \`paseo ls\` and the laptop load, then retry; raise AGENT_HUB_CREATE_TIMEOUT_S if the host is just slow.` };
     const out = r.stdout || "";
+    if (text) return r.status === 0 ? { text: out } : { error: `exit=${r.status} ` + String(r.stderr || out).slice(0, 300) };
     try { return JSON.parse(out.slice(out.search(/[[{]/))); } catch { const t = String(r.stderr || out || "no output"); return { error: `exit=${r.status} ` + (t.length > 500 ? t.slice(0, 300) + " ... " + t.slice(-200) : t) }; }
   };
 }
@@ -67,6 +69,37 @@ export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["su
 /** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has no read-only mode: "auto" is its default-permissions mode, the post-check is the backstop. Override per provider with routes.readOnlyModes. */
 export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
+/** Pending permission names that only read (a file outside the cwd is the usual one): a read-only task may be granted these; anything else (write, edit, shell) stays refused. */
+export const readPermission = (name) => /^(read|read_?file|read_?many_?files|glob|grep|ls|list|list_?directory|search|search_?file_?content|find)$/i.test(String(name ?? "").trim());
+/** Resolve a read-only agent stopped on `permission`: allow its pending read-only requests and wait again, up to `max` times. A pending non-read request is denied and the status stays `permission`. */
+export function grantReads(paseo, j, timeoutS, max = 8) {
+  for (let i = 0; i < max && j.status === "permission" && j.agentId; i++) {
+    const pend = paseo(["permit", "ls"]);
+    const mine = (Array.isArray(pend) ? pend : []).filter((p) => p.agentId === j.agentId || p.agentShortId === String(j.agentId).slice(0, 7));
+    if (!mine.length) break;
+    let denied = false;
+    for (const p of mine) { if (readPermission(p.name)) paseo(["permit", "allow", j.agentId, p.id]); else { paseo(["permit", "deny", j.agentId, p.id]); denied = true; } }
+    if (denied) break;
+    const w = paseo(["wait", j.agentId, "--timeout", String(timeoutS)]);
+    j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
+  }
+  return j;
+}
+const TAG = /^\[[A-Z][A-Za-z_ ]*\] /;
+/** The agent's last assistant message from `paseo logs` text: everything after the last tagged line ([User], [Read] ...), capped. */
+export function lastAnswer(text, cap = 4096) {
+  const lines = String(text ?? "").split(/\r?\n/); let i = lines.length;
+  while (i > 0 && !TAG.test(lines[i - 1])) i--;
+  const a = lines.slice(i).join("\n").trim();
+  return a.length > cap ? { answer: a.slice(0, cap), truncated: true } : { answer: a, truncated: false };
+}
+const withAnswer = (r, paseo) => {
+  if (!r.agentId) return r;
+  const l = paseo(["logs", r.agentId]); const a = lastAnswer(l?.text);
+  if (!a.answer) return r;
+  return { ...r, answer: a.answer, ...(a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
+};
+
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
 export function snapshot(dir, max = 5000) {
   const out = []; const walk = (d) => { let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
@@ -129,6 +162,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
+    if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"));
     const hint = j.status === "permission" ? { error: `agent asked for a permission its mode does not grant (type ${o.type}, mode ${mode ?? "provider default"}). Edit types (code-edit, test-scaffold) need --new-workspace worktree (full-access is dropped outside one, decision 21); read-only types run in the provider read-only mode and cannot edit.` } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
@@ -136,11 +170,11 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       return { used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace };
     }
     if (j.status === "completed") {
-      if (!o.gate) return { used: prov, agentId: j.agentId, status: "completed", trace };
+      if (!o.gate) return withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo);
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
       const g = callerGate(o, j.agentId, paseo, gate, routes);
       trace.push({ provider: prov, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
-      return { used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace };
+      return withAnswer({ used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo);
     }
     if (j.agentId) paseo(["stop", j.agentId]); // a timed-out agent must not keep running while the next entry works
   }

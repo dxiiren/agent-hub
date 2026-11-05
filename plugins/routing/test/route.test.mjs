@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
+import { tmpdir } from "node:os";
+import { grantReads, readPermission, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
 const routes = { slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
@@ -65,7 +66,6 @@ test("unsafe mode is dropped outside a worktree and kept (with --new-workspace w
 
 import { cmpVer, newest, parseCodex, parseClaude, resolveEntry, stalePins } from "../resolve.mjs";
 import { writeFileSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 const cacheFile = join(mkdtempSync(join(tmpdir(), "rs-")), "models.json");
 const slugs = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6.2-astra"];
@@ -141,7 +141,7 @@ test("doctor version comparison", () => {
 
 test("DAEMON_UNREACHABLE on start is retried up to 3 times with backoff, then succeeds", () => {
   let n = 0; const waits = [];
-  const raw = (args) => (args[0] === "ls" ? [] : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
+  const raw = (args) => (args[0] === "ls" ? [] : args[0] === "logs" ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
   const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms), jitter: () => 0 }), routes);
   assert.equal(r.used, "codex/a"); assert.equal(n, 3); assert.deepEqual(waits, [2000, 4000]);
 });
@@ -286,4 +286,65 @@ test("read-only types use each provider's read-only mode, in or out of a worktre
     assert.equal(run[run.indexOf("--mode") + 1], m, p);
   }
   assert.equal(readOnlyMode("x", { readOnlyModes: { x: "ro" } }), "ro");
+});
+
+test("lastAnswer: text after the last tagged line, capped at 4 KB with a flag", () => {
+  assert.deepEqual(lastAnswer("[User] q\n[Read] f\nJob 61 failed.\nDisk full.\n"), { answer: "Job 61 failed.\nDisk full.", truncated: false });
+  assert.equal(lastAnswer("[User] q\n[Read] f\n").answer, "");
+  const big = lastAnswer("[User] q\n" + "x".repeat(5000));
+  assert.equal(big.answer.length, 4096); assert.equal(big.truncated, true);
+});
+test("a completed route returns the agent's answer from `paseo logs`; truncation names the full-log command", () => {
+  const mk = (text) => (a) => (a[0] === "ls" ? [] : a[0] === "logs" ? { text } : { status: "completed", agentId: "A1" });
+  const r = runRoute({ ...o, provider: "qwen/b" }, mk("[User] q\nthe answer\n"), routes);
+  assert.equal(r.answer, "the answer"); assert.equal(r.answerTruncated, undefined);
+  const t = runRoute({ ...o, provider: "qwen/b" }, mk("[User] q\n" + "y".repeat(9000)), routes);
+  assert.equal(t.answer.length, 4096); assert.equal(t.answerTruncated, true); assert.equal(t.answerFull, "paseo logs A1");
+  assert.equal(runRoute({ ...o, provider: "qwen/b" }, (a) => (a[0] === "ls" ? [] : a[0] === "logs" ? { error: "x" } : { status: "completed", agentId: "A1" }), routes).answer, undefined);
+});
+test("cliPaseo returns `paseo logs` as raw text, without --json", () => {
+  let seen;
+  const spawn = (_c, args) => { seen = args; return { status: 0, stdout: "[User] q\nhi\n", stderr: "" }; };
+  assert.deepEqual(cliPaseo(undefined, { PASEO_BIN: "paseo" }, spawn)(["logs", "A"]), { text: "[User] q\nhi\n" });
+  assert.ok(!seen.includes("--json"));
+});
+test("readPermission: reads yes, writes and shell no", () => {
+  for (const n of ["read", "ReadFile", "glob", "grep", "list_directory"]) assert.ok(readPermission(n), n);
+  for (const n of ["write", "edit", "run_shell_command", "bash", "", undefined]) assert.ok(!readPermission(n), String(n));
+});
+const permFake = (pending, log) => (a) => {
+  log.push(a);
+  if (a[0] === "permit" && a[1] === "ls") return pending;
+  if (a[0] === "wait") return { status: "idle" };
+  return {};
+};
+test("grantReads allows pending read requests and waits again; a pending write is denied and stays permission", () => {
+  const log = [];
+  const ok = grantReads(permFake([{ id: "R1", agentId: "A", name: "read" }], log), { agentId: "A", status: "permission" }, 60);
+  assert.equal(ok.status, "completed");
+  assert.deepEqual(log.filter((c) => c[0] === "permit" && c[1] === "allow")[0], ["permit", "allow", "A", "R1"]);
+  const log2 = [];
+  const bad = grantReads(permFake([{ id: "W1", agentId: "A", name: "write" }], log2), { agentId: "A", status: "permission" }, 60);
+  assert.equal(bad.status, "permission");
+  assert.ok(log2.some((c) => c[1] === "deny") && !log2.some((c) => c[1] === "allow" || c[0] === "wait"));
+});
+test("a read-only route whose agent stops on a read permission completes without a fallback; a write permission still fails", () => {
+  const r2 = { slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
+  let first = true; const log = [];
+  const p = (a) => { log.push(a);
+    if (a[0] === "ls") return [];
+    if (a[0] === "run") return { status: "permission", agentId: "P" };
+    if (a[0] === "permit" && a[1] === "ls") return [{ id: "R", agentId: "P", name: first ? "read" : "write" }];
+    if (a[0] === "wait") return { status: "idle" };
+    return {}; };
+  const good = runRoute({ ...o, type: "summarise", cwd: tmpdir() }, p, r2);
+  assert.equal(good.status, "completed"); assert.equal(good.trace.length, 1);
+  first = false;
+  assert.equal(runRoute({ ...o, type: "summarise", cwd: tmpdir() }, p, r2).used, null);
+});
+test("every spawned run carries an explicit --cwd (never the daemon default)", () => {
+  const p = fake({ run: () => ({ status: "completed", agentId: "A" }) });
+  runRoute({ ...o, provider: "qwen/b", cwd: "/r" }, p, routes);
+  const run = p.calls.find((c) => c[0] === "run");
+  assert.equal(run[run.indexOf("--cwd") + 1], "/r");
 });
