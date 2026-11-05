@@ -193,12 +193,23 @@ check("r1 reassign left to right", g.blocked("a=.e; a=${a}nv; cat $a") is not No
 check("r1 two vars glued", g.blocked("a=.e;b=nv;cat $a$b") is not None)
 check("r1 later reassign does not hide an earlier use", g.blocked("a=.env; cat $a; a=ok") is not None)
 check("r1 reassigned to safe before use passes", g.blocked("a=x; a=README.md; cat $a") is None)
-check("r1 self reference does not blow up", g.blocked("a=$a$a; echo $a") is None)
+t0 = time.monotonic(); g.blocked("a=$a$a; echo $a"); check("r1 self reference is bounded and fast", time.monotonic() - t0 < 0.1)
 check("r1 plain X=foo passes", g.blocked("X=foo; cat $X") is None)
 check("r1 F=.env blocked", g.blocked("F=.env; cat $F") is not None)
 check("r1 ambiguous construct next to an assignment blocks", g.blocked("a=x; eval cat $a") is not None and g.blocked("a=x; cat ${a:-y}") is not None)
 check("r1 plain secret blocks even with a bomb after it", g.blocked("cat .env; " + fwd_bomb) is not None)
 check("r1 over-long command blocks", g.blocked("echo " + "x" * 70000) is not None)
+
+# final round: constructs the text scan cannot follow block outright when combined with a variable reference
+for c in ["local -rn x=y; echo $x", "alias c=cat; echo $c", "declare -n r=x; echo $r", "typeset -gn r=x; echo $r", "export -n r=x; echo $r", "declare v=1; echo $v",
+          "mapfile -t a < f; echo $a", "readarray a < f; echo $a", "getopts ab o; echo $o", "let x=1; echo $x", "source f; echo $x", ". f; echo $x",
+          "f() { cat $1; }; f x", "function f { cat $1; }; f x", "for i in a; do echo $i; done", "while true; do echo $x; done", "until false; do echo $x; done",
+          "trap 'cat $x' EXIT", "eval echo $x", "read v; echo $v", "printf -v v x; echo $v", "echo ${x:-y}", "echo ${x-y}", "echo ${x:=y}", "echo ${x+y}",
+          "echo ${x#p}", "echo ${x%p}", "echo ${x/p/r}", "echo ${!x}", "echo $((1+2)) $x", "a=(.e nv); echo ${a[0]}", "a[0]=x; echo $a",
+          "echo $a; a=x", "a=.e; a=${a}nv; cat $a", "a=.e;b=nv;cat $a$b", "a=.e; cat ${a}nv", "x=.env; echo $x", "echo $x; x=.env"]:
+    check("final block " + c, g.blocked(c) is not None)
+for c in ["git status", "ls *.md", "X=foo; echo $X", "npm test", "X=foo; cat $X", "echo $HOME/x", "cat README.md", "git log --oneline -5"]:
+    check("final allow " + c, g.blocked(c) is None)
 
 # round 3d: normal commands pass; a crashing hook and unparsable input block
 for c in ["git status", "cat README.md", "ls *.md", "git log --oneline -5", "python -m pytest tests/"]:

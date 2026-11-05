@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """PreToolUse hook: block Bash/PowerShell commands that reference secret files (.env, *.pem,
 *.key, id_rsa*, credentials*), which the Read/Edit deny rules cannot cover via cat/grep/curl.
-Fails closed: unparsable input exits 2. Exit 2 = blocked."""
+Fails closed: unparsable input exits 2. Exit 2 = blocked.
+text guard = guardrail, not a sandbox; residual risk documented (see docs: a text scan of shell commands always has differentials)."""
 import json
 import re
 import sys
@@ -87,19 +88,46 @@ SUBST_WORDS = re.compile(r"\benv\b|\.env|pem|\bkey|id_|cred|ppk|secret|passw", r
 
 
 _COMB = re.compile(ASSIGN.pattern + r"|\$\{(\w+)\}|\$(\w+)")
-_AMBIGUOUS = re.compile(r"\beval\b|\bread\b|printf\s+-v|\b(?:declare|typeset|export)\s+-n|\$\{[^}]*[^\w}][^}]*\}|\$\{!")
 _MAX_CMD = 64 * 1024
 _MAX_VALUE = 4096
+_MAX_TEXTS = 64
+# With a variable reference present, none of these constructs is analysed: the command is blocked outright (false positives accepted, rephrase).
+_NO_ANALYSIS = re.compile(
+    r"(?:^|[;&|(\s])(?:function|for|while|until|trap|eval|source|read|mapfile|readarray|getopts|let|alias|printf\s+-v)(?![\w-])"
+    r"|(?:^|[;&|(\s])\.\s"                                  # `. file`
+    r"|\w\s*\(\s*\)"                                       # name() { ...; }
+    r"|(?:^|[;&|(\s])(?:declare|typeset|local|export|readonly)\s+-[A-Za-z]*n"  # nameref, any option cluster
+    r"|(?:^|[;&|(\s])(?:declare|typeset|local)(?![\w-])"
+    r"|\$\{[^}]*[^\w}][^}]*\}|\$\{!"                         # ${x:-w} ${x-w} ${x:=w} ${x+w} ${x#p} ${x%p} ${x/p/r} ${!x}
+    r"|\$\(\(|\$\["                                        # arithmetic
+    r"|\w=\(|\w\[[^\]]*\]=|\$\{\w+\[")                      # arrays
+_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+_ANYREF = re.compile(r"\$[{\w]")
+
+
+def _unanalysable(command: str) -> str | None:
+    """Fail-closed pre-check: a variable reference next to a construct the text scan cannot follow, or a reference to a variable assigned LATER."""
+    if not _ANYREF.search(command):
+        return None
+    m = _NO_ANALYSIS.search(command)
+    if m:
+        return "variable reference combined with a shell construct that cannot be analysed: " + m.group(0).strip()[:30]
+    first: dict[str, int] = {}
+    for am in ASSIGN.finditer(command):
+        first.setdefault(am.group(1), am.start(1))
+    for r in _REF.finditer(command):
+        n = r.group(1) or r.group(2)
+        if n in first and r.start() < first[n]:
+            return "reference to variable " + n + " before it is assigned"
+    return None
 
 
 def _expand_assignments(command: str) -> str | None:
-    """Expand in-command assignments the way the shell does: strictly left to right, each value expanded against what is already set
-    (`a=.e; a=${a}nv; cat $a` -> `cat .env`; a name not set yet stays literal, as in the shell). The size is checked BEFORE every
-    substitution: past 4x the original (floor 1 KB, cap 64 KB), a value over 4 KB, or an ambiguous construct (eval, read, `${a:-x}`, indirection)
-    next to an assignment returns None and the caller blocks."""
+    """Pass 1: expand in-command assignments the way the shell does, strictly left to right, each value against what is already set
+    (`a=.e; a=${a}nv; cat $a` -> `cat .env`; an unset name stays literal). References inside assignment text are expanded too, so
+    `name=<expanded>` is scanned. Sizes are checked BEFORE every substitution (4x the original, floor 1 KB, cap 64 KB; value cap 4 KB);
+    over the cap returns None and the caller blocks."""
     if len(command) > _MAX_CMD:
-        return None
-    if ASSIGN.search(command) and _AMBIGUOUS.search(command):
         return None
     limit = min(_MAX_CMD, max(4 * len(command), 1024))
     env: dict[str, str] = {}
@@ -116,12 +144,12 @@ def _expand_assignments(command: str) -> str | None:
         if not put(command[pos:m.start()]):
             return None
         pos = m.end()
-        if m.group(1):  # assignment: the value is expanded against the values set so far, the text itself stays as written
-            val = m.group(2).strip("'\"")
-            sq = m.group(2).startswith("'")  # single quotes: no expansion
-            if not sq:
+        if m.group(1):
+            raw = m.group(2)
+            val = raw.strip("'\"")
+            if not raw.startswith("'"):
                 parts, p = [], 0
-                for r in re.finditer(r"\$\{(\w+)\}|\$(\w+)", val):
+                for r in _REF.finditer(val):
                     parts.append(val[p:r.start()]); p = r.end()
                     parts.append(env.get(r.group(1) or r.group(2), r.group(0)))
                     if sum(map(len, parts)) > _MAX_VALUE:
@@ -130,16 +158,46 @@ def _expand_assignments(command: str) -> str | None:
             if len(val) > _MAX_VALUE:
                 return None
             env[m.group(1)] = val
-            if not put(m.group(0)):
+            if not put(m.group(0)[: len(m.group(0)) - len(raw)] + val):
                 return None
-        else:
-            name = m.group(3) or m.group(4)
-            ref = m.group(0)
-            if not put(env.get(name, ref)):
-                return None
-    if not put(command[pos:]):
+        elif not put(env.get(m.group(3) or m.group(4), m.group(0))):
+            return None
+    return "".join(out) if put(command[pos:]) else None
+
+
+def _expand_all(command: str) -> list[str] | None:
+    """Pass 2, order independent: every possible value of every assigned variable (all assignments, any order), cap-checked.
+    None = over a cap (blocks)."""
+    if len(command) > _MAX_CMD:
         return None
-    return "".join(out)
+    limit = min(_MAX_CMD, max(4 * len(command), 1024))
+    vals: dict[str, set[str]] = {}
+    for m in ASSIGN.finditer(command):
+        v = m.group(2).strip("'\"")
+        if len(v) > _MAX_VALUE:
+            return None
+        vals.setdefault(m.group(1), set()).add(v)
+    texts = {command}
+    for _ in range(4):
+        changed = False
+        for name, values in vals.items():
+            pat = re.compile(r"\$\{" + re.escape(name) + r"\}|\$" + re.escape(name) + r"(?![A-Za-z0-9_])")
+            nxt: set[str] = set()
+            for t in texts:
+                if not pat.search(t):
+                    nxt.add(t)
+                    continue
+                changed = True
+                for v in values:
+                    if len(t) + len(pat.findall(t)) * len(v) > limit:  # checked before substituting
+                        return None
+                    nxt.add(pat.sub(lambda _m, v=v: v, t))
+                if len(nxt) > _MAX_TEXTS:
+                    return None
+            texts = nxt
+        if not changed:
+            break
+    return list(texts)
 
 
 def _var_glued(command: str) -> str | None:
@@ -155,6 +213,20 @@ def _var_glued(command: str) -> str | None:
     return None
 
 
+def _scan(text: str, depth: int) -> str | None:
+    for m in SUBST.finditer(text):  # a standalone substitution: scan its body, block secret-ish words (nested ones are found inner-first)
+        body = m.group(0)[2:-1] if m.group(0).startswith("$(") else m.group(0)[1:-1]
+        if depth < 5 and blocked(body, depth + 1):
+            return "command substitution: " + body[:40]
+        if SUBST_WORDS.search(body):
+            return "command substitution mentions a secret-ish word: " + body[:40]
+    for v in _variants(text):
+        for tok in SPLIT.split(v):
+            if _hit(tok):
+                return tok
+    return None
+
+
 def blocked(command: str, _depth: int = 0) -> str | None:
     if len(command) > _MAX_CMD:
         return "command too long to inspect"
@@ -164,25 +236,19 @@ def blocked(command: str, _depth: int = 0) -> str | None:
         for tok in SPLIT.split(text):
             if _hit(tok):
                 return tok
-    expanded = _expand_assignments(command)
-    if expanded is None:
+    why = _unanalysable(command)
+    if why:
+        return why
+    left_to_right = _expand_assignments(command)
+    every = _expand_all(command)
+    if left_to_right is None or every is None:
         return "variable expansion grows without bound"
-    for text in (command, expanded):
-        for m in SUBST.finditer(text):  # a standalone substitution: scan its body, block secret-ish words (nested ones are found inner-first)
-            body = m.group(0)[2:-1] if m.group(0).startswith("$(") else m.group(0)[1:-1]
-            if _depth < 5 and blocked(body, _depth + 1):
-                return "command substitution: " + body[:40]
-            if SUBST_WORDS.search(body):
-                return "command substitution mentions a secret-ish word: " + body[:40]
+    for text in [command, left_to_right, *every]:
+        hit = _scan(text, _depth)
+        if hit:
+            return hit
     glued = _var_glued(command)
-    if glued:
-        return glued
-    for base in {command, expanded}:
-        for text in _variants(base):
-            for tok in SPLIT.split(text):
-                if _hit(tok):
-                    return tok
-    return None
+    return glued
 
 
 def main() -> int:
