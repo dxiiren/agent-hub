@@ -52,3 +52,15 @@ export function batchAllowed(reqs, roots, env, home) {
   for (const r of reqs) { const v = requestAllowed(r, roots, env, home); if (!v.ok) return v; }
   return { ok: true };
 }
+
+/** A directory (Grep/Glob search root) must resolve inside a root, outside protected folders, with no dot segment. */
+export function dirAllowed(path, roots, env = process.env, home = os.homedir()) {
+  const rr = roots.map((r) => real(resolve(r))).filter(Boolean);
+  const abs = real(isAbsolute(path) ? path : resolve(roots[0] ?? "", path));
+  if (!abs) return { ok: false, why: "path does not resolve" };
+  const root = rr.find((r) => inside(r, abs));
+  if (!root) return { ok: false, why: "outside cwd and readAllow" };
+  if (deniedRoots(env, home).some((d) => inside(d, abs) && !inside(d, root))) return { ok: false, why: "protected folder" };
+  if (relative(root, abs).split(sep).some((s) => s.startsWith("."))) return { ok: false, why: "dotfile or dot-folder" };
+  return { ok: true };
+}

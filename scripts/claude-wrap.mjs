@@ -2,6 +2,7 @@
 // claude-clean launcher: claude <args>, with the hub's read-only rules merged into whatever --settings Paseo passes (Paseo adds its own
 // --settings after ours and the last one wins, so a plain extra --settings flag is silently dropped).
 // The rules apply only in a read-only permission mode (plan, default): code-edit tasks run in bypassPermissions and keep every tool.
+// A PreToolUse hook (plugins/routing/claude-readhook.mjs) limits Read/Grep/Glob to the task cwd plus routes.readAllow, like readguard does for Qwen.
 // In that case project and local settings are also dropped (--setting-sources=user), so a project .claude allow rule cannot re-enable a tool; deny rules win over user allows anyway.
 // Usage: claude-wrap.mjs <claude-binary> <mcp-config> <rules.json> [claude args...]
 import { spawn } from "node:child_process";
@@ -12,12 +13,18 @@ import { resolve } from "node:path";
 export const READONLY_MODES = ["plan", "default"];
 export const modeOf = (args) => { const i = args.findIndex((a) => a === "--permission-mode" || a.startsWith("--permission-mode=")); if (i < 0) return undefined; return args[i].includes("=") ? args[i].split("=")[1] : args[i + 1]; };
 
-export function mergeSettings(args, rules) {
+const HOOK = resolve(fileURLToPath(import.meta.url), "..", "..", "plugins", "routing", "claude-readhook.mjs").split("\\").join("/");
+const fwd = (p) => p.split("\\").join("/");
+/** The PreToolUse entry that keeps Read/Grep/Glob inside the task cwd (same boundary as readguard). */
+export const hookEntry = () => ({ matcher: "Read|Grep|Glob|LS|NotebookRead", hooks: [{ type: "command", command: `"${fwd(process.execPath)}" "${HOOK}"` }] });
+
+export function mergeSettings(args, rules, hook) {
   const out = []; const merged = JSON.parse(JSON.stringify(rules));
   const add = (o) => { for (const [k, v] of Object.entries(o)) { if (k === "permissions") for (const [pk, pv] of Object.entries(v)) merged.permissions[pk] = Array.isArray(pv) ? [...new Set([...(merged.permissions[pk] ?? []), ...pv])] : pv; else merged[k] = v; } };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--settings" && i + 1 < args.length) { const v = args[++i]; try { add(JSON.parse(v.trim().startsWith("{") ? v : readFileSync(v, "utf8"))); } catch { /* unreadable value: ours only */ } } else out.push(args[i]);
   }
+  if (hook) merged.hooks = { ...merged.hooks, PreToolUse: [hook, ...(merged.hooks?.PreToolUse ?? [])] };
   return [...out, "--settings", JSON.stringify(merged)];
 }
 
@@ -27,7 +34,7 @@ export function buildArgs(rest, rules, mcp) {
   const base = ["--strict-mcp-config", "--mcp-config", mcp];
   if (!READONLY_MODES.includes(modeOf(rest))) return [...base, ...rest];
   const noProject = rest.map((a) => (a.startsWith("--setting-sources=") ? "--setting-sources=user" : a));
-  return [...base, ...mergeSettings(noProject, rules)];
+  return [...base, ...mergeSettings(noProject, rules, hookEntry())];
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {

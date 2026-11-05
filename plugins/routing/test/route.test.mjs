@@ -448,3 +448,49 @@ test("the settings template denies at least everything readguard denies", () => 
   for (const g of SENSITIVE_GLOBS) for (const r of [`Read(${g})`, `Read(**/${g})`]) assert.ok(tpl.permissions.deny.includes(r), r);
   for (const d of ["~/.ssh", "~/.claude", "~/.codex", "~/.qoder"]) assert.ok(tpl.permissions.deny.some((x) => x.startsWith(`Read(${d}`)), d);
 });
+
+import { decide } from "../claude-readhook.mjs";
+import { hookEntry } from "../../../scripts/claude-wrap.mjs";
+import { mkdtempSync as mkd, mkdirSync as mkdr, writeFileSync as wf } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir as td } from "node:os";
+import { join as jn } from "node:path";
+const hookFix = () => { const d = mkd(jn(td(), "rh-")); const cwd = jn(d, "cwd"), out = jn(d, "outside"); mkdr(cwd); mkdr(out); mkdr(jn(cwd, "sub"));
+  wf(jn(cwd, "a.log"), "x"); wf(jn(cwd, "sub", "b.txt"), "x"); wf(jn(cwd, ".env"), "k"); wf(jn(out, "section.md"), "96"); return { d, cwd, out, env: { PASEO_HOME: jn(d, "ph") }, home: jn(d, "home") }; };
+test("claude read hook: Read inside cwd ok; outside, readAllow rules, sensitive and dot files", () => {
+  const { cwd, out, env, home } = hookFix(); const rd = (f, allow = []) => decide({ cwd, tool_name: "Read", tool_input: { file_path: f } }, allow, env, home).ok;
+  assert.equal(rd(jn(cwd, "a.log")), true); assert.equal(rd(jn(cwd, "sub", "b.txt")), true);
+  assert.equal(rd(jn(out, "section.md")), false, "non-sensitive file outside cwd refused");
+  assert.equal(rd(jn(out, "section.md"), [out]), true, "readAllow root opens it");
+  assert.equal(rd(jn(cwd, ".env")), false); assert.equal(rd(jn(cwd, "..", "outside", "section.md")), false); assert.equal(rd(jn(cwd, "nope")), false);
+  assert.equal(rd(jn(home, ".ssh", "config")), false);
+});
+test("claude read hook: Grep, Glob and LS stay inside cwd; absolute or .. patterns refused; other tools and no cwd refused", () => {
+  const { cwd, out, env, home } = hookFix(); const d = (name, ti, c = cwd) => decide({ cwd: c, tool_name: name, tool_input: ti }, [], env, home).ok;
+  assert.equal(d("Grep", { pattern: "x" }), true); assert.equal(d("Grep", { pattern: "x", path: jn(cwd, "sub") }), true);
+  assert.equal(d("Grep", { pattern: "x", path: out }), false); assert.equal(d("Grep", { pattern: "x", glob: "../outside/*" }), false);
+  assert.equal(d("Glob", { pattern: "**/*.log" }), true); assert.equal(d("Glob", { pattern: "../outside/*" }), false);
+  assert.equal(d("Glob", { pattern: "*.md", path: out }), false); assert.equal(d("Glob", { pattern: out.split("\\").join("/") + "/*" }), false);
+  assert.equal(d("LS", { path: out }), false); assert.equal(d("LS", { path: cwd }), true);
+  assert.equal(d("Bash", { command: "cat x" }), false); assert.equal(d("Read", { file_path: jn(cwd, "a.log") }, ""), false);
+});
+test("claude read hook runs as a command: exit 0 inside, 2 outside and on garbage input", () => {
+  const { cwd, out } = hookFix(); const js = new URL("../claude-readhook.mjs", import.meta.url).pathname.replace(/^\/([a-z]:)/i, "$1");
+  const run = (inp) => spawnSync(process.execPath, [js], { input: inp, env: { ...process.env, AGENT_HUB_ROUTES: jn(cwd, "none.json") } }).status;
+  assert.equal(run(JSON.stringify({ cwd, tool_name: "Read", tool_input: { file_path: jn(cwd, "a.log") } })), 0);
+  assert.equal(run(JSON.stringify({ cwd, tool_name: "Read", tool_input: { file_path: jn(out, "section.md") } })), 2);
+  assert.equal(run("not json"), 2);
+});
+test("claude read-only launch carries the hook; bypass (code-edit) does not; template and wrapper never allow Bash/Edit/Write", async () => {
+  const { buildArgs } = await import("../../../scripts/claude-wrap.mjs");
+  const he = hookEntry(); assert.match(he.hooks[0].command, /claude-readhook\.mjs/);
+  for (const mode of ["plan", "default"]) {
+    const m = JSON.parse(buildArgs(["--permission-mode", mode, "--settings", '{"hooks":{"PreToolUse":[{"matcher":"X","hooks":[]}]}}'], tpl, "m.json").at(-1));
+    assert.equal(m.hooks.PreToolUse[0].matcher, he.matcher); assert.equal(m.hooks.PreToolUse.length, 2, "Paseo's own hooks kept");
+    assert.equal(m.permissions.allow, undefined);
+    for (const t of ["Bash", "Edit", "Write"]) assert.ok(m.permissions.deny.includes(t));
+    assert.ok(!JSON.stringify(m).match(/"allow"/), "no allow anywhere");
+  }
+  const edit = buildArgs(["--permission-mode", "bypassPermissions"], tpl, "m.json"); assert.ok(!edit.includes("--settings"));
+  assert.ok(!he.matcher.split("|").some((t) => ["Bash", "Edit", "Write"].includes(t)));
+});
