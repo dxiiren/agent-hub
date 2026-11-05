@@ -27,7 +27,12 @@ export function pathAllowed(path, roots, env = process.env, home = os.homedir())
   const rr = roots.map((r) => real(resolve(r))).filter(Boolean);
   const abs = real(isAbsolute(path) ? path : resolve(roots[0] ?? "", path)); // a relative path is the agent's, so it resolves against the task cwd
   if (!abs) return { ok: false, why: "path does not resolve" };
-  try { if (!statSync(abs).isFile()) return { ok: false, why: "not a regular file" }; } catch { return { ok: false, why: "not a regular file" }; }
+  try {
+    const st = statSync(abs);
+    if (!st.isFile()) return { ok: false, why: "not a regular file" };
+    // a hardlink inside cwd to a file outside shares the inode and passes the realpath check: a file with more than one name is never auto-readable
+    if (st.nlink > 1) return { ok: false, why: "hardlinked file (more than one name)" };
+  } catch { return { ok: false, why: "not a regular file" }; }
   const root = rr.find((r) => inside(r, abs));
   if (!root) return { ok: false, why: "outside cwd and readAllow" };
   if (deniedRoots(env, home).some((d) => inside(d, abs) && !inside(d, root))) return { ok: false, why: "protected folder" };
