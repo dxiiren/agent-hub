@@ -124,4 +124,71 @@ try:
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
+# round 3b: guard never touches the filesystem outside the cwd; scanner expands abbreviated options
+d = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(d)
+try:
+    for c in ["cat //attacker/share/*", "cat /etc/*", "cat ../*", "cat a/*/.*", "cat C:/x/.*"]:
+        check("r3b wildcard-only behind a path blocked " + c, g.blocked(c) is not None)
+    for c in ["ls src/*.py", "cat /etc/hosts", "cat ../notes.md"]:
+        check("r3b ordinary allowed " + c, g.blocked(c) is None)
+    calls = []
+    real = os.scandir; os.scandir = lambda *a, **k: (calls.append(a), real(*a, **k))[1]
+    try:
+        g.blocked("cat //attacker/share/* /etc/.* ../*")
+    finally:
+        os.scandir = real
+    check("r3b no scandir for non-cwd tokens", not calls)
+    for i in range(50):
+        open(os.path.join(d, "f%d" % i), "w").close()
+    old = g._BUDGET; g._BUDGET = 10
+    check("r3b entry budget exhausted blocks", g.blocked("cat *") is not None); g._BUDGET = old
+    old = g._SECONDS; g._SECONDS = -1
+    check("r3b time budget exhausted blocks", g.blocked("cat *") is not None); g._SECONDS = old
+finally:
+    os.chdir(cwd); shutil.rmtree(d, ignore_errors=True)
+
+d = tempfile.mkdtemp()
+try:
+    run = lambda *a: subprocess.run(["git", *a], cwd=d, capture_output=True, text=True)
+    run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    f = os.path.join(d, "a.txt"); open(f, "w").write("clean" + chr(10)); run("add", "a.txt"); run("commit", "-qm", "i")
+    open(f, "w").write("key=" + "AKIA" + "ABCDEFGHIJKLMNOP" + chr(10))
+    open(os.path.join(d, "l.txt"), "w").write("a.txt" + chr(10))
+    scan = lambda cmd: subprocess.run([sys.executable, os.path.join(H, "secret_scanner.py")], cwd=d, text=True,
+                                     input=json.dumps({"tool_input": {"command": cmd}}), capture_output=True).returncode
+    for cmd in ["git commit -m x --pathspec-from=l.txt", "git commit -m x --pathspec-from-f=l.txt", "git commit --al -m x",
+                "git commit --inc a.txt -m x", "git commit --onl a.txt -m x", "git commit -m x --totally-unknown-opt"]:
+        check("r3b abbreviated/unknown option caught: " + cmd, scan(cmd) == 2)
+    check("r3b plain commit still ignores unstaged", scan("git commit -m x --amend") == 0)
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+
+# round 3c: constant command substitutions cannot assemble a secret name
+for c in ["cat .e$(true)nv", "cat .e``nv", "cat .e$()nv", "cat .e`true`nv", "cat id_$(echo r)sa"]:
+    check("r3c subst block " + c, g.blocked(c) is not None)
+for c in ["ls $(pwd)/src", "echo $(date)", "git log -n $(echo 3)", "cat `which ls`"]:
+    check("r3c subst allowed " + c, g.blocked(c) is None)
+
+
+# round 3d: normal commands pass; a crashing hook and unparsable input block
+for c in ["git status", "cat README.md", "ls *.md", "git log --oneline -5", "python -m pytest tests/"]:
+    check("r3d normal passes " + c, g.blocked(c) is None)
+BASH = next((b for b in ("C:/Program Files/Git/bin/bash.exe", "/usr/bin/bash") if os.path.exists(b)), "bash")
+sc = lambda inp: subprocess.run([sys.executable, os.path.join(H, "secret_scanner.py")], input=inp, text=True, capture_output=True).returncode
+check("r3d scanner unparsable input blocks", sc("not json") == 2)
+d = tempfile.mkdtemp()
+try:
+    os.makedirs(os.path.join(d, ".claude", "hooks"))
+    shutil.copy(os.path.join(H, "run_hook.sh"), os.path.join(d, ".claude", "hooks"))
+    boom = os.path.join(d, ".claude", "hooks", "boom.py"); open(boom, "w").write("raise SystemExit(1)" + chr(10))
+    ok = os.path.join(d, ".claude", "hooks", "ok.py"); open(ok, "w").write("raise SystemExit(0)" + chr(10))
+    rh = os.path.join(d, ".claude", "hooks", "run_hook.sh")
+    rc = lambda name: subprocess.run([BASH, rh, name], input="{}", text=True, capture_output=True, cwd=d).returncode
+    check("r3d hook crash (rc 1) becomes block", rc("boom.py") == 2)
+    check("r3d hook clean exit passes", rc("ok.py") == 0)
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+
 print("FAIL: " + ", ".join(fails) if fails else "ALL PASS"); sys.exit(1 if fails else 0)

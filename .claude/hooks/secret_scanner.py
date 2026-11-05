@@ -124,6 +124,26 @@ def _pathspec_file(f: str) -> list[str]:
     return [x.strip().strip(chr(34)).replace(chr(92), "/") for x in text.splitlines() if x.strip()]
 
 
+_LONG = ("pathspec-from-file", "all", "include", "only", "amend", "no-verify", "quiet", "verbose", "signoff",
+         "no-edit", "allow-empty", "allow-empty-message", "dry-run", "status", "no-status", "edit", "short",
+         "branch", "porcelain", "long", "null", "no-post-rewrite", "squash", "fixup", "reset-author",
+         "gpg-sign", "no-gpg-sign", "pathspec-file-nul", "untracked-files", "interactive", "patch")
+
+
+def _canon(t: str) -> str:
+    """git accepts abbreviated long options: expand them; an unknown long option is a re-add (fail closed)."""
+    if not t.startswith("--") or t == "--":
+        return t
+    key, eq, val = t[2:].partition("=")
+    names = _LONG + tuple(v[2:] for v in _VALUE_OPTS if v.startswith("--"))
+    if key in names:
+        return t
+    hits = {f for f in names if len(key) >= 3 and f.startswith(key)}
+    if len(hits) == 1:
+        return "--" + hits.pop() + eq + val
+    return "--all"  # unknown or ambiguous: scan the working files too
+
+
 def _commit_args(rest: str) -> tuple[bool, list[str]]:
     """(re-adds files?, pathspecs) for the text after `git commit`."""
     try:
@@ -131,7 +151,7 @@ def _commit_args(rest: str) -> tuple[bool, list[str]]:
     except ValueError:
         toks = rest.split()
     readd, paths, skip, dd, pf = False, [], False, False, False
-    for t in toks:
+    for t in map(_canon, toks):
         if skip:
             skip = False
             if pf:  # value of `--pathspec-from-file F`
@@ -212,7 +232,8 @@ def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except ValueError:
-        return 0
+        print("secret_scanner: unreadable hook input, blocked (fail closed)", file=sys.stderr)
+        return 2
     command = str(payload.get("tool_input", {}).get("command", ""))
     if not re.search(r"git(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+commit", command):
         return 0
