@@ -11,7 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,10 +100,10 @@ function providers() {
       { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }] }; // never gpt-6-astra: the list replaces runtime discovery
   } else notes.push('codex not installed');
 
+  mkdirSync(HUB_DIR, { recursive: true });
+  const empty = join(HUB_DIR, 'empty-mcp.json'); writeJson(empty, { mcpServers: {} });
   const claude = which('claude');
   if (claude) {
-    mkdirSync(HUB_DIR, { recursive: true });
-    const empty = join(HUB_DIR, 'empty-mcp.json'); writeJson(empty, { mcpServers: {} });
     const wrap = join(HUB_DIR, WIN ? 'claude-clean.cmd' : 'claude-clean.sh');
     writeFileSync(wrap, WIN
       ? `@echo off\r\n"${claude}" --strict-mcp-config --mcp-config "${empty}" %*\r\n`
@@ -112,8 +112,17 @@ function providers() {
     p['claude-clean'] = { extends: 'claude', label: 'Claude (clean MCP)', command: [wrap] };
   } else notes.push('claude not installed');
 
+  // qodercli --acp ignores --strict-mcp-config and --setting-sources, so it loads the user's MCP servers (one swing-mcp JVM per task).
+  // A private config dir with no MCP servers, sharing only the login (.auth), is the one switch that works.
+  const qoderHome = () => {
+    const d = join(HUB_DIR, 'qoder-home'); mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'settings.json'), '{}');
+    const auth = join(d, '.auth');
+    if (!existsSync(auth)) { try { symlinkSync(join(homedir(), '.qoder', '.auth'), auth, 'junction'); } catch (e) { console.log(`[WARN] qoder login link failed: ${e.message}`); } }
+    return d;
+  };
   const qoder = which('qodercli');
-  if (qoder) p.qoder = { extends: 'acp', label: 'Qoder', command: [qoder, '--acp'] }; else notes.push('qodercli not installed');
+  if (qoder) p.qoder = { extends: 'acp', label: 'Qoder (no user MCP)', command: [qoder, '--acp', '--config-dir', qoderHome()] }; else notes.push('qodercli not installed');
 
   const qwen = which('qwen');
   if (qwen && cfg.officeUrl) {

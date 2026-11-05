@@ -50,3 +50,12 @@ test('unconfigure disables MCP when it removes auth', () => {
   assert.equal(c.daemon.mcp.enabled, false);
   assert.equal(c.daemon.mcp.injectIntoAgents, false);
 });
+
+test('configure: qoder runs from a private config dir with no MCP servers', () => {
+  const s = sandbox();
+  const r = s.hub('configure'); assert.equal(r.status, 0, r.stdout + r.stderr);
+  const q = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents.providers.qoder.command;
+  const i = q.indexOf('--config-dir');
+  assert.ok(q.includes('--acp') && i > 0);
+  assert.deepEqual(JSON.parse(readFileSync(join(q[i + 1], 'settings.json'), 'utf8')), {});
+});
