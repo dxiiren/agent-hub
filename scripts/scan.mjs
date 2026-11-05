@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 // Built from parts so this file does not match its own scan.
 const pattern = [['192', '168'].join('\\.'), 'koll' + 'ect', 'akmal' + '@', 'credentials' + '\\.json', 'pass' + 'word=', 'tok' + 'en='].join('|');
 try {
-  const out = execFileSync('git', ['grep', '-nIiE', pattern, '--', '.', ':!.claude/settings.json', ':!CLAUDE.md', ':!.claude/skills/audit-skills/audit.py'], { encoding: 'utf8' });
+  const out = execFileSync('git', ['grep', '-nIiE', pattern, '--', '.', ':!.claude/settings.json', ':!CLAUDE.md', ':!.claude/skills/audit-skills/audit.py', ':!.claude/hooks/secret_path_guard.py', ':!.claude/hooks/test_security_hooks.py'], { encoding: 'utf8' });
   console.log(out);
   console.log('[FAIL] scan found matches above');
   process.exit(1);

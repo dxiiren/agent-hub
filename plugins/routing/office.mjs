@@ -9,18 +9,21 @@ import { fileURLToPath } from "node:url";
 const TTL = 10 * 60_000;
 export const modelsUrl = (base) => base.replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/models";
 /** First served model id from an OpenAI-style /v1/models body, or "". */
-export const firstId = (body) => (Array.isArray(body?.data) ? body.data.find((m) => m?.id)?.id ?? "" : "");
+// A served id flows into a spawned command line (shell on Windows .cmd), so only plain model-id characters are accepted.
+export const SAFE_ID = /^[A-Za-z0-9._:\/-]{1,128}$/;
+export const safeId = (id) => (typeof id === "string" && SAFE_ID.test(id) ? id : "");
+export const firstId = (body) => (Array.isArray(body?.data) ? safeId(body.data.find((m) => m?.id)?.id ?? "") : "");
 
 /** Async: served id of `base`; a fetch failure falls back to the last cached id, else to `fallback`. `f` is injectable for tests. */
 export async function servedModel(base, { fallback = "", f = fetch, file = process.env.AGENT_HUB_RESOLVE_CACHE_OFFICE ?? join(tmpdir(), "agent-hub-office-models.json"), now = Date.now() } = {}) {
   let c = {}; try { c = JSON.parse(readFileSync(file, "utf8")); } catch { /* none */ }
-  if (c[base] && now - c[base].at < TTL) return c[base].id;
+  if (c[base] && safeId(c[base].id) && now - c[base].at < TTL) return c[base].id;
   try {
     const id = firstId(await (await f(modelsUrl(base), { signal: AbortSignal.timeout(4000) })).json());
     if (!id) throw new Error("no model listed");
     c[base] = { id, at: now }; try { writeFileSync(file, JSON.stringify(c)); } catch { /* cache is optional */ }
     return id;
-  } catch (e) { if (c[base]) return c[base].id; if (fallback) return fallback; throw e; }
+  } catch (e) { if (c[base] && safeId(c[base].id)) return c[base].id; if (safeId(fallback)) return fallback; throw e; }
 }
 
 /** Sync wrapper for the sync resolver: runs this file as `--id <base> [fallback]` in a child. */
