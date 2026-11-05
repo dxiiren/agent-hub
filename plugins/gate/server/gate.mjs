@@ -5,14 +5,17 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const SECRET_RE =
-  /(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|(api[_-]?key|token|secret|passw(or)?d)\s*[:=]\s*['"][A-Za-z0-9_\-\/+]{16,}['"])/i;
+const SECRET_KEY = "(?:api[_-]?key|token|secret|passw(?:or)?d)";
+// quoted value (16+ chars) | unquoted value (16+ chars that holds a digit, so `token = parse_the_user_token_value` stays clean); the key may be a JSON key ("token": "...") and carry a prefix (DB_PASSWORD)
+export const SECRET_RE = new RegExp(
+  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|` + SECRET_KEY +
+  String.raw`['"]?\s*[:=]\s*(?:['"][A-Za-z0-9_\-\/+]{16,}['"]|['"]?(?=[A-Za-z0-9_\-\/+]*\d)[A-Za-z0-9_\-\/+]{16,}))`, "i");
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.
 const EMPTY_DIR = mkdtempSync(join(tmpdir(), "agent-hub-nohooks-"));
 const EMPTY_CFG = join(EMPTY_DIR, "empty.gitconfig");
 writeFileSync(EMPTY_CFG, "");
-export const GIT_FLAGS = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + EMPTY_DIR, "-c", "diff.external=", "-c", "core.pager=cat"];
+export const GIT_FLAGS = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + EMPTY_DIR, "-c", "diff.external=", "-c", "core.pager=cat", "-c", "core.longpaths=true"];
 export const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: EMPTY_CFG, GIT_TERMINAL_PROMPT: "0" };
 const git = (cwd, args) => execFileSync("git", [...GIT_FLAGS, ...args], { cwd, env: GIT_ENV, encoding: "utf8", maxBuffer: 32 << 20, stdio: ["ignore", "pipe", "ignore"] });
 
@@ -44,9 +47,14 @@ export function repoGate(routes, cwd) {
 export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // the base of a repo with no commits yet
 const MAX_FILE = 16 << 20, MAX_TOTAL = 128 << 20, MAX_DEPTH = 16;
 
-/** True when the bytes hold a secret as UTF-8/latin1 text (binary files too) or as UTF-16 text at either byte alignment. */
+/** True when the bytes hold a secret as UTF-8/latin1 text (binary files too) or as UTF-16 text, little or big endian, at either byte alignment (odd-length buffers included). */
 export function bufHasSecret(buf) {
-  return SECRET_RE.test(buf.toString("latin1")) || SECRET_RE.test(buf.toString("utf16le")) || (buf.length > 1 && SECRET_RE.test(buf.subarray(1).toString("utf16le")));
+  if (SECRET_RE.test(buf.toString("latin1"))) return true;
+  for (const b of [buf, buf.subarray(1)]) {
+    const even = b.subarray(0, b.length & ~1);
+    if (SECRET_RE.test(even.toString("utf16le")) || SECRET_RE.test(Buffer.from(even).swap16().toString("utf16le"))) return true;
+  }
+  return false;
 }
 
 /** Scan one file into `out`; the budget is shared so a repo of many files cannot pass unscanned. */
@@ -59,13 +67,12 @@ function scanFile(f, label, budget, out, deleted = new Set()) {
   } catch (e) { if (!(e?.code === "ENOENT" && deleted.has(label))) out.push("scan incomplete: cannot read " + label); /* only a file git lists as deleted has nothing to scan */ }
 }
 
-/** Secret scan of a plain folder: every file (binary and UTF-16 included) up to depth 16, 16 MB per file, 128 MB total; skips .git and node_modules; reports what it could not cover. */
+/** Secret scan of a plain folder: every file (binary and UTF-16 included) up to depth 16, 16 MB per file, 128 MB total; scans .git and node_modules too (the shared budget makes a huge one fail closed); reports what it could not cover. */
 export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = "") {
   const out = [];
   let ents = [];
   try { ents = readdirSync(root, { withFileTypes: true }); } catch { return ["scan incomplete: cannot read folder " + (rel || ".")]; }
   for (const e of ents) {
-    if (e.name === ".git" || e.name === "node_modules") continue;
     const f = join(root, e.name), label = rel + e.name;
     if (e.isDirectory()) {
       if (depth >= MAX_DEPTH) { out.push("scan incomplete: " + label + " is deeper than " + MAX_DEPTH + " levels"); continue; }
@@ -74,6 +81,30 @@ export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = 
     if (e.isFile()) scanFile(f, label, budget, out);
   }
   return out;
+}
+
+const isPyc = (f) => f.includes("__pycache__") || f.endsWith(".pyc");
+
+/** Paths git status lists (changed, intent-to-add, untracked), NUL-separated, no rename pairing. */
+function statusPaths(cwd) {
+  return git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]).split(String.fromCharCode(0)).filter(Boolean).map((e) => e.slice(3));
+}
+
+/** Folders below the repo root that hold their own .git (git lists a nested repo as one entry, so its files are never diffed): walk the tree for them, bounded. */
+function nestedGit(cwd, reasons) {
+  const found = []; let n = 0;
+  const walk = (dir, rel, depth) => {
+    let ents; try { ents = readdirSync(dir, { withFileTypes: true }); } catch { reasons.push("scan incomplete: cannot read folder " + (rel || ".")); return; }
+    if (rel && ents.some((e) => e.name === ".git")) { found.push(rel); return; }
+    for (const e of ents) {
+      if (++n > 200000) { if (n === 200001) reasons.push("scan incomplete: more than 200000 entries while looking for nested repos"); return; }
+      if (!e.isDirectory() || (!rel && e.name === ".git")) continue;
+      if (depth >= MAX_DEPTH) { reasons.push("scan incomplete: " + rel + e.name + " is deeper than " + MAX_DEPTH + " levels"); continue; }
+      walk(join(dir, e.name), rel + e.name + "/", depth + 1);
+    }
+  };
+  walk(cwd, "", 0);
+  return found.map((r) => r.replace(/\/$/, ""));
 }
 
 /** The one place the gate options are built, shared by the plugin hook and the route CLI so the two paths cannot drift. */
@@ -91,7 +122,7 @@ export function gateOpts(routes, cwd, cmd, base = null) {
 export function runGate(cwd, opts = {}) {
   const { cmd, maxLines = 400, forbid = null, allow = null, base = null, requireBase = false } = opts;
   const reasons = [];
-  let diff = "", hist = "", files = [], deleted = new Set();
+  let diff = "", hist = "", files = [], raw = [], deleted = new Set();
   // not a git work tree: the diff rules cannot run, so fail closed unless a cmd gate exists and no path rules were asked for
   let inRepo = true;
   try { git(cwd, ["rev-parse", "--is-inside-work-tree"]); } catch { inRepo = false; }
@@ -112,7 +143,11 @@ export function runGate(cwd, opts = {}) {
     // NUL-separated: quoted or non-ASCII paths must not slip past the path rules or the byte scan
     const nul = String.fromCharCode(0);
     const names = (extra) => git(cwd, ["diff", "--no-ext-diff", "--no-textconv", ...extra, "--name-only", "-z", ref]).split(nul).filter(Boolean);
-    files = names([]).filter((f) => !f.includes("__pycache__") && !f.endsWith(".pyc"));
+    raw = names([]);
+    files = raw.filter((f) => !isPyc(f));
+    // second view: git status must not list a path the diff does not (a path git cannot handle, e.g. too long, would otherwise PASS with files:0)
+    const seen = new Set(raw);
+    for (const p of statusPaths(cwd)) if (!seen.has(p) && !p.endsWith("/")) reasons.push("scan incomplete: git status lists " + p + " but git diff does not (git views disagree)");
     deleted = new Set(names(["--diff-filter=D"]));
     // a secret committed and then removed is gone from the net diff but still in history; -m covers merge commits, --text "binary" text files
     if (base) hist = git(cwd, ["log", "--no-ext-diff", "--no-textconv", "-m", "--text", "-p", "--format=", base === EMPTY_TREE ? "HEAD" : base + "..HEAD"]);
@@ -124,10 +159,11 @@ export function runGate(cwd, opts = {}) {
   if (added.length + removed.length > maxLines) reasons.push(`diff larger than ${maxLines} lines`);
   // binary and UTF-16 files show no text in a diff: scan every changed file's bytes, and ignored files too (an agent can hide a file with .gitignore)
   if (inRepo) {
-    for (const f of files) scanFile(join(cwd, f), f, budget, reasons, deleted);
+    for (const f of raw) scanFile(join(cwd, f), f, budget, reasons, deleted);
+    for (const d of nestedGit(cwd, reasons)) reasons.push(...scanFolder(join(cwd, d), budget, 0, d + "/"));
     try {
       for (const f of git(cwd, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]).split(String.fromCharCode(0)).filter(Boolean)) {
-        if (f.startsWith(".git/") || f.includes("__pycache__") || f.includes("node_modules/")) continue;
+        if (f.startsWith(".git/")) continue;
         const r = []; scanFile(join(cwd, f), f, budget, r);
         reasons.push(...r.map((x) => x.replace("secret pattern in ", "secret pattern in ignored file ")));
       }

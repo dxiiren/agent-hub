@@ -211,3 +211,36 @@ test("unborn HEAD: the empty-tree base diffs and scans everything; no base recor
   assert.match(runGate(d, { cmd: OK, base: EMPTY_TREE }).reasons.join(), /secret pattern/);
   assert.match(runGate(d, { cmd: OK, requireBase: true }).reasons.join(), /no base commit recorded/);
 });
+
+// --- round 4: fail closed on git view disagreement, UTF-16BE odd length, no skip by name, unquoted/JSON secrets ---
+import { bufHasSecret, SECRET_RE } from "../server/gate.mjs";
+test("a secret under a path over 260 chars is found, and a status/diff disagreement fails closed", () => {
+  const d = repo(); const base = head(d);
+  const deep = Array(12).fill("d".repeat(25)).join("/");
+  mkdirSync(join(d, deep), { recursive: true }); writeFileSync(join(d, deep, "s.txt"), SEC + "\n");
+  const r = runGate(d, { cmd: OK, base });
+  assert.equal(r.status, "FAIL"); assert.ok(r.files > 0 || /disagree/.test(r.reasons.join()), JSON.stringify(r));
+  assert.match(r.reasons.join(), /secret pattern|disagree/);
+});
+test("UTF-16 big and little endian secrets at the end of an odd or even length buffer are found", () => {
+  const be = (s) => Buffer.from(s, "utf16le").swap16();
+  for (const b of [be(SEC), Buffer.concat([Buffer.from([0xfe, 0xff]), be(SEC)]), Buffer.concat([Buffer.from([0]), be(SEC)]), Buffer.concat([Buffer.from([0]), be(SEC), Buffer.from([0x41])]),
+    Buffer.from(SEC, "utf16le"), Buffer.concat([Buffer.from([1]), Buffer.from(SEC, "utf16le")]), Buffer.concat([Buffer.from(SEC, "utf16le"), Buffer.from([1])])])
+    assert.ok(bufHasSecret(b), "len " + b.length);
+  assert.ok(!bufHasSecret(be("nothing to see here at all")));
+});
+test("node_modules and .git are scanned in a plain folder, and a nested repo inside a repo is scanned", () => {
+  const d = mkdtempSync(join(tmpdir(), "gate-nm-"));
+  for (const sub of ["node_modules/p", ".git"]) { mkdirSync(join(d, sub), { recursive: true }); writeFileSync(join(d, sub, "x.txt"), SEC); }
+  const r = runGate(d, { cmd: OK }).reasons.join();
+  assert.match(r, /secret pattern in node_modules\/p\/x\.txt/); assert.match(r, /secret pattern in \.git\/x\.txt/);
+  const e = repo(); const base = head(e);
+  mkdirSync(join(e, "nest")); sh(join(e, "nest"), "init", "-q"); writeFileSync(join(e, "nest", "k.txt"), SEC);
+  assert.match(runGate(e, { cmd: OK, base }).reasons.join(), /secret pattern in nest\/k\.txt/);
+});
+test("unquoted .env lines and JSON values are secrets; code that merely names a token is not", () => {
+  for (const l of ["DB_PASSWORD=hunter2hunter2hunter2", '{"token":"abcdefghijklmnopqrstuvwxyz123456"}', 'password: "Abcdefghijklmnopqrst"', "API_KEY = abcdefghijklmnopqrstuv9"]) assert.ok(SECRET_RE.test(l), l);
+  for (const l of ["token = parse_the_user_token_value", "password=short1", "const secret = getSecretFromTheEnvironment();", '"token": "abc"', "# api_key is read from the environment"]) assert.ok(!SECRET_RE.test(l), l);
+  const d = repo(); writeFileSync(join(d, "e.env"), "DB_PASSWORD=hunter2hunter2hunter2\n");
+  assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern/);
+});
