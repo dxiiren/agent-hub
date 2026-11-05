@@ -164,3 +164,41 @@ test("caller gate runs in the agent's real cwd: PASS completes, two FAILs return
   r = runRoute({ ...o, gate: "g" }, p, routes, () => ({ status: "FAIL", reasons: ["bad"] }));
   assert.equal(r.status, "gate-failed"); assert.equal(r.gate.attempts, 1); assert.equal(p.calls.filter((c) => c[0] === "send").length, 1);
 });
+
+const BS = String.fromCharCode(92);
+test("caller gate expands the ~ that paseo ls prints for the home folder", () => {
+  const p = (a) => (a[0] === "ls" ? [{ id: "A9", cwd: "~" + BS + ".paseo" + BS + "w" }] : { status: "completed", agentId: "A9" });
+  let seen; runRoute({ ...o, gate: "g" }, p, routes, (cwd) => { seen = cwd; return { status: "PASS", reasons: [] }; });
+  assert.ok(!seen.startsWith("~") && seen.endsWith(".paseo" + BS + "w"), seen);
+});
+test("caller gate uses the same options as the hook: repo row maxLines, forbid, allow, cmd fallback", () => {
+  let opts;
+  const p = (a) => (a[0] === "ls" ? [{ id: "A9", cwd: "/r" }] : { status: "completed", agentId: "A9" });
+  const rt = { ...routes, gates: [{ match: "^/r$", cmd: "rowcmd", maxLines: 7, forbid: "^[.]github/", allow: "^src/" }] };
+  runRoute({ ...o }, p, rt, () => ({ status: "PASS", reasons: [] })); // no caller gate: nothing to run
+  runRoute({ ...o, gate: "mine" }, p, rt, (cwd, x) => { opts = x; return { status: "PASS", reasons: [] }; });
+  assert.deepEqual(opts, { cmd: "mine", maxLines: 7, forbid: "^[.]github/", allow: "^src/" });
+});
+test("forbidden-path edit FAILs through the CLI path with the real gate", async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs"); const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path"); const { execFileSync } = await import("node:child_process");
+  const d = mkdtempSync(join(tmpdir(), "cg-")); const g = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t.t", ...a], { cwd: d, stdio: "ignore" });
+  g("init", "-q"); mkdirSync(join(d, ".github")); writeFileSync(join(d, ".github", "w.yml"), "a: 1\n"); g("add", "."); g("commit", "-qm", "i");
+  writeFileSync(join(d, ".github", "w.yml"), "a: 2\n");
+  const p = (a) => (a[0] === "ls" ? [{ id: "A9", cwd: d }] : { status: "completed", agentId: "A9" });
+  const rt = { ...routes, gates: [{ match: ".*", forbid: "^[.]github/" }] };
+  const r = runRoute({ ...o, gate: 'node -e "process.exit(0)"' }, p, rt);
+  assert.equal(r.status, "gate-failed"); assert.match(r.gate.reasons.join(), /path not allowed: \.github\/w\.yml/);
+});
+test("re-prompt blocks (send, wait), freezes the agent (stop) and only then runs the final gate; send or wait errors FAIL", () => {
+  const order = [];
+  const mkp = (bad) => (a) => { order.push(a[0]); return a[0] === "ls" ? [{ id: "A9", cwd: "/r" }] : a[0] === "run" ? { status: "completed", agentId: "A9" } : a[0] === bad ? { error: "boom" } : {}; };
+  let n = 0;
+  let r = runRoute({ ...o, gate: "g" }, mkp(null), routes, () => { order.push("gate"); return ++n === 1 ? { status: "FAIL", reasons: ["x"] } : { status: "PASS", reasons: [] }; });
+  assert.equal(r.status, "completed");
+  assert.deepEqual(order.filter((x) => ["gate", "send", "wait", "stop"].includes(x)), ["gate", "send", "wait", "stop", "gate"]);
+  for (const bad of ["send", "wait"]) {
+    r = runRoute({ ...o, gate: "g" }, mkp(bad), routes, () => ({ status: "FAIL", reasons: ["x"] }));
+    assert.equal(r.status, "gate-failed"); assert.match(r.gate.reasons.join(), /failed: boom/);
+  }
+});

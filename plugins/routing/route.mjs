@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, writeRequest } from "../gate/server/store.mjs";
-import { runGate } from "../gate/server/gate.mjs";
+import { runGate, gateOpts } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -57,15 +57,22 @@ const base = (p) => p.split("/")[0];
 // Owner decision 21: full-access/bypass/yolo only inside a throwaway worktree; elsewhere drop --mode (provider default).
 export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 
-/** Run the gate in the agent's cwd; on the first failure re-prompt once (decision 47), on the second return FAIL to the caller. */
-export function callerGate(o, agentId, paseo, gate = runGate) {
-  const cwdOf = () => { const r = paseo(["ls"]); return (Array.isArray(r) ? r : []).find((a) => a.id === agentId)?.cwd; };
-  let cwd = cwdOf();
+/** Run the gate in the agent's cwd with the same options the plugin hook uses (gateOpts). First failure: re-prompt once (decision 47) and block until the agent is idle; freeze it; second gate. */
+export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
+  // `paseo ls` abbreviates the home folder as "~"
+  const cwdOf = () => { const r = paseo(["ls"]); const c = (Array.isArray(r) ? r : []).find((a) => a.id === agentId)?.cwd; return c?.replace(/^~(?=[\\/])/, os.homedir()); };
+  const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
-  let res = gate(cwd, { cmd: o.gate });
+  let res = gate(cwd, gateOpts(routes, cwd, o.gate));
   if (res.status === "PASS") return { status: "PASS", reasons: [], attempts: 0 };
-  paseo(["send", agentId, "Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish."]);
-  res = gate(cwdOf() ?? cwd, { cmd: o.gate });
+  if (routes.gateRetry === false) return { status: "FAIL", reasons: res.reasons, attempts: 1 };
+  const fail = (why) => ({ status: "FAIL", reasons: [...res.reasons, why], attempts: 1 });
+  const s = paseo(["send", agentId, "Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish."]);
+  if (s?.error) return fail("re-prompt failed: " + String(s.error).slice(0, 120));
+  const w = paseo(["wait", agentId, "--timeout", "900"]);
+  if (w?.error) return fail("wait for re-prompt failed: " + String(w.error).slice(0, 120));
+  paseo(["stop", agentId]); // freeze: the second gate must judge the final tree, not one the agent is still editing
+  res = gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate));
   return { status: res.status, reasons: res.reasons, attempts: 1 };
 }
 
@@ -98,7 +105,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (j.status === "completed") {
       if (!o.gate) return { used: prov, agentId: j.agentId, status: "completed", trace };
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
-      const g = callerGate(o, j.agentId, paseo, gate);
+      const g = callerGate(o, j.agentId, paseo, gate, routes);
       trace.push({ provider: prov, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
       return { used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace };
     }

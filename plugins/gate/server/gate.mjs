@@ -60,6 +60,12 @@ export function scanFolder(root, budget = { left: 2 << 20 }, depth = 0) {
   return out;
 }
 
+/** The one place the gate options are built, shared by the plugin hook and the route CLI so the two paths cannot drift. */
+export function gateOpts(routes, cwd, cmd) {
+  const row = repoGate(routes, cwd);
+  return { cmd: cmd ?? row.cmd, maxLines: Number(row.maxLines ?? 400), forbid: row.forbid ?? null, allow: row.allow ?? null };
+}
+
 /**
  * Run the gate in `cwd`.
  * opts: { cmd, maxLines = 400, forbid (RegExp source or null), allow (RegExp source or null) }
