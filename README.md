@@ -91,6 +91,21 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 
 * Benchmark only; not in routing unless the owner approves.
 
+**Harness comparison for the same model** (same model, different harness; Performance is normalised inside this table)
+
+| Model | Harness | Set A (7) | Set B (10) | Set C (3) | Median s | Performance |
+|---|---|---|---|---|---|---|
+| Qwen3.8-27B (single GPU) | OpenCode | 7/7 | 9/10 | 2/3 | 167 | 0.83 |
+| Qwen3.8-27B-NVFP (2-node cluster) | Qwen Code | 6/7 | 9/10 | 2/3 | 109 | 0.82 |
+| Qwen3.8-27B-NVFP (2-node cluster) | Codex | 6/7 | 8/10 | 2/3 | 121 | 0.77 |
+| Qwen3.8-27B (single GPU) | Qwen Code | 7/7 | 7/10 | 2/3 | 115 | 0.75 |
+| Qwen3.8-27B-NVFP (2-node cluster) | OpenCode | 6/7 | 6/10 | 2/3 | 152 | 0.65 |
+| Laptop Qwen3.5-9B, 64k | Qwen Code | 6/7 | 4/10 | 3/3 | 125 | 0.63 |
+| Qwen3.8-27B (single GPU) | Codex | 7/7 | 6/10 | 1/3 | 233 | 0.60 |
+| Laptop Qwen3.5-9B, 32k | Qwen Code | 7/7 | 1/10 | 3/3 | 76 | 0.55 |
+| Laptop Qwen3.5-9B, 64k | OpenCode | 7/7 | 1/10 | 3/3 | 101 | 0.53 |
+| Laptop Qwen3.5-9B, 32k | OpenCode | 4/7 | 0/10 | 1/3 | 625 | 0.19 |
+
 ### Qoder tiers (qodercli 1.1.81)
 
 Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B, then credits per task (cheaper first). Partial rows count the cells done so far and are marked (partial).
@@ -108,7 +123,7 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 | GLM-5.3-Flash | 7/7 | 3/10 | 3/3 | 132 | 0.60 | 0.10x | 0.63 |
 | DeepSeek-V4-Pro | 6/7 | 4/10 | 2/3 | 132 | 0.55 | 0.50x | 2.93 |
 
-Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs); other cells are flat rate or local.
+Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.74 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs); other cells are flat rate or local.
 
 Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
 
@@ -188,7 +203,8 @@ Creating the agent can take 2+ minutes while the daemon is saturated or a provid
 
 Edit task types (`code-edit`, `test-scaffold`) outside `--new-workspace worktree` run without their full-access mode and wait for a permission nobody answers; the trace now says so. Use `--new-workspace worktree`, or a read-only type (`summarise`, `review`), which run in the provider default mode and fail if they changed files in the folder (list: `readOnlyTypes` in the routes file).
 
-**Read-only providers (decided 06-11, live evidence).** A read-only type runs each provider in its read-only mode: `plan` for Claude, OpenCode and the Qwen providers (plus the readguard/hook file boundary), `dontAsk` for Qoder (a Write, a shell command and a Read outside the task folder were all refused live; a Read inside the folder is allowed, so keep secrets out of the task folder). Codex has no read-only mode in Paseo (Default Permissions, Auto-review and Full Access can all write in the folder), so it is not in the `summarise` or `review` chains and a read-only type skips it; the folder-changed post-check stays as the backstop.
+**Read-only providers (decided 06-11, live evidence).** A read-only type runs each provider in its read-only mode: `plan` for Claude, OpenCode and the Qwen providers (plus the readguard/hook file boundary), `dontAsk` for Qoder (a Write, a shell command and a Read outside the task folder were all refused live; but a Read INSIDE the folder is allowed, and an in-cwd `.env` was read and returned in round 3, so Qoder is NOT allowed on read-only types: only providers with an enforced sensitive-read refusal, claude-clean (PreToolUse hook) and the Qwens (readguard), may run `summarise`/`review`. A `--provider qoder/...` override on such a type is refused at once; `routes.readOnlyEnforced` overrides the list). Residual risk: the text-level guards can be evaded by shell tricks such as `cat .e
+v`; they are a layer, not a sandbox, so keep secrets out of the task folder anyway. Codex has no read-only mode in Paseo (Default Permissions, Auto-review and Full Access can all write in the folder), so it is not in the `summarise` or `review` chains and a read-only type skips it; the folder-changed post-check stays as the backstop.
 
 ### `just: command not found` right after setup
 

@@ -308,4 +308,13 @@ for line in ["DB_PASSWORD=hunter2hunter2hunter2", '{"token":"abcdefghijklmnopqrs
     check("r4 scanner pattern hits " + line[:20], any(p.search(line) for p, _, _ in s._COMPILED))
 for line in ["token = parse_the_user_token_value", "password=short1", "# api_key comes from the environment"]:
     check("r4 scanner pattern clean " + line[:20], not any(p.search(line) for p, _, _ in s._COMPILED))
+# round 5: canonical secrets the first patterns missed; fixtures are split so this file does not trip its own scanner
+J = lambda *a: "".join(a)
+for line in [J("AWS_SECRET_ACCESS_KEY=", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"), J('DB_PASSWORD="', 'my.secret.pass.w0rd.value9"'),
+             J('password: "', 'Sup3r$ecret!Passw0rd#2026"'), J('private_key="', 'MIIEvQIBADANBgkqhkiG9w0BAQEFAAS"'),
+             J("Authorization: Bear", "er abcdefghijklmnopqrstuvwxyz0123456789"), J("client_secret = ", "Zx9!kLm2#pQrSt")]:
+    check("r5 scanner hits " + line[:18], any(p.search(line) for p, _, _ in s._COMPILED))
+for line in ["token = tokens[i]", "password_field = input", "const token = await getToken(req);", "secret = os.environ['X']",
+             "if (password == confirmPassword) {", "Authorization: Bearer <token>", "private_key = load_private_key(path)", "x = {token: tokenValue}"]:
+    check("r5 scanner clean " + line[:18], not any(p.search(line) for p, _, _ in s._COMPILED))
 print("FAIL: " + ", ".join(fails) if fails else "ALL PASS"); sys.exit(1 if fails else 0)

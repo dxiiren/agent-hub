@@ -207,9 +207,9 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
   "routes": {
     "code-edit":      ["codex/gpt-6.1-terra", "codex/gpt-6.1-sol", "claude-clean/claude-sonnet-5-5", "qoder/efficient", "qwen-code-2"],
     "code-edit-easy": ["qwen-laptop", "qwen-code-2", "qoder/efficient", "codex/gpt-6-luna"],
-    "summarise":      ["qwen-laptop", "qoder/efficient", "qwen-code-2", "codex/gpt-6-luna"],
+    "summarise":      ["qwen-laptop", "qwen-code-2", "claude-clean/claude-haiku-5-5"],
     "test-scaffold":  ["qwen-laptop", "qoder/efficient", "codex/gpt-6.1-sol", "claude-clean/claude-haiku-5-5"],
-    "review":         ["qwen-laptop", "qoder/efficient", "qwen-code-2", "claude-clean/claude-haiku-5-5"]
+    "review":         ["qwen-laptop", "qwen-code-2", "claude-clean/claude-haiku-5-5"]
   }
 }</code></pre></div>
 <p>Each entry is <code>provider/model</code> as the daemon config names them; <code>paseo provider models &lt;id&gt;</code> lists them. The provider part is everything before the first <code>/</code>, and that is the key into <code>slots</code> and <code>modes</code>. The defaults come from the capability bench in section 11: gate pass first, then cost, then speed.</p>
@@ -550,20 +550,20 @@ docker compose up -d --build</code></pre></div>
 <p class="sortrule">Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B, then credits per task (cheaper first). Partial rows count the cells done so far and are marked (partial). Click a column header to sort.</p>
 <p>Only valid runs are counted: the assistant model in the record must equal the requested tier. All nine tiers have finished set B (10 hard edits, 420 s cap).</p>
 <div class="tbl"><table>
-<tr><th>Qoder tier</th><th>Set A (7)</th><th class="num">Set B (10)</th><th class="num">Set C (3)</th><th class="num">Median s</th><th class="num">Performance</th><th class="num">Credit multiplier</th><th class="num">Credits charged per task</th></tr>
-<tr><td>Kimi-K3.1-Pro</td><td>7/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">87</td><td class="num">0.92</td><td class="num">1.00x</td><td class="num">7.22</td></tr>
-<tr><td>GLM-5.3</td><td>6/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">70</td><td class="num">0.91</td><td class="num">0.80x</td><td class="num">8.34</td></tr>
-<tr><td>DeepSeek-Flash</td><td>7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">83</td><td class="num">0.91</td><td class="num">0.10x</td><td class="num">0.59</td></tr>
-<tr><td>Fast</td><td>6/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">64</td><td class="num">0.90</td><td class="num">0.80x</td><td class="num">5.63</td></tr>
-<tr><td>Efficient</td><td>7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">179</td><td class="num">0.87</td><td class="num">0.00x</td><td class="num">0.00 (records ~0.74)</td></tr>
-<tr><td>Qwen3.8-Flash</td><td>7/7</td><td class="num">8/10</td><td class="num">2/3</td><td class="num">99</td><td class="num">0.80</td><td class="num">0.10x</td><td class="num">0.78</td></tr>
-<tr><td>MiniMax-M3.1-Flash</td><td>7/7</td><td class="num">6/10</td><td class="num">3/3</td><td class="num">143</td><td class="num">0.74</td><td class="num">0.10x</td><td class="num">1.54</td></tr>
-<tr><td>Qwen3.8-Max</td><td>6/7</td><td class="num">5/10</td><td class="num">3/3</td><td class="num">220</td><td class="num">0.65</td><td class="num">0.50x</td><td class="num">14.22</td></tr>
-<tr><td>GLM-5.3-Flash</td><td>7/7</td><td class="num">3/10</td><td class="num">3/3</td><td class="num">132</td><td class="num">0.60</td><td class="num">0.10x</td><td class="num">0.63</td></tr>
-<tr><td>DeepSeek-V4-Pro</td><td>6/7</td><td class="num">4/10</td><td class="num">2/3</td><td class="num">132</td><td class="num">0.55</td><td class="num">0.50x</td><td class="num">2.93</td></tr>
+<tr><th>Qoder tier</th><th class="num">Set A (7)</th><th class="num">Set B (10)</th><th class="num">Set C (3)</th><th class="num">Median s</th><th class="num">Performance</th><th class="num">Credit multiplier</th><th class="num">Credits charged per task</th></tr>
+<tr><td>Kimi-K3.1-Pro</td><td class="num">7/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">87</td><td class="num">0.92</td><td class="num">1.00x</td><td class="num">7.22</td></tr>
+<tr><td>GLM-5.3</td><td class="num">6/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">70</td><td class="num">0.91</td><td class="num">0.80x</td><td class="num">8.34</td></tr>
+<tr><td>DeepSeek-Flash</td><td class="num">7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">83</td><td class="num">0.91</td><td class="num">0.10x</td><td class="num">0.59</td></tr>
+<tr><td>Fast</td><td class="num">6/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">64</td><td class="num">0.90</td><td class="num">0.80x</td><td class="num">5.63</td></tr>
+<tr><td>Efficient</td><td class="num">7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">179</td><td class="num">0.87</td><td class="num">0.00x</td><td class="num">0.00 (records ~0.74)</td></tr>
+<tr><td>Qwen3.8-Flash</td><td class="num">7/7</td><td class="num">8/10</td><td class="num">2/3</td><td class="num">99</td><td class="num">0.80</td><td class="num">0.10x</td><td class="num">0.78</td></tr>
+<tr><td>MiniMax-M3.1-Flash</td><td class="num">7/7</td><td class="num">6/10</td><td class="num">3/3</td><td class="num">143</td><td class="num">0.74</td><td class="num">0.10x</td><td class="num">1.54</td></tr>
+<tr><td>Qwen3.8-Max</td><td class="num">6/7</td><td class="num">5/10</td><td class="num">3/3</td><td class="num">220</td><td class="num">0.65</td><td class="num">0.50x</td><td class="num">14.22</td></tr>
+<tr><td>GLM-5.3-Flash</td><td class="num">7/7</td><td class="num">3/10</td><td class="num">3/3</td><td class="num">132</td><td class="num">0.60</td><td class="num">0.10x</td><td class="num">0.63</td></tr>
+<tr><td>DeepSeek-V4-Pro</td><td class="num">6/7</td><td class="num">4/10</td><td class="num">2/3</td><td class="num">132</td><td class="num">0.55</td><td class="num">0.50x</td><td class="num">2.93</td></tr>
 </table></div>
-<p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
-<p>The Flash tiers cost under one credit per task, and DeepSeek-Flash passed all 10 hard edits for 0.84 credits per task, so it is the cheap Qoder lane for code edits (Fast also passes 10/10 but costs 7.9 credits per task). Qwen3.8-Max (5/10 for 19.6 credits), DeepSeek-V4-Pro (4/10), MiniMax (6/10) and GLM-5.3-Flash (3/10) are not routed.</p>
+<p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.74 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
+<p>The Flash tiers cost under one credit per task, and DeepSeek-Flash passed all 10 hard edits for 0.59 credits per task, so it is the cheap Qoder lane for code edits (Fast also passes 10/10 but costs 5.6 credits per task). Qwen3.8-Max (5/10 for 14.2 credits), DeepSeek-V4-Pro (4/10), MiniMax (6/10) and GLM-5.3-Flash (3/10) are not routed.</p>
 
 <h3>History: superseded versions</h3>
 <div class="tbl"><table>
@@ -578,7 +578,7 @@ docker compose up -d --build</code></pre></div>
 <h3>The routing this produced</h3>
 <ul>
 <li><b>Hard code edits:</b> Codex terra (20 of 20 over two runs), then sol, then Claude Sonnet, then the cheap Qoder tier DeepSeek-Flash, then the free lanes: Qwen Code on Qwen3.8-27B-NVFP, then Qwen3.8-27B (Qwen Code for every Qwen model, never Codex or OpenCode on the office models). Gate first, then cost, then speed.</li>
-<li><b>Easy edits, summaries, reviews:</b> the laptop 9B first (free), then Qoder and the office servers, then a cheap Codex or Haiku. Edits are limited to one small file with one visible test.</li>
+<li><b>Easy edits, summaries, reviews:</b> the laptop 9B first (free), then the office Qwens and Haiku (summaries and reviews never run on Qoder: no enforced read guard there). Edits are limited to one small file with one visible test.</li>
 <li><b>Test scaffolds (c2):</b> avoid Opus and Codex terra for this task; the laptop 9B, Qoder Efficient and Codex sol passed it.</li>
 <li>Qwen3.8-27B-NVFP (2-node cluster) (9/10 via Qwen Code) goes before Qwen3.8-27B (7/10, all inside the 15-minute cap); both are long-timeout lanes. Final ordering for hard edits: Codex terra, Codex sol, Claude Sonnet, Qoder DeepSeek-Flash, Qwen Code on Qwen3.8-27B-NVFP, Qwen Code on Qwen3.8-27B.</li>
 </ul>

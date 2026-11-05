@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SECRET_KEY = "(?:api[_-]?key|token|secret|passw(?:or)?d)";
-// quoted value (16+ chars) | unquoted value (16+ chars that holds a digit, so `token = parse_the_user_token_value` stays clean); the key may be a JSON key ("token": "...") and carry a prefix (DB_PASSWORD)
+// Key names holding a secret (with any prefix/suffix: DB_PASSWORD, aws_secret_access_key, password_field), then : or =, then a value.
+const SECRET_KEY = String.raw`(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*`;
+// value: quoted 8+ non-space chars holding a digit or punctuation (or 16+ plain chars) | unquoted 8+ with a digit/punctuation and no brackets/parens, so `token = tokens[i]`, `password_field = input` and `token = parse_the_user_token` stay clean
+const PUNCT = String.raw`[\d!@#$%^&*+]`;
 export const SECRET_RE = new RegExp(
-  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|` + SECRET_KEY +
-  String.raw`['"]?\s*[:=]\s*(?:['"][A-Za-z0-9_\-\/+]{16,}['"]|['"]?(?=[A-Za-z0-9_\-\/+]*\d)[A-Za-z0-9_\-\/+]{16,}))`, "i");
+  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9\-._~+/]{20,}|aws\w*secret\w*['"]?\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}|` + SECRET_KEY +
+  String.raw`['"]?\s*[:=]\s*(?:['"](?=[^'"\s]*` + PUNCT + String.raw`)[^'"\s]{8,}['"]|['"][A-Za-z0-9_\-\/+]{16,}['"]|['"]?(?=[^\s'"\[\]()<>{},;]*` + PUNCT + String.raw`)[^\s'"\[\]()<>{},;]{8,}))`, "i");
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.
 const EMPTY_DIR = mkdtempSync(join(tmpdir(), "agent-hub-nohooks-"));
@@ -83,7 +85,7 @@ export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = 
   return out;
 }
 
-const isPyc = (f) => f.includes("__pycache__") || f.endsWith(".pyc");
+const isPyc = (f) => f.includes("__pycache__") || f.endsWith(".pyc"); // exempt only from the allow-list; forbid applies to every path
 
 /** Paths git status lists (changed, intent-to-add, untracked), NUL-separated, no rename pairing. */
 function statusPaths(cwd) {
@@ -170,7 +172,7 @@ export function runGate(cwd, opts = {}) {
     } catch { reasons.push("scan incomplete: could not list ignored files"); }
   }
   if (files.includes(".gitignore")) reasons.push(".gitignore changed");
-  const bad = files.filter((f) => (forbid && rx(forbid).test(f)) || (allow && !rx(allow).test(f)));
+  const bad = [...raw.filter((f) => forbid && rx(forbid).test(f)), ...files.filter((f) => allow && !rx(allow).test(f))];
   if (bad.length) reasons.push("path not allowed: " + bad.join(","));
   if (cmd) {
     const r = spawnSync(cmd, { cwd, shell: true, encoding: "utf8", timeout: 120_000 });

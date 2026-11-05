@@ -53,8 +53,17 @@ PATTERNS: list[tuple[str, str, bool]] = [
         True,
     ),
     (r"(?i)\b(?:password|passwd)['\"\s]*[=:]\s*['\"][^'\"\s]{8,}['\"]", "hardcoded password", True),
-    # unquoted env-file lines (DB_PASSWORD then an equals sign) and JSON values: 16+ value chars holding a digit, so identifiers stay clean
-    (r"(?i)(?:api[_\-]?key|secret|token|passw(?:or)?d)['\"]?\s*[=:]\s*['\"]?(?=[0-9A-Za-z\-_/+]*\d)[0-9A-Za-z\-_/+]{16,}", "unquoted or JSON secret", True),
+    # key names holding a secret (any prefix/suffix) then : or = then a value. Quoted: 8+ non-space chars holding a digit or punctuation, or 16+ plain chars.
+    # Unquoted: 8+ chars with a digit/punctuation and no brackets/parens, so `token = tokens[i]` and `password_field = input` stay clean.
+    (
+        r"(?i)(?:secret|passw(?:or)?d|pwd|token|api[_\-]?key|private[_\-]?key|access[_\-]?key|credential)\w*['\"]?\s*[:=]\s*"
+        r"(?:['\"](?=[^'\"\s]*[\d!@#$%^&*+])[^'\"\s]{8,}['\"]|['\"][0-9A-Za-z\-_/+]{16,}['\"]"
+        r"|['\"]?(?=[^\s'\"\[\]()<>{},;]*[\d!@#$%^&*+])[^\s'\"\[\]()<>{},;]{8,})",
+        "secret-named key with a value",
+        True,
+    ),
+    (r"(?i)\baws\w*secret\w*['\"]?\s*[:=]\s*['\"]?[A-Za-z0-9/+=]{40}", "AWS secret access key", False),
+    (r"\bBearer\s+[A-Za-z0-9\-._~+/]{20,}", "Bearer token", True),
 ]
 COMMIT_ALL = re.compile(r"(^|\s)(-[A-Za-z]*a[A-Za-z]*|--all)\b")
 _COMPILED = [(re.compile(p), kind, generic) for p, kind, generic in PATTERNS]

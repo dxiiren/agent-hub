@@ -42,7 +42,6 @@
     ],
     "summarise": [
       "qwen-laptop",
-      "qoder/efficient",
       "qwen-code-2"
     ],
     "test-scaffold": [
@@ -53,7 +52,6 @@
     ],
     "review": [
       "qwen-laptop",
-      "qoder/efficient",
       "qwen-code-2",
       "claude/latest-haiku"
     ]

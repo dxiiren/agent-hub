@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { grantReads, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
-const routes = { readOnlyModes: { codex: "auto", qwen: "plan" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
+const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop", "opencode", "qoder"]; // fake providers in tests: enforcement is tested separately
+const routes = { readOnlyEnforced: ALL, readOnlyModes: { codex: "auto", qwen: "plan" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
   const calls = [];
   const f = (args) => { calls.push(args); return args[0] === "ls" ? (script.ls ?? []) : args[0] === "stop" ? {} : script.run(args); };
@@ -290,7 +291,7 @@ test("read-only types use each provider's read-only mode, in or out of a worktre
   assert.deepEqual(Object.fromEntries(Object.entries(prov).map(([k]) => [k, READ_ONLY_MODES[k]])), prov);
   assert.equal(READ_ONLY_MODES.codex, undefined);
   for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
-    const r2 = { slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
+    const r2 = { readOnlyEnforced: ALL, slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
     const f = fake({ run: () => ({ status: "completed", agentId: "A" }) });
     runRoute({ ...o, type: "summarise", mode: "bypassPermissions", worktree }, f, r2);
     const run = f.calls.find((c) => c[0] === "run");
@@ -394,7 +395,7 @@ test("grantReads: in-cwd read is allowed and waits again; outside path, no path 
 });
 test("a read-only route whose agent stops on a read of a cwd file completes without a fallback; a read outside cwd or a write still fails", () => {
   const { d, cwd } = sandbox();
-  const r2 = { readOnlyModes: { qwen: "plan" }, slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
+  const r2 = { readOnlyEnforced: ALL, readOnlyModes: { qwen: "plan" }, slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
   let path = j2(cwd, "app.log");
   const p = (a) => {
     if (a[0] === "ls") return [];
@@ -453,9 +454,9 @@ test("claude-wrap merges the hub rules into the --settings Paseo passes, so they
   assert.equal(m.fastMode, false); assert.deepEqual(m.permissions.deny, ["Read(.env)"]);
 });
 
-import { readFileSync as rfs } from "node:fs";
+import { readFileSync as rfsR5 } from "node:fs";
 import { SENSITIVE_GLOBS } from "../readguard.mjs";
-const tpl = JSON.parse(rfs(new URL("../../../config/claude-clean/readonly-settings.template.json", import.meta.url), "utf8"));
+const tpl = JSON.parse(rfsR5(new URL("../../../config/claude-clean/readonly-settings.template.json", import.meta.url), "utf8"));
 test("claude read-only mode is plan or default, and the read-only settings deny every tool that writes or reaches out", async () => {
   for (const k of ["claude", "claude-clean"]) assert.ok(["plan", "default"].includes(READ_ONLY_MODES[k]), k);
   for (const t of ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "mcp__*"]) assert.ok(tpl.permissions.deny.includes(t), t);
@@ -580,4 +581,29 @@ test("codex has no read-only mode: a read-only type skips it, an edit type still
   assert.deepEqual(runs, ["qwen-code/b"]); assert.match(JSON.stringify(r.trace), /no read-only mode/);
   runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: process.cwd(), worktree: true }, p, rt);
   assert.deepEqual(runs, ["codex/a"]);
+});
+
+// ---- round 5: read-only chains only on providers with an enforced sensitive-read guard ----
+import { existsSync as exR5 } from "node:fs";
+import { fileURLToPath as fupR5 } from "node:url";
+import { READ_ONLY_ENFORCED, readOnlyEnforced } from "../route.mjs";
+test("--provider qoder/efficient on a read-only type is refused fast, nothing is launched", () => {
+  const p = fake({ run: () => ({ status: "completed", agentId: "A" }) });
+  for (const type of ["review", "summarise"]) for (const prov of ["qoder/efficient", "opencode/x", "codex/a", "claude/not-clean-id-only"].slice(0, 3)) {
+    const r = runRoute({ ...o, type, provider: prov }, p, { slots: {}, routes: { review: [], summarise: [] } });
+    assert.equal(r.used, null); assert.match(r.trace[0].error, /refused on/);
+  }
+  assert.ok(!p.calls.some((c) => c[0] === "run"));
+  assert.ok(readOnlyEnforced("qwen-laptop") && readOnlyEnforced("claude-clean") && !readOnlyEnforced("qoder") && !readOnlyEnforced("claude"));
+});
+test("no read-only chain in routes.template.json / routes.local.json holds an unenforced provider", () => {
+  const dir = fupR5(new URL("../../../config/routes/", import.meta.url));
+  for (const f of ["routes.template.json", "routes.local.json"]) {
+    const fp = dir + f; if (!exR5(fp)) continue;
+    const r = JSON.parse(rfsR5(fp, "utf8"));
+    for (const t of r.readOnlyTypes ?? ["summarise", "review"]) for (const e of r.routes[t] ?? []) {
+      const b = e.split("/")[0];
+      assert.ok(b === "claude" || READ_ONLY_ENFORCED.includes(b), `${f} ${t}: ${e}`);
+    }
+  }
 });

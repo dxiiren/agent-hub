@@ -245,3 +245,14 @@ test("unquoted .env lines and JSON values are secrets; code that merely names a 
   const d = repo(); writeFileSync(join(d, "e.env"), "DB_PASSWORD" + EQ + "hunter2hunter2hunter2\n");
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern/);
 });
+
+test("round 5: canonical secrets are caught, normal code is not", () => {
+  for (const l of ["AWS_SECRET_ACCESS_KEY=" + "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", 'DB_PASS' + 'WORD="' + 'my.secret.pass.w0rd.value9"', 'password: "' + 'Sup3r$ecret!Passw0rd#2026"', 'private_key="' + 'MIIEvQIBADANBgkqhkiG9w0BAQEFAAS"', "Authorization: Bear" + "er abcdefghijklmnopqrstuvwxyz0123456789", "client_secret = " + "Zx9!kLm2#pQrSt"]) assert.ok(SECRET_RE.test(l), l.slice(0, 18));
+  for (const l of ["token = tokens[i]", "password_field = input", "const token = await getToken(req);", "secret = os.environ['X']", "Authorization: Bearer <token>", "private_key = load_private_key(path)"]) assert.ok(!SECRET_RE.test(l), l);
+});
+test("round 5: forbid applies to __pycache__ and .pyc paths", () => {
+  const d = mkdtempSync(join(tmpdir(), "pyc-")); const g = (...a) => execFileSync("git", a, { cwd: d });
+  g("init", "-q"); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i");
+  mkdirSync(join(d, "__pycache__")); writeFileSync(join(d, "__pycache__", "x.txt"), "hi");
+  assert.match(runGate(d, { cmd: OK, forbid: "pycache" }).reasons.join(), /path not allowed: __pycache__\/x\.txt/);
+});
