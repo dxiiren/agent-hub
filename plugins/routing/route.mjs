@@ -4,7 +4,7 @@
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
 // Usage: route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -62,8 +62,15 @@ export function withRetry(paseo, { tries = 6, sleep = (ms) => Atomics.wait(new I
 const base = (p) => p.split("/")[0];
 // Owner decision 21: full-access/bypass/yolo only inside a throwaway worktree; elsewhere drop --mode (provider default).
 export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
-// Read-only task types write nothing, so they get the provider's configured mode anywhere (otherwise the agent waits for a permission nobody answers and the run ends as `permission`).
+// Read-only task types never get an unsafe mode outside a worktree (same rule as every type): a "summarise" prompt must not be able to edit files. They run in the provider's default mode, and a post-check fails the task if the folder changed.
 export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["summarise", "review"]).includes(type);
+/** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
+export function snapshot(dir, max = 5000) {
+  const out = []; const walk = (d) => { let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of es) { if (out.length >= max) return; if (e.name === ".git" || e.name === "node_modules") continue; const p = join(d, e.name);
+      if (e.isDirectory()) walk(p); else { try { out.push(p + "|" + statSync(p).mtimeMs); } catch { /* vanished */ } } } };
+  walk(dir); return out.sort().join(String.fromCharCode(10));
+}
 
 /** Run the gate in the agent's cwd with the same options the plugin hook uses (gateOpts). First failure: re-prompt once (decision 47) and block until the agent is idle; freeze it; second gate. */
 export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
@@ -105,13 +112,14 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const mode = o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
     if (o.worktree) args.push("--new-workspace", "worktree");
-    if (mode && (o.worktree || !unsafeMode(mode) || readOnlyType(o.type, routes))) args.push("--mode", mode);
+    if (mode && (o.worktree || !unsafeMode(mode))) args.push("--mode", mode);
     else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: needs --new-workspace worktree` });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels
     if (o.gate) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate);
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
+    const guard = !o.worktree && readOnlyType(o.type, routes) ? snapshot(o.cwd) : null;
     let j = paseo([...args, o.prompt]);
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
@@ -119,6 +127,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     }
     const hint = j.status === "permission" ? { error: `agent waited for a permission: type ${o.type} edits files, but outside --new-workspace worktree its full-access mode is dropped (decision 21). Run it in a git repo with --new-workspace worktree, or use a read-only type (summarise, review).` } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
+    if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
+      trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
+      return { used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace };
+    }
     if (j.status === "completed") {
       if (!o.gate) return { used: prov, agentId: j.agentId, status: "completed", trace };
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.

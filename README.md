@@ -163,7 +163,7 @@ Creating the agent can take 2+ minutes while the daemon is saturated or a provid
 
 ### A task ends as `permission`
 
-Edit task types (`code-edit`, `test-scaffold`) outside `--new-workspace worktree` run without their full-access mode and wait for a permission nobody answers; the trace now says so. Use `--new-workspace worktree`, or a read-only type (`summarise`, `review`), which keeps its configured mode anywhere (override the list with `readOnlyTypes` in the routes file).
+Edit task types (`code-edit`, `test-scaffold`) outside `--new-workspace worktree` run without their full-access mode and wait for a permission nobody answers; the trace now says so. Use `--new-workspace worktree`, or a read-only type (`summarise`, `review`), which run in the provider default mode and fail if they changed files in the folder (list: `readOnlyTypes` in the routes file).
 
 ### `just: command not found` right after setup
 

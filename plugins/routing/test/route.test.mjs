@@ -220,15 +220,25 @@ test("paseo CLI crash text (top-level await, no agentId, non-zero exit) is trans
   assert.equal(n, 6); assert.deepEqual(w, [2007, 4007, 8007, 16007, 32007]);
 });
 
-test("read-only types (summarise, review) keep the unsafe mode outside a worktree; edit types still drop it", () => {
-  const r2 = { ...routes, modes: { codex: "full-access", qwen: "yolo" }, routes: { summarise: ["codex/a"], "code-edit": ["codex/a"] } };
+test("read-only types never get an unsafe mode outside a worktree; a caller mode override is ignored too", () => {
+  const r2 = { ...routes, modes: { codex: "full-access", qwen: "yolo" }, routes: { summarise: ["codex/a"], review: ["qwen/b"] } };
   const mk = () => fake({ run: () => ({ status: "completed", agentId: "A" }) });
-  let p = mk(); runRoute({ ...o, type: "summarise" }, p, r2);
-  let run = p.calls.find((c) => c[0] === "run");
-  assert.equal(run[run.indexOf("--mode") + 1], "full-access");
-  p = mk(); runRoute({ ...o, type: "code-edit" }, p, r2);
-  assert.ok(!p.calls.find((c) => c[0] === "run").includes("--mode"));
-  assert.ok(readOnlyType("review") && !readOnlyType("test-scaffold") && readOnlyType("x", { readOnlyTypes: ["x"] }));
+  for (const [type, mode] of [["summarise", undefined], ["review", undefined], ["summarise", "yolo"], ["review", "bypassPermissions"]]) {
+    const p = mk(); runRoute({ ...o, type, mode }, p, r2);
+    const run = p.calls.find((c) => c[0] === "run");
+    assert.ok(!run.some((a) => /full-access|yolo|bypass/i.test(String(a))), type + " " + mode);
+  }
+  assert.ok(readOnlyType("review") && !readOnlyType("test-scaffold"));
+});
+test("a read-only task that changed files in its folder is failed", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "ro-"));
+  const r2 = { ...routes, routes: { summarise: ["codex/a"] } };
+  const bad = fake({ run: () => { writeFileSync(join(d, "new.txt"), "x"); return { status: "completed", agentId: "A" }; } });
+  const r = runRoute({ ...o, type: "summarise", cwd: d }, bad, r2);
+  assert.equal(r.status, "failed-readonly-changed");
+  const ok = fake({ run: () => ({ status: "completed", agentId: "A" }) });
+  assert.equal(runRoute({ ...o, type: "summarise", cwd: d }, ok, r2).status, "completed");
 });
 test("an edit type that ends in `permission` outside a worktree returns a clear error, not a bare status", () => {
   const p = fake({ run: () => ({ status: "permission", agentId: "P" }) });
