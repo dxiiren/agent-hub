@@ -86,22 +86,60 @@ ASSIGN = re.compile(r"(?:^|[;&|\s])(?:export\s+|declare\s+|local\s+|typeset\s+)?
 SUBST_WORDS = re.compile(r"\benv\b|\.env|pem|\bkey|id_|cred|ppk|secret|passw", re.I)
 
 
+_COMB = re.compile(ASSIGN.pattern + r"|\$\{(\w+)\}|\$(\w+)")
+_AMBIGUOUS = re.compile(r"\beval\b|\bread\b|printf\s+-v|\b(?:declare|typeset|export)\s+-n|\$\{[^}]*[^\w}][^}]*\}|\$\{!")
+_MAX_CMD = 64 * 1024
+_MAX_VALUE = 4096
+
+
 def _expand_assignments(command: str) -> str | None:
-    """Expand simple in-command assignments (`x=.e; cat ${x}nv`) so the real name is scanned; chains are followed a few passes.
-    Self-referencing variables are skipped; None = the text grew past 4x the original (floor 1 KB, cap 64 KB), an expansion bomb: the caller blocks."""
-    vals = {m.group(1): m.group(2).strip("'\"") for m in ASSIGN.finditer(command)}
-    vals = {k: v for k, v in vals.items() if not re.search(r"\$\{?" + re.escape(k) + r"(?![A-Za-z0-9_])", v)}
-    limit = min(64 * 1024, max(4 * len(command), 1024))
-    out = command
-    for _ in range(4):
-        prev = out
-        for k, v in vals.items():
-            out = re.sub(r"\$\{" + re.escape(k) + r"\}|\$" + re.escape(k) + r"(?![A-Za-z0-9_])", lambda _m, v=v: v, out)
-            if len(out) > limit:
+    """Expand in-command assignments the way the shell does: strictly left to right, each value expanded against what is already set
+    (`a=.e; a=${a}nv; cat $a` -> `cat .env`; a name not set yet stays literal, as in the shell). The size is checked BEFORE every
+    substitution: past 4x the original (floor 1 KB, cap 64 KB), a value over 4 KB, or an ambiguous construct (eval, read, `${a:-x}`, indirection)
+    next to an assignment returns None and the caller blocks."""
+    if len(command) > _MAX_CMD:
+        return None
+    if ASSIGN.search(command) and _AMBIGUOUS.search(command):
+        return None
+    limit = min(_MAX_CMD, max(4 * len(command), 1024))
+    env: dict[str, str] = {}
+    out: list[str] = []
+    size = pos = 0
+
+    def put(text: str) -> bool:
+        nonlocal size
+        size += len(text)
+        out.append(text)
+        return size <= limit
+
+    for m in _COMB.finditer(command):
+        if not put(command[pos:m.start()]):
+            return None
+        pos = m.end()
+        if m.group(1):  # assignment: the value is expanded against the values set so far, the text itself stays as written
+            val = m.group(2).strip("'\"")
+            sq = m.group(2).startswith("'")  # single quotes: no expansion
+            if not sq:
+                parts, p = [], 0
+                for r in re.finditer(r"\$\{(\w+)\}|\$(\w+)", val):
+                    parts.append(val[p:r.start()]); p = r.end()
+                    parts.append(env.get(r.group(1) or r.group(2), r.group(0)))
+                    if sum(map(len, parts)) > _MAX_VALUE:
+                        return None
+                parts.append(val[p:]); val = "".join(parts)
+            if len(val) > _MAX_VALUE:
                 return None
-        if out == prev:
-            break
-    return out
+            env[m.group(1)] = val
+            if not put(m.group(0)):
+                return None
+        else:
+            name = m.group(3) or m.group(4)
+            ref = m.group(0)
+            if not put(env.get(name, ref)):
+                return None
+    if not put(command[pos:]):
+        return None
+    return "".join(out)
 
 
 def _var_glued(command: str) -> str | None:
@@ -118,6 +156,8 @@ def _var_glued(command: str) -> str | None:
 
 
 def blocked(command: str, _depth: int = 0) -> str | None:
+    if len(command) > _MAX_CMD:
+        return "command too long to inspect"
     if _subst_glued(command):  # what a substitution prints is unknown: fail closed on secret-ish tokens
         return "command substitution inside a path-like token"
     for text in _variants(command):  # the unexpanded command first: a plain secret path always blocks, whatever expansion does next

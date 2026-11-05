@@ -180,16 +180,25 @@ for c in ["git status", "cat README.md", "ls *.md", "echo $(date)", "ls $(pwd)/s
           "cat id_mapping.csv", "ls $(git rev-parse --show-toplevel)", "x=src; ls $x/lib", "echo $x"]:
     check("r1 allow " + c, g.blocked(c) is None)
 
-# round 1 (final), expansion bomb: bounded, blocked quickly; ordinary assignments behave
+# round 1 (final), shell-order assignment expansion with pre-checked caps
 import time
-bomb = "a=$b$b; b=$c$c; c=$d$d; d=$e$e; e=$f$f; f=$g$g; g=$h$h; h=$i$i; i=$j$j; j=$k$k; k=xxxxxxxxxxxxxxxx; cat $a"
-t0 = time.monotonic()
-check("r1 bomb blocked", g.blocked(bomb) is not None)
-check("r1 bomb fast", time.monotonic() - t0 < 2)
+fwd_bomb = "a=xxxxxxxxxxxxxxxx; " + "".join("a=$a$a; " for _ in range(14)) + "cat $a"
+rev_bomb = "a=$b$b; b=$c$c; c=$d$d; d=$e$e; e=$f$f; f=$g$g; g=$h$h; h=$i$i; i=$j$j; j=$k$k; k=xxxxxxxxxxxxxxxx; cat $a"
+for label, bomb in (("fwd", fwd_bomb), ("rev", rev_bomb)):
+    t0 = time.monotonic(); res = g.blocked(bomb); dt = time.monotonic() - t0
+    check("r1 %s bomb fast" % label, dt < 0.1)
+    if label == "fwd":
+        check("r1 fwd bomb blocked", res is not None)
+check("r1 reassign left to right", g.blocked("a=.e; a=${a}nv; cat $a") is not None)
+check("r1 two vars glued", g.blocked("a=.e;b=nv;cat $a$b") is not None)
+check("r1 later reassign does not hide an earlier use", g.blocked("a=.env; cat $a; a=ok") is not None)
+check("r1 reassigned to safe before use passes", g.blocked("a=x; a=README.md; cat $a") is None)
 check("r1 self reference does not blow up", g.blocked("a=$a$a; echo $a") is None)
 check("r1 plain X=foo passes", g.blocked("X=foo; cat $X") is None)
 check("r1 F=.env blocked", g.blocked("F=.env; cat $F") is not None)
-check("r1 plain secret blocks even with a bomb after it", g.blocked("cat .env; " + bomb) is not None)
+check("r1 ambiguous construct next to an assignment blocks", g.blocked("a=x; eval cat $a") is not None and g.blocked("a=x; cat ${a:-y}") is not None)
+check("r1 plain secret blocks even with a bomb after it", g.blocked("cat .env; " + fwd_bomb) is not None)
+check("r1 over-long command blocks", g.blocked("echo " + "x" * 70000) is not None)
 
 # round 3d: normal commands pass; a crashing hook and unparsable input block
 for c in ["git status", "cat README.md", "ls *.md", "git log --oneline -5", "python -m pytest tests/"]:
