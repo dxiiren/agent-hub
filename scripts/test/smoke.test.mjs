@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -100,6 +100,10 @@ test('office-agent: resolves the served model and launches the qwen binary with 
   try {
     const r = await runAsync([f('deploy/office/office-agent.mjs'), fakeBin(t), `http://127.0.0.1:${m.port}/v1`, 'fallback-model'], { ...process.env, FAKE_QWEN_ECHO: '1', AGENT_HUB_RESOLVE_CACHE_OFFICE: join(t, 'cache.json') });
     assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /--model office-model-1/); clean(r, 'office-agent');
+    // Qwen Code's global auto-memory is switched off for every hub-launched Qwen (a stale ~/.qwen/memories leaked one task's rules into another)
+    const sys = /SYSSETTINGS (.+)/.exec(r.stdout)?.[1]?.trim();
+    assert.ok(sys && existsSync(sys), 'QWEN_CODE_SYSTEM_SETTINGS_PATH not set to a real file: ' + r.stdout);
+    assert.equal(JSON.parse(readFileSync(sys, 'utf8')).memory.enableManagedAutoMemory, false);
   } finally { await m.close(); }
 });
 

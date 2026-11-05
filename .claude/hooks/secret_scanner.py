@@ -53,7 +53,7 @@ PATTERNS: list[tuple[str, str, bool]] = [
         True,
     ),
     (r"(?i)\b(?:password|passwd)['\"\s]*[=:]\s*['\"][^'\"\s]{8,}['\"]", "hardcoded password", True),
-    # unquoted `.env` lines (DB_PASSWORD=...) and JSON ("token":"..."): 16+ value chars holding a digit, so identifiers stay clean
+    # unquoted env-file lines (DB_PASSWORD then an equals sign) and JSON values: 16+ value chars holding a digit, so identifiers stay clean
     (r"(?i)(?:api[_\-]?key|secret|token|passw(?:or)?d)['\"]?\s*[=:]\s*['\"]?(?=[0-9A-Za-z\-_/+]*\d)[0-9A-Za-z\-_/+]{16,}", "unquoted or JSON secret", True),
 ]
 COMMIT_ALL = re.compile(r"(^|\s)(-[A-Za-z]*a[A-Za-z]*|--all)\b")

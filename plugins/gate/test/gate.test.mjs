@@ -239,8 +239,9 @@ test("node_modules and .git are scanned in a plain folder, and a nested repo ins
   assert.match(runGate(e, { cmd: OK, base }).reasons.join(), /secret pattern in nest\/k\.txt/);
 });
 test("unquoted .env lines and JSON values are secrets; code that merely names a token is not", () => {
-  for (const l of ["DB_PASSWORD=hunter2hunter2hunter2", '{"token":"abcdefghijklmnopqrstuvwxyz123456"}', 'password: "Abcdefghijklmnopqrst"', "API_KEY = abcdefghijklmnopqrstuv9"]) assert.ok(SECRET_RE.test(l), l);
-  for (const l of ["token = parse_the_user_token_value", "password=short1", "const secret = getSecretFromTheEnvironment();", '"token": "abc"', "# api_key is read from the environment"]) assert.ok(!SECRET_RE.test(l), l);
-  const d = repo(); writeFileSync(join(d, "e.env"), "DB_PASSWORD=hunter2hunter2hunter2\n");
+  const EQ = "="; // built from parts so the public-repo scan does not match the fixtures
+  for (const l of ["DB_PASSWORD" + EQ + "hunter2hunter2hunter2", '{"token":"abcdefghijklmnopqrstuvwxyz123456"}', 'password: "Abcdefghijklmnopqrst"', "API_KEY = abcdefghijklmnopqrstuv9"]) assert.ok(SECRET_RE.test(l), l);
+  for (const l of ["token = parse_the_user_token_value", "password" + EQ + "short1", "const secret = getSecretFromTheEnvironment();", '"token": "abc"', "# api_key is read from the environment"]) assert.ok(!SECRET_RE.test(l), l);
+  const d = repo(); writeFileSync(join(d, "e.env"), "DB_PASSWORD" + EQ + "hunter2hunter2hunter2\n");
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern/);
 });

@@ -2,7 +2,7 @@
 // Cached 10 min per base URL in a temp file because route.mjs and the launchers are new processes per task.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -47,3 +47,7 @@ export function syncOpencode(file, id) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && process.argv[2] === "--id") {
   try { console.log(await servedModel(process.argv[3], { fallback: process.argv[4] || "" })); } catch (e) { console.error(e.message); process.exit(1); }
 }
+
+/** Environment for every hub-launched Qwen Code (office, office 2, laptop): a system-settings file that turns its global auto-memory off, so ~/.qwen/memories (written by earlier, unrelated tasks) is never read into a new task and no new memory is extracted. Always forced: the user's own value would let the leak back in. */
+export const QWEN_SYSTEM_SETTINGS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "qwen", "system-settings.json");
+export const qwenEnv = (env = process.env) => ({ ...env, QWEN_CODE_SYSTEM_SETTINGS_PATH: QWEN_SYSTEM_SETTINGS });
