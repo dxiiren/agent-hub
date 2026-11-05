@@ -116,7 +116,7 @@ function providers() {
   // A private config dir with no MCP servers, sharing only the login (.auth), is the one switch that works.
   const qoderHome = () => {
     const d = join(HUB_DIR, 'qoder-home'); mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, 'settings.json'), '{}');
+    writeFileSync(join(d, 'settings.json'), JSON.stringify({ general: { defaultPermissionMode: 'auto' } })); // headless: without auto the first shell call waits for a permission nobody answers
     const auth = join(d, '.auth');
     if (!existsSync(auth)) { try { symlinkSync(join(homedir(), '.qoder', '.auth'), auth, 'junction'); } catch (e) { console.log(`[WARN] qoder login link failed: ${e.message}`); } }
     return d;
