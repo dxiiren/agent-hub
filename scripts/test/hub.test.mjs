@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, delimiter, resolve, dirname } from 'node:path';
+import { join, delimiter, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HUB = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'hub.mjs');
@@ -58,4 +58,12 @@ test('configure: qoder runs from a private config dir with no MCP servers', () =
   const i = q.indexOf('--config-dir');
   assert.ok(q.includes('--acp') && i > 0);
   assert.deepEqual(JSON.parse(readFileSync(join(q[i + 1], 'settings.json'), 'utf8')), { general: { defaultPermissionMode: 'auto' } });
+});
+
+test('configure: qoder uses the pinned qodercli-1.1.81 binary when it sits next to qodercli', () => {
+  const s = sandbox(); const bin = join(s.t, 'bin'); const ext = WIN ? '.cmd' : '';
+  copyFileSync(join(bin, 'qodercli' + ext), join(bin, 'qodercli-1.1.81' + ext));
+  const r = s.hub('configure'); assert.equal(r.status, 0, r.stdout + r.stderr);
+  const q = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents.providers.qoder.command;
+  assert.ok(basename(q[0]).startsWith('qodercli-1.1.81'), q[0]);
 });

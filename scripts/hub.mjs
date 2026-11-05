@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 process.noDeprecation = true; // shell:true is needed only to run .cmd shims; our args are fixed
@@ -121,7 +121,9 @@ function providers() {
     if (!existsSync(auth)) { try { symlinkSync(join(homedir(), '.qoder', '.auth'), auth, 'junction'); } catch (e) { console.log(`[WARN] qoder login link failed: ${e.message}`); } }
     return d;
   };
-  const qoder = which('qodercli');
+  // qodercli 1.1.83 (auto-updated 05-11) ignores the selected tier model over ACP: every task is served "auto" with no usage/credits. 1.1.81 honours it, so prefer that binary when it sits next to qodercli.
+  const qBase = which('qodercli'), qPin = qBase && join(dirname(qBase), `qodercli-${process.env.AGENT_HUB_QODER_PIN || '1.1.81'}${extname(qBase)}`);
+  const qoder = qPin && existsSync(qPin) ? qPin : qBase;
   if (qoder) p.qoder = { extends: 'acp', label: 'Qoder (no user MCP)', command: [qoder, '--acp', '--config-dir', qoderHome()] }; else notes.push('qodercli not installed');
 
   const qwen = which('qwen');
