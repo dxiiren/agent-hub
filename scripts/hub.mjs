@@ -235,7 +235,7 @@ async function doctor(deep) {
   let refused = '';
   if (want.includes('qwen-laptop')) {
     const r = run(process.execPath, [join(REPO, 'deploy', 'laptop', 'laptop-agent.mjs'), '--check'], { env: { ...process.env, ...(readJson(join(HOME, 'config.json'), {}).agents.providers['qwen-laptop'].env) } });
-    if (r.status === 3) { refused = out(r); console.log(`WARN  laptop guard refuses right now (correct behaviour, not a failure): ${refused}`); }
+    if (r.status === 3) { refused = out(r); console.log(`WARN  laptop: ${refused.replace(/^LAPTOP-REFUSED: /, "")} (correct behaviour, not a failure)`); }
     else row(r.status === 0, 'laptop pre-flight (GPU visible, no heavy-run lock, free RAM >= 3 GB)', out(r).split(String.fromCharCode(10)).pop());
   }
   for (const id of want) {

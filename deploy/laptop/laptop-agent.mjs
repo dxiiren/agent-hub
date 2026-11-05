@@ -4,10 +4,11 @@
 //   node laptop-agent.mjs --check        pre-flight only (used by `just doctor`)
 // Env: LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH, QWEN_BIN (required); HEAVY_LOCK_GLOB, LAPTOP_PORT (8089), LAPTOP_CTX (32768),
 //      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b).
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { freemem, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid } from './gpu-guard.mjs';
 
 const E = process.env;
 const PORT = E.LAPTOP_PORT || '8089';
@@ -17,9 +18,11 @@ const refuse = (m) => { process.stderr.write(`LAPTOP-REFUSED: ${m}\n`); process.
 const up = async () => { try { return (await fetch(`http://127.0.0.1:${PORT}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const gpu = spawnSync('nvidia-smi', ['--query-gpu=memory.used', '--format=csv,noheader,nounits'], { encoding: 'utf8', timeout: 15000 });
-const used = parseInt((gpu.stdout || '').split(/\s/)[0], 10);
-if (gpu.status !== 0 || Number.isNaN(used)) refuse('GPU not visible');
+const pnp = pnpStatus();
+if (pnp !== 'OK') refuse(`GPU missing -> provider disabled (NVIDIA PnP status ${pnp})`);
+const gpu = smi();
+const used = gpu.usedMiB;
+if (!gpu.ok) refuse('GPU missing -> provider disabled (nvidia-smi fails)');
 
 if (E.HEAVY_LOCK_GLOB) {
   const dir = dirname(E.HEAVY_LOCK_GLOB);
@@ -41,12 +44,13 @@ async function ensureServer() {
   try { closeSync(openSync(LOCK, 'wx')); } catch { owner = false; }
   try {
     if (owner) {
-      const u = parseInt((spawnSync('nvidia-smi', ['--query-gpu=memory.used', '--format=csv,noheader,nounits'], { encoding: 'utf8', timeout: 15000 }).stdout || '').split(/\s/)[0], 10);
-      if (Number.isNaN(u)) throw new Error('GPU not visible');
+      const g = smi();
+      if (pnpStatus() !== 'OK' || !g.ok) throw new Error('GPU missing -> provider disabled');
+      const u = g.usedMiB;
       if (u > 600) throw new Error(`GPU busy (${u} MiB used by another process)`);
       spawn(E.LLAMA_SERVER_BIN, ['-m', E.LAPTOP_MODEL_PATH, '--jinja', '-ngl', '99', '-c', E.LAPTOP_CTX || '32768', '-np', '1', '-fa', 'on',
         '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--reasoning', 'off', '--temp', '0.7', '--top-p', '0.8', '--top-k', '20',
-        '--load-mode', 'none', '--host', '127.0.0.1', '--port', PORT, '--alias', ALIAS, '--metrics'],
+        '--device', 'CUDA0', '--load-mode', 'none', '--host', '127.0.0.1', '--port', PORT, '--alias', ALIAS, '--metrics'],
       { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     }
     for (let i = 0; i < 90; i++) { if (await up()) return; await sleep(2000); }
@@ -57,12 +61,30 @@ async function ensureServer() {
 const win = /\.(cmd|bat)$/i.test(E.QWEN_BIN);
 const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', ALIAS, ...process.argv.slice(2)], { stdio: ['pipe', 'inherit', 'inherit'], shell: win });
 child.on('exit', (c) => process.exit(c ?? 1));
+// Runtime watchdog: the card can vanish after sleep while llama-server keeps running on the CPU.
+let lastPrompt = 0; let strikes = 0; let lastCpu = null;
+setInterval(() => {
+  const pid = listenerPid(PORT);
+  const idle = Date.now() - lastPrompt > 300000;
+  let cpuPct = null;
+  if (pid) { const c = cpuSeconds(pid); if (c != null && lastCpu && lastCpu.pid === pid) cpuPct = ((c - lastCpu.c) / ((Date.now() - lastCpu.t) / 1000)) * 100; lastCpu = c == null ? null : { pid, c, t: Date.now() }; }
+  const g = smi();
+  const why = judge({ pnp: pnpStatus(), smiOk: g.ok, usedMiB: g.usedMiB, apps: g.apps, serverPid: pid, cpuPct, idle });
+  strikes = why ? strikes + 1 : 0;
+  // a lost card is certain after one probe; the softer signals need two in a row
+  if (why && (strikes >= 2 || /PnP|nvidia-smi/.test(why))) {
+    if (pid) stopPid(pid);
+    process.stderr.write(`LAPTOP-REFUSED: GPU missing -> provider disabled (${why})
+`);
+    child.kill(); process.exit(3);
+  }
+}, Number(E.LAPTOP_WATCHDOG_MS || 15000)).unref();
 // ACP is newline-delimited JSON-RPC: hold session/prompt until the model server answers /health.
 let chain = Promise.resolve(); let buf = '';
 const NL = String.fromCharCode(10);
 process.stdin.on('data', (d) => {
   buf += d; const lines = buf.split(NL); buf = lines.pop();
-  for (const l of lines) chain = chain.then(async () => { if (l.includes('"session/prompt"')) await ensureServer(); child.stdin.write(l + NL); })
+  for (const l of lines) chain = chain.then(async () => { if (l.includes('"session/prompt"')) { lastPrompt = Date.now(); await ensureServer(); } child.stdin.write(l + NL); })
     .catch((e) => { process.stderr.write('LAPTOP-REFUSED: ' + e.message + NL); child.kill(); process.exit(3); });
 });
 process.stdin.on('end', () => chain.then(() => child.stdin.end()));
