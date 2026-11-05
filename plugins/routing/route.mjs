@@ -11,6 +11,7 @@ import os from "node:os";
 import { gateDir, writeRequest } from "../gate/server/store.mjs";
 import { runGate, gateOpts } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
+import { batchAllowed } from "./readguard.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -42,6 +43,10 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
   const [cmd, ...pre] = paseoCommand(env);
   return (args) => {
     const create = args[0] === "run" && args.includes("--no-wait");
+    if (args[0] === "pending") { // path-bearing pending permissions: the CLI's `permit ls` hides the path
+      const q = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "pending.mjs")], { encoding: "utf8", timeout: 15_000, env });
+      try { return JSON.parse(q.stdout); } catch { return { error: "pending permissions unreadable: " + String(q.stderr || q.stdout).slice(0, 200) }; }
+    }
     const text = args[0] === "logs"; // `paseo logs` has no JSON output: hand back the raw text
     const r = spawn(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), ...(text ? [] : ["--json"])], { encoding: "utf8", timeout: create ? createTimeoutS(env) * 1000 : 15 * 60_000, env });
     if (create && r.error?.code === "ETIMEDOUT") return { error: `CREATE_TIMEOUT: the daemon did not create the agent within ${createTimeoutS(env)} s (saturated daemon or a provider that stalls at initialize; upstream Paseo, not a worktree bug). Check \`paseo ls\` and the laptop load, then retry; raise AGENT_HUB_CREATE_TIMEOUT_S if the host is just slow.` };
@@ -69,17 +74,16 @@ export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["su
 /** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has no read-only mode: "auto" is its default-permissions mode, the post-check is the backstop. Override per provider with routes.readOnlyModes. */
 export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
-/** Pending permission names that only read (a file outside the cwd is the usual one): a read-only task may be granted these; anything else (write, edit, shell) stays refused. */
-export const readPermission = (name) => /^(read|read_?file|read_?many_?files|glob|grep|ls|list|list_?directory|search|search_?file_?content|find)$/i.test(String(name ?? "").trim());
-/** Resolve a read-only agent stopped on `permission`: allow its pending read-only requests and wait again, up to `max` times. A pending non-read request is denied and the status stays `permission`. */
-export function grantReads(paseo, j, timeoutS, max = 8) {
+/** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
+export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
   for (let i = 0; i < max && j.status === "permission" && j.agentId; i++) {
-    const pend = paseo(["permit", "ls"]);
-    const mine = (Array.isArray(pend) ? pend : []).filter((p) => p.agentId === j.agentId || p.agentShortId === String(j.agentId).slice(0, 7));
+    const pend = paseo(["pending"]);
+    const mine = (Array.isArray(pend) ? pend : []).filter((p) => p.agentId === j.agentId);
     if (!mine.length) break;
-    let denied = false;
-    for (const p of mine) { if (readPermission(p.name)) paseo(["permit", "allow", j.agentId, p.id]); else { paseo(["permit", "deny", j.agentId, p.id]); denied = true; } }
-    if (denied) break;
+    const roots = [ctx.cwd, ...(ctx.allow ?? [])].filter(Boolean);
+    const v = batchAllowed(mine, roots);
+    for (const p of mine) paseo(["permit", v.ok ? "allow" : "deny", j.agentId, p.id]);
+    if (!v.ok) return { ...j, denied: v.why };
     const w = paseo(["wait", j.agentId, "--timeout", String(timeoutS)]);
     j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
   }
@@ -162,7 +166,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
-    if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"));
+    if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"), { cwd: o.cwd, allow: routes.readAllow });
     const hint = j.status === "permission" ? { error: `agent asked for a permission its mode does not grant (type ${o.type}, mode ${mode ?? "provider default"}). Edit types (code-edit, test-scaffold) need --new-workspace worktree (full-access is dropped outside one, decision 21); read-only types run in the provider read-only mode and cannot edit.` } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {

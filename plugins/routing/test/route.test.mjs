@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
-import { grantReads, readPermission, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
+import { grantReads, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
 const routes = { slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
@@ -308,39 +308,81 @@ test("cliPaseo returns `paseo logs` as raw text, without --json", () => {
   assert.deepEqual(cliPaseo(undefined, { PASEO_BIN: "paseo" }, spawn)(["logs", "A"]), { text: "[User] q\nhi\n" });
   assert.ok(!seen.includes("--json"));
 });
-test("readPermission: reads yes, writes and shell no", () => {
-  for (const n of ["read", "ReadFile", "glob", "grep", "list_directory"]) assert.ok(readPermission(n), n);
-  for (const n of ["write", "edit", "run_shell_command", "bash", "", undefined]) assert.ok(!readPermission(n), String(n));
+import { mkdtempSync as mk2, mkdirSync as md2, writeFileSync as wf2, symlinkSync } from "node:fs";
+import { join as j2 } from "node:path";
+import { normalise } from "../pending.mjs";
+import { pathAllowed, batchAllowed } from "../readguard.mjs";
+const CRED = ["credentials", "json"].join(".");
+const sandbox = () => { const d = mk2(j2(tmpdir(), "rg-")); const cwd = j2(d, "cwd"); md2(cwd); md2(j2(d, "outside"));
+  wf2(j2(cwd, "app.log"), "x"); wf2(j2(cwd, ".env"), "x"); wf2(j2(cwd, CRED), "x"); wf2(j2(cwd, "server.pem"), "x"); md2(j2(cwd, ".hidden")); wf2(j2(cwd, ".hidden", "a.txt"), "x");
+  wf2(j2(d, "outside", "data.txt"), "x"); return { d, cwd }; };
+test("readguard: a read inside cwd is allowed", () => {
+  const { cwd } = sandbox();
+  assert.ok(pathAllowed(j2(cwd, "app.log"), [cwd]).ok);
+  assert.ok(batchAllowed([{ name: "read", kind: "read", paths: [j2(cwd, "app.log")] }], [cwd]).ok);
+});
+test("readguard: outside path, sensitive files in cwd, dot-dirs, missing path and unresolvable path are denied", () => {
+  const { d, cwd } = sandbox();
+  for (const p of [j2(d, "outside", "data.txt"), j2(cwd, ".env"), j2(cwd, CRED), j2(cwd, "server.pem"), j2(cwd, ".hidden", "a.txt"), j2(cwd, "nope.log"), "", undefined])
+    assert.equal(pathAllowed(p, [cwd]).ok, false, String(p));
+  assert.equal(batchAllowed([{ name: "read", kind: "read", paths: [] }], [cwd]).ok, false); // no path
+  assert.equal(pathAllowed(j2(d, "outside", "data.txt"), [cwd, j2(d, "outside")]).ok, true); // explicit readAllow root
+});
+test("readguard: ~/.ssh, ~/.claude and PASEO_HOME are denied even for a broad readAllow root", () => {
+  const { d } = sandbox(); const home = j2(d, "home"); md2(home); for (const s of [".ssh", ".claude", "ph"]) { md2(j2(home, s)); wf2(j2(home, s, "k"), "x"); }
+  const env = { PASEO_HOME: j2(home, "ph") };
+  for (const s of [".ssh", ".claude", "ph"]) assert.equal(pathAllowed(j2(home, s, "k"), [home], env, home).ok, false, s);
+});
+test("readguard: a symlink inside cwd that escapes it is denied", (t) => {
+  const { d, cwd } = sandbox();
+  try { symlinkSync(j2(d, "outside"), j2(cwd, "link"), "junction"); } catch { return t.skip("no symlink right"); }
+  assert.equal(pathAllowed(j2(cwd, "link", "data.txt"), [cwd]).ok, false);
+});
+test("readguard: mixed batch is all-or-nothing; vague tools (search, find) and writes are denied", () => {
+  const { d, cwd } = sandbox();
+  const good = { name: "read", kind: "read", paths: [j2(cwd, "app.log")] };
+  assert.equal(batchAllowed([good, { name: "read", kind: "read", paths: [j2(d, "outside", "data.txt")] }], [cwd]).ok, false);
+  for (const n of ["search", "find", "write", "edit", "run_shell_command"]) assert.equal(batchAllowed([{ ...good, name: n }], [cwd]).ok, false, n);
+});
+test("normalise: pending permission payload -> name, kind and every path", () => {
+  const r = normalise({ permissions: [{ agentId: "A", request: { id: "R", name: "read", detail: { type: "read" }, metadata: { rawRequest: { toolCall: { kind: "read", locations: [{ path: "/a/b" }], rawInput: { file_path: "/a/b", path: "/c" } } } } } }] });
+  assert.deepEqual(r, [{ agentId: "A", id: "R", name: "read", kind: "read", paths: ["/a/b", "/c"] }]);
+  assert.deepEqual(normalise({ permissions: [{ agentId: "A", request: { id: "R", name: "read" } }] })[0].paths, []);
 });
 const permFake = (pending, log) => (a) => {
   log.push(a);
-  if (a[0] === "permit" && a[1] === "ls") return pending;
+  if (a[0] === "pending") return pending;
   if (a[0] === "wait") return { status: "idle" };
   return {};
 };
-test("grantReads allows pending read requests and waits again; a pending write is denied and stays permission", () => {
-  const log = [];
-  const ok = grantReads(permFake([{ id: "R1", agentId: "A", name: "read" }], log), { agentId: "A", status: "permission" }, 60);
-  assert.equal(ok.status, "completed");
-  assert.deepEqual(log.filter((c) => c[0] === "permit" && c[1] === "allow")[0], ["permit", "allow", "A", "R1"]);
-  const log2 = [];
-  const bad = grantReads(permFake([{ id: "W1", agentId: "A", name: "write" }], log2), { agentId: "A", status: "permission" }, 60);
-  assert.equal(bad.status, "permission");
-  assert.ok(log2.some((c) => c[1] === "deny") && !log2.some((c) => c[1] === "allow" || c[0] === "wait"));
+test("grantReads: in-cwd read is allowed and waits again; outside path, no path and a mixed batch are denied for ALL requests", () => {
+  const { d, cwd } = sandbox(); const inC = j2(cwd, "app.log"), out = j2(d, "outside", "data.txt");
+  const R = (id, paths, name = "read") => ({ id, agentId: "A", name, kind: "read", paths });
+  const run = (pend) => { const log = []; const r = grantReads(permFake(pend, log), { agentId: "A", status: "permission" }, 60, { cwd }); return { r, log }; };
+  const ok = run([R("1", [inC])]);
+  assert.equal(ok.r.status, "completed"); assert.ok(ok.log.some((c) => c[1] === "allow" && c[3] === "1"));
+  for (const pend of [[R("1", [out])], [R("1", [])], [R("1", [inC]), R("2", [out])], [R("1", [inC], "write")]]) {
+    const x = run(pend);
+    assert.equal(x.r.status, "permission");
+    assert.ok(!x.log.some((c) => c[1] === "allow" || c[0] === "wait"), JSON.stringify(pend));
+    assert.equal(x.log.filter((c) => c[1] === "deny").length, pend.length);
+  }
 });
-test("a read-only route whose agent stops on a read permission completes without a fallback; a write permission still fails", () => {
+test("a read-only route whose agent stops on a read of a cwd file completes without a fallback; a read outside cwd or a write still fails", () => {
+  const { d, cwd } = sandbox();
   const r2 = { slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
-  let first = true; const log = [];
-  const p = (a) => { log.push(a);
+  let path = j2(cwd, "app.log");
+  const p = (a) => {
     if (a[0] === "ls") return [];
     if (a[0] === "run") return { status: "permission", agentId: "P" };
-    if (a[0] === "permit" && a[1] === "ls") return [{ id: "R", agentId: "P", name: first ? "read" : "write" }];
+    if (a[0] === "pending") return [{ id: "R", agentId: "P", name: "read", kind: "read", paths: [path] }];
     if (a[0] === "wait") return { status: "idle" };
     return {}; };
-  const good = runRoute({ ...o, type: "summarise", cwd: tmpdir() }, p, r2);
+  const good = runRoute({ ...o, type: "summarise", cwd }, p, r2);
   assert.equal(good.status, "completed"); assert.equal(good.trace.length, 1);
-  first = false;
-  assert.equal(runRoute({ ...o, type: "summarise", cwd: tmpdir() }, p, r2).used, null);
+  path = j2(d, "outside", "data.txt");
+  assert.equal(runRoute({ ...o, type: "summarise", cwd }, p, r2).used, null);
+  assert.equal(runRoute({ ...o, type: "summarise", cwd }, p, { ...r2, readAllow: [j2(d, "outside")] }).status, "completed");
 });
 test("every spawned run carries an explicit --cwd (never the daemon default)", () => {
   const p = fake({ run: () => ({ status: "completed", agentId: "A" }) });
