@@ -129,7 +129,7 @@ _STEMS = ("env", "nv", "pem", "key", "ppk", "id_", "rsa", "ed2", "ecd", "dsa", "
 
 
 def _normalised(command: str) -> str:
-    """Command words with `$'...'`, quotes and backslashes removed, so a builtin written as `ev''al` or `\e\v\a\l` still matches."""
+    r"""Command words with `$'...'`, quotes and backslashes removed, so a builtin written as `ev''al` or `\e\v\a\l` still matches."""
     text = re.sub(r"\$'([^']*)'", r"\1", command)
     return "".join(c for c in text if c not in chr(92) + "'\"")
 
