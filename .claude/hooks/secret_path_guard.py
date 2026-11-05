@@ -7,6 +7,8 @@ import re
 import sys
 
 import fnmatch
+import glob
+import os
 
 SAFE = re.compile(r"\.(?:example|sample|stub|template)$", re.I)
 SPLIT = re.compile(r"[\s'\"=<>@:,;|&()`]+")
@@ -19,15 +21,31 @@ def _hit(tok: str) -> bool:
     if not name or SAFE.search(name):
         return False
     if any(c in name for c in "*?["):
-        # a glob made only of wildcards and dots (`*`, `.*`) is too broad to call a secret
-        return bool(name.strip("*?[]./")) and any(fnmatch.fnmatchcase(x, name) for x in SAMPLES)
+        if any(fnmatch.fnmatchcase(x, name) for x in SAMPLES) and name.strip("*?[]./"):
+            return True
+        # wildcard-only globs (`*`, `.*`) are judged by what they expand to in the cwd
+        try:
+            found = glob.glob(tok)[:2000]
+        except (OSError, ValueError):
+            found = []
+        return any(PLAIN.match(f.replace("\\", "/").rsplit("/", 1)[-1])
+                   and not SAFE.search(f) for f in found)
     return bool(PLAIN.match(name))
 
 
-def blocked(command: str) -> str | None:
+def _variants(command: str) -> list[str]:
+    """Texts to scan: obfuscation (`$`, `{}`, backslash escapes, quotes, empty vars) is peeled off."""
     cmd = command.replace("\\", "/")
-    # check the text with quotes as separators and with quotes removed (".e""nv" joins up)
-    for text in (cmd, re.sub(r"['\"]", "", cmd)):
+    raw = re.sub(r"['\"]", "", command)          # backslashes kept as escapes, quotes joined
+    no_esc = raw.replace("\\", "")               # drop escape backslashes
+    no_var = re.sub(r"\$\{[^}]*\}|\$[@*#?!0-9]|\$[A-Za-z_]\w*", "", no_esc)  # `.e${x}nv`, `.e$@nv`
+    var_sp = re.sub(r"\$\{[^}]*\}|\$[A-Za-z_]\w*", " ", no_esc)  # `cat${IFS}.env`
+    no_brace = re.sub(r"[{}$]", "", no_var)       # `.{env}`, `$'.env'`
+    return [cmd, re.sub(r"['\"]", "", cmd), no_esc, no_var, var_sp, no_brace]
+
+
+def blocked(command: str) -> str | None:
+    for text in _variants(command):
         for tok in SPLIT.split(text):
             if _hit(tok):
                 return tok

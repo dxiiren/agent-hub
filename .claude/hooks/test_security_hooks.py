@@ -90,4 +90,38 @@ try:
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
+# round 3: guard obfuscation + wildcard-only globs (judged by expansion in the cwd)
+d = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(d)
+try:
+    for c in [r"cat .e\nv", "cat .e${x}nv", "cat${IFS}.env", "cat $'.env'", "cat .{env}", "cat .e$@nv", "cat '.e'nv"]:
+        check("r3 obfuscated block " + c, g.blocked(c) is not None)
+    check("r3 glob allowed when no secret", g.blocked("cat .*") is None and g.blocked("cat *") is None)
+    open(".env", "w").write("x")
+    check("r3 .* expands to .env", g.blocked("cat .*") is not None)
+    check("r3 env-less star stays allowed", g.blocked("cat *") is None)
+    check("r3 benign vars allowed", g.blocked("echo $HOME/x ${FOO}") is None)
+finally:
+    os.chdir(cwd); shutil.rmtree(d, ignore_errors=True)
+
+# round 3: scanner pathspec-from-file and cwd-relative paths
+d = tempfile.mkdtemp()
+try:
+    run = lambda *a: subprocess.run(["git", *a], cwd=d, capture_output=True, text=True)
+    run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    os.makedirs(os.path.join(d, "sub"))
+    f = os.path.join(d, "a.txt"); open(f, "w").write("clean\n"); run("add", "a.txt"); run("commit", "-qm", "i")
+    secret = "AKIA" + "ABCDEFGHIJKLMNOP"
+    open(f, "w").write("key=" + secret + "\n")
+    open(os.path.join(d, "sub", "list.txt"), "w").write("a.txt\n")
+    scan = lambda cmd, cwd: subprocess.run([sys.executable, os.path.join(H, "secret_scanner.py")], cwd=cwd, text=True,
+                                          input=json.dumps({"tool_input": {"command": cmd}}), capture_output=True).returncode
+    sub = os.path.join(d, "sub")
+    check("r3 pathspec-from-file=", scan("git commit -m x --pathspec-from-file=../a.txt", sub) == 2)
+    check("r3 pathspec-from-file F", scan("git commit -m x --pathspec-from-file list.txt", sub) == 2)
+    check("r3 pathspec stdin is a re-add", scan("git commit -m x --pathspec-from-file=-", sub) == 2)
+    check("r3 relative pathspec from subdir", scan("git commit -m x ../a.txt", sub) == 2)
+    check("r3 git add relative from subdir", scan("git add ../a.txt && git commit -m x", sub) == 2)
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
 print("FAIL: " + ", ".join(fails) if fails else "ALL PASS"); sys.exit(1 if fails else 0)
