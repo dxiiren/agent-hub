@@ -286,4 +286,15 @@ except SyntaxError:
     check("r4 file compiles with no SyntaxWarning", False)
 
 
+# round 5: long array ref, ]+= append, exact bytes to the child
+for label, c in (("long array ref", "a[" + "1" * 400 + "]=/x/.env; echo ${a[" + "1" * 400 + "]}"), ("array ref", "a[1]=.env; echo $a " + "x" * 100 + " ${a[1]}"),
+                 ("]+= append", "a[0]=. ; a[0]+=env; cat ${a[0]}"), ("append no braces", "a[0]+=x; echo $a")):
+    check("r5 %s blocks" % label, run_hook(c)[0] == 2)
+check("r5 CR blocks", run_hook("cat a\r.env")[0] == 2)
+CH = [sys.executable, os.path.join(H, "secret_path_guard.py"), "--child"]
+check("r5 child non-UTF-8 exits non-zero", subprocess.run(CH, input=b"echo \xff\xfe", capture_output=True).returncode not in (0, 3))
+check("r5 child keeps CR bytes (no newline translation)", subprocess.run(CH, input=b"echo a\r\nb", capture_output=True).returncode == 0)
+rc, dt, _ = run_hook("git status")
+check("r5 normal still passes under 400 ms (%.0f ms)" % (dt * 1000), rc == 0 and dt < 0.4)
+
 print("FAIL: " + ", ".join(fails) if fails else "ALL PASS"); sys.exit(1 if fails else 0)

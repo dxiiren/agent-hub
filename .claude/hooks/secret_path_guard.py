@@ -105,7 +105,7 @@ _NO_ANALYSIS = re.compile(
     r"|(?:^|[;&|(\s])(?:declare|typeset|local)(?![\w-])"
     r"|\$\{\w*[^\w}]|\$\{!"                         # ${x:-w} ${x-w} ${x:=w} ${x+w} ${x#p} ${x%p} ${x/p/r} ${!x}
     r"|\$\(\(|\$\["                                        # arithmetic
-    r"|\w=\(|\w\[[^\]]{0,300}\]=|\$\{\w+\[")                      # arrays
+    r"|\w=\(|\w\[|\$\{\w+\[")  # arrays: any `x[` (x[i]=, x[i]+=, any length; linear)
 _REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
 _ANYREF = re.compile(r"\$[{\w@*#?!$'\"-]")  # `$'...'` and `$"..."` count as references
 # the original rule, kept: an assignment next to a construct that sets or reads variables indirectly blocks even with no visible reference
@@ -329,7 +329,7 @@ _HIT_RC = 3  # child exit code for "blocked"; any other non-zero code is a crash
 
 def _child() -> int:
     """Child process: the regex analysis, which Python cannot interrupt, so the parent enforces the deadline."""
-    command = sys.stdin.read()
+    command = sys.stdin.buffer.read().decode("utf-8")  # strict: a decode error exits non-zero (blocked)
     slow = os.environ.get("SECRET_PATH_GUARD_TEST_SLEEP")  # test hook: simulate a slow analysis (only ever makes the guard block more)
     if slow:
         time.sleep(float(slow))
@@ -356,10 +356,12 @@ def main() -> int:
         return 2
     if len(command.encode("utf-8", "replace")) > _MAX_BYTES:
         return _block("command over 8 KB, blocked before analysis")
+    if "\r" in command:
+        return _block("command contains a carriage return, blocked before analysis")
     if command.count("$") > _MAX_DOLLARS:
         return _block("command has more than 50 '$', blocked before analysis")
     try:
-        r = subprocess.run([sys.executable, os.path.abspath(__file__), "--child"], input=command, text=True,
+        r = subprocess.run([sys.executable, os.path.abspath(__file__), "--child"], input=command.encode("utf-8"),
                            capture_output=True, timeout=_CHILD_SECONDS)
     except subprocess.TimeoutExpired:
         return _block("analysis timed out, blocked (fail closed)")
