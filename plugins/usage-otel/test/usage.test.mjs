@@ -66,6 +66,10 @@ test("Qoder session transcript credits are fractional, deduped by message id, bo
   writeFileSync(f, line("a", 0.25) + line("a", 0.25) + line("b", 0.125));
   assert.equal(qoderSession("Q1", home), 0.375);
   assert.equal(qoderSession("nope", home), null);
+  const hub = mkdtempSync(join(tmpdir(), "qh-")); mkdirSync(join(hub, "projects", "p"), { recursive: true });
+  writeFileSync(join(hub, "projects", "p", "Q2.jsonl"), line("c", 0.5));
+  assert.equal(qoderSession("Q2", [home, hub]), 0.5); // session written under the private config dir
+  assert.equal(qoderSession("Q1", [home, hub]), 0.375);
   const cur = join(home, "cursor.json"); const base = { agent: "q", in: 0, out: 0, cached: 0, credits: 0 };
   assert.equal(fillRecord({ ...base }, cur, { sessionCredits: 0.375 }).credits, 0.375);
   assert.equal(fillRecord({ ...base }, cur, { sessionCredits: 0.5 }).credits, 0.125);

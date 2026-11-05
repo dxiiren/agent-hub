@@ -27,19 +27,22 @@ export function qwenSession(sessionId, home = join(os.homedir(), ".qwen")) {
   return null;
 }
 
-/** Credits of one Qoder session from its own transcript (~/.qoder/projects/<cwd>/<sessionId>.jsonl; fractional per message, unlike the whole-number account counter). null if no file. */
-export function qoderSession(sessionId, home = join(os.homedir(), ".qoder")) {
-  const root = join(home, "projects");
-  if (!sessionId || !existsSync(root)) return null;
-  for (const p of readdirSync(root)) {
-    const f = join(root, p, sessionId + ".jsonl");
-    if (!existsSync(f)) continue;
-    const seen = new Map();
-    for (const l of readFileSync(f, "utf8").split("\n")) {
-      if (!l.includes("credits")) continue;
-      try { const j = JSON.parse(l), m = j.message, c = Number(m?.usage?.credits ?? 0); if (c > 0) seen.set(m.id ?? j.uuid, Math.max(c, seen.get(m.id ?? j.uuid) ?? 0)); } catch { /* partial line */ }
+/** Credits of one Qoder session from its own transcript (<home>/projects/<cwd>/<sessionId>.jsonl; fractional per message, unlike the whole-number account counter). Looks in the user dir and in the hub's private qoder-home (qodercli --config-dir). null if no file. */
+export function qoderSession(sessionId, homes = [join(os.homedir(), ".qoder"), join(os.homedir(), ".paseo", "hub", "qoder-home")]) {
+  if (!sessionId) return null;
+  for (const home of [].concat(homes)) {
+    const root = join(home, "projects");
+    if (!existsSync(root)) continue;
+    for (const p of readdirSync(root)) {
+      const f = join(root, p, sessionId + ".jsonl");
+      if (!existsSync(f)) continue;
+      const seen = new Map();
+      for (const l of readFileSync(f, "utf8").split("\n")) {
+        if (!l.includes("credits")) continue;
+        try { const j = JSON.parse(l), m = j.message, c = Number(m?.usage?.credits ?? 0); if (c > 0) seen.set(m.id ?? j.uuid, Math.max(c, seen.get(m.id ?? j.uuid) ?? 0)); } catch { /* partial line */ }
+      }
+      return [...seen.values()].reduce((a, b) => a + b, 0);
     }
-    return [...seen.values()].reduce((a, b) => a + b, 0);
   }
   return null;
 }
