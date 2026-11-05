@@ -180,6 +180,17 @@ for c in ["git status", "cat README.md", "ls *.md", "echo $(date)", "ls $(pwd)/s
           "cat id_mapping.csv", "ls $(git rev-parse --show-toplevel)", "x=src; ls $x/lib", "echo $x"]:
     check("r1 allow " + c, g.blocked(c) is None)
 
+# round 1 (final), expansion bomb: bounded, blocked quickly; ordinary assignments behave
+import time
+bomb = "a=$b$b; b=$c$c; c=$d$d; d=$e$e; e=$f$f; f=$g$g; g=$h$h; h=$i$i; i=$j$j; j=$k$k; k=xxxxxxxxxxxxxxxx; cat $a"
+t0 = time.monotonic()
+check("r1 bomb blocked", g.blocked(bomb) is not None)
+check("r1 bomb fast", time.monotonic() - t0 < 2)
+check("r1 self reference does not blow up", g.blocked("a=$a$a; echo $a") is None)
+check("r1 plain X=foo passes", g.blocked("X=foo; cat $X") is None)
+check("r1 F=.env blocked", g.blocked("F=.env; cat $F") is not None)
+check("r1 plain secret blocks even with a bomb after it", g.blocked("cat .env; " + bomb) is not None)
+
 # round 3d: normal commands pass; a crashing hook and unparsable input block
 for c in ["git status", "cat README.md", "ls *.md", "git log --oneline -5", "python -m pytest tests/"]:
     check("r3d normal passes " + c, g.blocked(c) is None)

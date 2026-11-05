@@ -187,7 +187,7 @@ test("caller gate uses the same options as the hook: repo row maxLines, forbid, 
   const rt = { ...routes, gates: [{ match: "^/r$", cmd: "rowcmd", maxLines: 7, forbid: "^[.]github/", allow: "^src/" }] };
   runRoute({ ...o }, p, rt, () => ({ status: "PASS", reasons: [] })); // no caller gate: nothing to run
   runRoute({ ...o, gate: "mine" }, p, rt, (cwd, x) => { opts = x; return { status: "PASS", reasons: [] }; });
-  assert.deepEqual(opts, { base: null, cmd: "mine", maxLines: 7, forbid: "^[.]github/", allow: "^src/" });
+  assert.deepEqual(opts, { base: null, requireBase: true, cmd: "mine", maxLines: 7, forbid: "^[.]github/", allow: "^src/" });
 });
 test("forbidden-path edit FAILs through the CLI path with the real gate", async () => {
   const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs"); const { tmpdir } = await import("node:os");
@@ -518,4 +518,12 @@ test("claude read-only launch carries the hook; bypass (code-edit) does not; tem
   }
   const edit = buildArgs(["--permission-mode", "bypassPermissions"], tpl, "m.json"); assert.ok(!edit.includes("--settings"));
   assert.ok(!he.matcher.split("|").some((t) => ["Bash", "Edit", "Write"].includes(t)));
+});
+
+test("headSha: commit, unborn HEAD -> empty tree, non-repo -> null", async () => {
+  const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process"); const { headSha } = await import("../route.mjs");
+  const d = mkdtempSync(join(tmpdir(), "hs-")); execFileSync("git", ["init", "-q"], { cwd: d });
+  assert.equal(headSha(d), "4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+  assert.equal(headSha(mkdtempSync(join(tmpdir(), "hs-np-"))), null);
 });

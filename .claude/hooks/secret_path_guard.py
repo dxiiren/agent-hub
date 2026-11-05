@@ -86,14 +86,19 @@ ASSIGN = re.compile(r"(?:^|[;&|\s])(?:export\s+|declare\s+|local\s+|typeset\s+)?
 SUBST_WORDS = re.compile(r"\benv\b|\.env|pem|\bkey|id_|cred|ppk|secret|passw", re.I)
 
 
-def _expand_assignments(command: str) -> str:
-    """Expand simple in-command assignments (`x=.e; cat ${x}nv`) so the real name is scanned; chains are followed a few passes."""
+def _expand_assignments(command: str) -> str | None:
+    """Expand simple in-command assignments (`x=.e; cat ${x}nv`) so the real name is scanned; chains are followed a few passes.
+    Self-referencing variables are skipped; None = the text grew past 4x the original (floor 1 KB, cap 64 KB), an expansion bomb: the caller blocks."""
     vals = {m.group(1): m.group(2).strip("'\"") for m in ASSIGN.finditer(command)}
+    vals = {k: v for k, v in vals.items() if not re.search(r"\$\{?" + re.escape(k) + r"(?![A-Za-z0-9_])", v)}
+    limit = min(64 * 1024, max(4 * len(command), 1024))
     out = command
     for _ in range(4):
         prev = out
         for k, v in vals.items():
             out = re.sub(r"\$\{" + re.escape(k) + r"\}|\$" + re.escape(k) + r"(?![A-Za-z0-9_])", lambda _m, v=v: v, out)
+            if len(out) > limit:
+                return None
         if out == prev:
             break
     return out
@@ -115,7 +120,13 @@ def _var_glued(command: str) -> str | None:
 def blocked(command: str, _depth: int = 0) -> str | None:
     if _subst_glued(command):  # what a substitution prints is unknown: fail closed on secret-ish tokens
         return "command substitution inside a path-like token"
+    for text in _variants(command):  # the unexpanded command first: a plain secret path always blocks, whatever expansion does next
+        for tok in SPLIT.split(text):
+            if _hit(tok):
+                return tok
     expanded = _expand_assignments(command)
+    if expanded is None:
+        return "variable expansion grows without bound"
     for text in (command, expanded):
         for m in SUBST.finditer(text):  # a standalone substitution: scan its body, block secret-ish words (nested ones are found inner-first)
             body = m.group(0)[2:-1] if m.group(0).startswith("$(") else m.group(0)[1:-1]

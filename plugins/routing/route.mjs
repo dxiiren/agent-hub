@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, writeRequest } from "../gate/server/store.mjs";
-import { runGate, gateOpts } from "../gate/server/gate.mjs";
+import { runGate, gateOpts, EMPTY_TREE } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { batchAllowed } from "./readguard.mjs";
 
@@ -104,10 +104,12 @@ const withAnswer = (r, paseo) => {
   return { ...r, answer: a.answer, ...(a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
 };
 
-/** The commit a task starts from (null outside a git repo); the gate diffs against it. */
+/** The commit a task starts from; the gate diffs against it. Null only outside a git repo; a repo with no commits yet (unborn HEAD) gets the empty-tree hash so the gate diffs and scans everything. */
 export function headSha(cwd) {
-  const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
-  return r.status === 0 ? r.stdout.trim() : null;
+  const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd, encoding: "utf8" });
+  if (inRepo.status !== 0) return null;
+  const r = spawnSync("git", ["rev-parse", "--verify", "HEAD"], { cwd, encoding: "utf8" });
+  return r.status === 0 ? r.stdout.trim() : EMPTY_TREE;
 }
 
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */

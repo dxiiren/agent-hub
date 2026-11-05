@@ -41,6 +41,7 @@ export function repoGate(routes, cwd) {
 }
 
 // Scan limits: past them the gate FAILS CLOSED (a scan that cannot cover everything is not a PASS).
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // the base of a repo with no commits yet
 const MAX_FILE = 16 << 20, MAX_TOTAL = 128 << 20, MAX_DEPTH = 16;
 
 /** True when the bytes hold a secret as UTF-8/latin1 text (binary files too) or as UTF-16 text at either byte alignment. */
@@ -49,13 +50,13 @@ export function bufHasSecret(buf) {
 }
 
 /** Scan one file into `out`; the budget is shared so a repo of many files cannot pass unscanned. */
-function scanFile(f, label, budget, out) {
+function scanFile(f, label, budget, out, deleted = new Set()) {
   try {
     const st = statSync(f);
     if (st.size > MAX_FILE || st.size > budget.left) { out.push("scan incomplete: " + label + " is too large to scan (" + st.size + " bytes)"); return; }
     budget.left -= st.size;
     if (bufHasSecret(readFileSync(f))) out.push("secret pattern in " + label);
-  } catch (e) { if (e?.code !== "ENOENT") out.push("scan incomplete: cannot read " + label); /* deleted files have nothing to scan */ }
+  } catch (e) { if (!(e?.code === "ENOENT" && deleted.has(label))) out.push("scan incomplete: cannot read " + label); /* only a file git lists as deleted has nothing to scan */ }
 }
 
 /** Secret scan of a plain folder: every file (binary and UTF-16 included) up to depth 16, 16 MB per file, 128 MB total; skips .git and node_modules; reports what it could not cover. */
@@ -78,7 +79,7 @@ export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = 
 /** The one place the gate options are built, shared by the plugin hook and the route CLI so the two paths cannot drift. */
 export function gateOpts(routes, cwd, cmd, base = null) {
   const row = repoGate(routes, cwd);
-  return { base, cmd: cmd ?? row.cmd, maxLines: Number(row.maxLines ?? 400), forbid: row.forbid ?? null, allow: row.allow ?? null };
+  return { base, requireBase: true, cmd: cmd ?? row.cmd, maxLines: Number(row.maxLines ?? 400), forbid: row.forbid ?? null, allow: row.allow ?? null };
 }
 
 /**
@@ -88,9 +89,9 @@ export function gateOpts(routes, cwd, cmd, base = null) {
  * `allow`: when set, every changed file must match it (the allowed-path check); `forbid`: no changed file may match.
  */
 export function runGate(cwd, opts = {}) {
-  const { cmd, maxLines = 400, forbid = null, allow = null, base = null } = opts;
+  const { cmd, maxLines = 400, forbid = null, allow = null, base = null, requireBase = false } = opts;
   const reasons = [];
-  let diff = "", hist = "", files = [];
+  let diff = "", hist = "", files = [], deleted = new Set();
   // not a git work tree: the diff rules cannot run, so fail closed unless a cmd gate exists and no path rules were asked for
   let inRepo = true;
   try { git(cwd, ["rev-parse", "--is-inside-work-tree"]); } catch { inRepo = false; }
@@ -104,13 +105,17 @@ export function runGate(cwd, opts = {}) {
     let ref = "HEAD";
     if (base) {
       if (!/^[0-9a-f]{7,64}$/i.test(base)) throw new Error("bad base");
-      git(cwd, ["cat-file", "-e", base + "^{commit}"]); ref = base;
-    }
+      git(cwd, ["cat-file", "-e", base + (base === EMPTY_TREE ? "^{tree}" : "^{commit}")]); ref = base;
+    } else if (requireBase) { reasons.push("no base commit recorded for this task: gate cannot judge committed work"); }
     git(cwd, ["add", "-N", "."]); // intent-to-add so new files show in the diff
     diff = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", ref]);
-    files = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", ref, "--name-only"]).split("\n").filter((f) => f && !f.includes("__pycache__") && !f.endsWith(".pyc"));
-    // a secret committed and then removed is gone from the net diff but still in history
-    if (base) hist = git(cwd, ["log", "--no-ext-diff", "--no-textconv", "-p", "--format=", base + "..HEAD"]);
+    // NUL-separated: quoted or non-ASCII paths must not slip past the path rules or the byte scan
+    const nul = String.fromCharCode(0);
+    const names = (extra) => git(cwd, ["diff", "--no-ext-diff", "--no-textconv", ...extra, "--name-only", "-z", ref]).split(nul).filter(Boolean);
+    files = names([]).filter((f) => !f.includes("__pycache__") && !f.endsWith(".pyc"));
+    deleted = new Set(names(["--diff-filter=D"]));
+    // a secret committed and then removed is gone from the net diff but still in history; -m covers merge commits, --text "binary" text files
+    if (base) hist = git(cwd, ["log", "--no-ext-diff", "--no-textconv", "-m", "--text", "-p", "--format=", base === EMPTY_TREE ? "HEAD" : base + "..HEAD"]);
   } catch { reasons.push("git diff failed (not a repo, no HEAD, or the task's base commit is missing)"); }
   const lines = diff.split("\n");
   const added = lines.filter((l) => l.startsWith("+") && !l.startsWith("+++"));
@@ -119,9 +124,9 @@ export function runGate(cwd, opts = {}) {
   if (added.length + removed.length > maxLines) reasons.push(`diff larger than ${maxLines} lines`);
   // binary and UTF-16 files show no text in a diff: scan every changed file's bytes, and ignored files too (an agent can hide a file with .gitignore)
   if (inRepo) {
-    for (const f of files) scanFile(join(cwd, f), f, budget, reasons);
+    for (const f of files) scanFile(join(cwd, f), f, budget, reasons, deleted);
     try {
-      for (const f of git(cwd, ["ls-files", "-o", "-i", "--exclude-standard"]).split("\n").filter(Boolean)) {
+      for (const f of git(cwd, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]).split(String.fromCharCode(0)).filter(Boolean)) {
         if (f.startsWith(".git/") || f.includes("__pycache__") || f.includes("node_modules/")) continue;
         const r = []; scanFile(join(cwd, f), f, budget, r);
         reasons.push(...r.map((x) => x.replace("secret pattern in ", "secret pattern in ignored file ")));

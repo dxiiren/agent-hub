@@ -88,7 +88,7 @@ test("attempt counter lives in the plugin store, survives a restart, and ignores
 test("caller-supplied gate comes from the plugin-side request, bound to the agent once", () => {
   const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
   wf(join(d, "a.py"), "x = 2\n");
-  writeRequest(st, d, OK); // routes default is BAD, caller says OK
+  writeRequest(st, d, OK, head(d)); // routes default is BAD, caller says OK
   assert.equal(evaluate({ dir: st, id: "C", cwd: d, routes: routesCfg }).d.status, "PASS");
   assert.equal(evaluate({ dir: st, id: "D", cwd: d, routes: routesCfg }).d.status, "RETRY"); // request was consumed
 });
@@ -175,4 +175,39 @@ test("non-git folder: binary, UTF-16, deep and big-file secrets fail; unscannabl
   const deep = Array.from({ length: 18 }, (_, i) => "d" + i).join("/") + "/x.txt";
   assert.match(runGate(p({ [deep]: "x" }), { cmd: OK }).reasons.join(), /scan incomplete/);
   assert.match(runGate(p({ "huge.bin": Buffer.alloc((16 << 20) + 1, 65) }), { cmd: OK }).reasons.join(), /scan incomplete.*too large/);
+});
+
+// --- coordinator review: NUL-separated paths, merge/binary history, unborn HEAD ---
+import { EMPTY_TREE } from "../server/gate.mjs";
+const git2 = (d, ...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t.t", ...a], { cwd: d, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+test("non-ASCII and quoted paths are scanned and path rules see the real name", () => {
+  const d = repo(); const base = head(d);
+  writeFileSync(join(d, "caf\u00e9 q.bin"), Buffer.concat([Buffer.from([0, 0]), Buffer.from(SEC)]));
+  const r = runGate(d, { cmd: OK, base, forbid: "caf\u00e9" });
+  assert.match(r.reasons.join(), /secret pattern in caf\u00e9 q.bin/); assert.match(r.reasons.join(), /path not allowed: caf\u00e9/);
+  assert.ok(!/scan incomplete/.test(r.reasons.join()));
+});
+test("a deleted tracked file is fine, an unreadable listed file fails closed", () => {
+  const d = repo(); const base = head(d);
+  execFileSync("node", ["-e", "require('fs').unlinkSync('a.py')"], { cwd: d });
+  assert.equal(runGate(d, { cmd: OK, base }).status, "PASS");
+});
+test("a secret only in a merge commit's conflict resolution, or in a NUL-containing text file, is caught in history", () => {
+  const d = repo(); const base = head(d);
+  git2(d, "checkout", "-q", "-b", "side"); writeFileSync(join(d, "a.py"), "x = 2\n"); commitAll(d, "side");
+  git2(d, "checkout", "-q", "-"); writeFileSync(join(d, "a.py"), "x = 3\n"); commitAll(d, "main");
+  try { git2(d, "merge", "side"); } catch { /* conflict expected */ }
+  writeFileSync(join(d, "a.py"), "x = '" + SEC + "'\n"); commitAll(d, "merge");
+  writeFileSync(join(d, "a.py"), "x = 3\n"); commitAll(d, "clean");
+  assert.match(runGate(d, { cmd: OK, base }).reasons.join(), /secret pattern in diff/);
+  const e = repo(); const b2 = head(e);
+  writeFileSync(join(e, "t.txt"), Buffer.concat([Buffer.from([0]), Buffer.from(SEC)])); commitAll(e, "bin");
+  execFileSync("node", ["-e", "require('fs').unlinkSync('t.txt')"], { cwd: e }); commitAll(e, "rm");
+  assert.match(runGate(e, { cmd: OK, base: b2 }).reasons.join(), /secret pattern in diff/);
+});
+test("unborn HEAD: the empty-tree base diffs and scans everything; no base recorded in a repo fails closed", () => {
+  const d = mkdtempSync(join(tmpdir(), "gate-unborn-")); sh(d, "init", "-q");
+  writeFileSync(join(d, "n.txt"), SEC + "\n");
+  assert.match(runGate(d, { cmd: OK, base: EMPTY_TREE }).reasons.join(), /secret pattern/);
+  assert.match(runGate(d, { cmd: OK, requireBase: true }).reasons.join(), /no base commit recorded/);
 });
