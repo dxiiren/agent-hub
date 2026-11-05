@@ -57,6 +57,26 @@ just deps && just test
 
 There is no dev server: `just test` exiting 0 means every config template parses and holds placeholders only. Linux and macOS use `sh ./setup.sh` (or `just install`) instead of step 1.
 
+## Benchmarks
+
+Measured 5 November 2026 through the installed hub: each task runs in a throwaway worktree and is judged by its own gate (never by the agent's say-so). Set B = 10 hard code edits, set C = 3 tasks (log summary, test scaffold that must kill 3 mutants, code review), set A = 7 easy edits (laptop and office only). Latest version of each model is shown; most cells are n=1 or 2, so one task of difference is noise. Full method, per-tier Qoder credits, harness comparison and history are in the [guide](https://dxiiren.github.io/agent-hub/#bench).
+
+| Model | Harness | Set B | Set C | Set A | Median s | Cost |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex gpt-6.1-terra | Codex | 10/10, 10/10 | 2/3 | n/a | 71 / 51 | flat rate |
+| Codex gpt-6.1-sol | Codex | 10/10, 9/10 | 3/3 | n/a | 84 / 63 | flat rate |
+| Claude Sonnet 5.5 | Claude | 10/10 | 3/3 | n/a | 70 | $0.235 per task |
+| Claude Opus 5.5 | Claude | 10/10 | 2/3 | n/a | 95 | $0.530 per task |
+| Claude Haiku 5.5 | Claude | 9/10 | 3/3 | n/a | 100 | $0.020 per task |
+| Qoder Efficient | Qoder | 9/10 | 3/3 | n/a | 238 | free tier |
+| Qwen3.8-27B, office GPU server B | Qwen Code | 9/10 <!-- FILL:readme-officeB-B --> | 2/3 | 6/7 | 109 | local |
+| Qwen3.8-27B, office GPU server A | Qwen Code | 7/10 <!-- FILL:readme-officeA-B --> | 2/3 | 7/7 | 115 | local |
+| Qwen3.5-9B, laptop GPU, 64k | Qwen Code | 4/10 | n/a | n/a | 198 | local |
+| Qwen3.5-9B, laptop GPU, 32k (default) | Qwen Code | 1/10 | 3/3 | 7/7 | 71 to 143 | local |
+| Qoder paid tiers (Max, Pro, Flash and others) | Qoder | <!-- FILL:readme-qoder-B -->pending | 2/3 to 3/3 | n/a | 43 to 269 | 0.3 to 27 credits per task |
+
+Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
+
 ## Commands
 
 Run `just` with no arguments to list every recipe. The ones you'll use daily:
