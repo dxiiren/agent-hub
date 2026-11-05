@@ -104,6 +104,12 @@ const withAnswer = (r, paseo) => {
   return { ...r, answer: a.answer, ...(a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
 };
 
+/** The commit a task starts from (null outside a git repo); the gate diffs against it. */
+export function headSha(cwd) {
+  const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
 export function snapshot(dir, max = 5000) {
   const out = []; const walk = (d) => { let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
@@ -118,7 +124,7 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   const cwdOf = () => { const r = paseo(["ls"]); const c = (Array.isArray(r) ? r : []).find((a) => a.id === agentId)?.cwd; return c?.replace(/^~(?=[\\/])/, os.homedir()); };
   const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
-  let res = gate(cwd, gateOpts(routes, cwd, o.gate));
+  let res = gate(cwd, gateOpts(routes, cwd, o.gate, o.base));
   if (res.status === "PASS") return { status: "PASS", reasons: [], attempts: 0 };
   if (routes.gateRetry === false) return { status: "FAIL", reasons: res.reasons, attempts: 1 };
   const fail = (why) => ({ status: "FAIL", reasons: [...res.reasons, why], attempts: 1 });
@@ -129,7 +135,7 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   const st = paseo(["stop", agentId]);
   if (st?.error && !/AGENT_NOT_FOUND|No agent found/.test(String(st.error))) return fail("could not freeze the agent: " + String(st.error).slice(0, 120));
   // freeze: the second gate must judge the final tree, not one the agent is still editing
-  res = gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate));
+  res = gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate, o.base));
   return { status: res.status, reasons: res.reasons, attempts: 1 };
 }
 
@@ -166,7 +172,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: needs --new-workspace worktree` });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels
-    if (o.gate) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate);
+    if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
+    if (o.gate || o.base) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base);
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;

@@ -5,8 +5,8 @@ import { claimRequest, loadState, saveState } from "./store.mjs";
 /** Returns { d, res, mirror } and persists attempts/status in the plugin store. */
 export function evaluate({ dir, id, cwd, routes }) {
   const state = loadState(dir);
-  const mine = (state[id] ??= { attempts: 0, cmd: claimRequest(dir, cwd)?.cmd ?? null });
-  const res = runGate(cwd, gateOpts(routes, cwd, mine.cmd));
+  const mine = (state[id] ??= (() => { const q = claimRequest(dir, cwd); return { attempts: 0, cmd: q?.cmd ?? null, base: q?.base ?? null }; })());
+  const res = runGate(cwd, gateOpts(routes, cwd, mine.cmd, mine.base));
   const d = decide(mine.attempts, res, routes.gateRetry === false);
   if (res.noRepo) { d.reprompt = false; d.status = "FAIL"; } // the agent cannot fix a missing repo; the FAIL label is the signal, no tokens burned
   mine.attempts = d.attempts; mine.status = d.status;

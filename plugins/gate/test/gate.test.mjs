@@ -136,3 +136,43 @@ test("hook: an agent in a plain folder is labelled FAIL at once and never re-pro
   const r = evaluate({ dir: st, id: "P", cwd: d, routes: {} });
   assert.equal(r.d.status, "FAIL"); assert.equal(r.d.reprompt, false); assert.match(r.mirror["gate/reasons"], /nothing to verify/);
 });
+
+// --- round 1 verifier findings 1 and 2 ---
+const SEC = "AKIAABCDEFGHIJKLMNOP";
+const commitAll = (d, m) => { sh(d, "add", "."); sh(d, "-c", "user.name=t", "-c", "user.email=t@t.t", "commit", "-qm", m); };
+const head = (d) => execFileSync("git", ["rev-parse", "HEAD"], { cwd: d, encoding: "utf8" }).trim();
+test("a secret the agent COMMITTED fails when the gate diffs against the task's base", () => {
+  const d = repo(); const base = head(d);
+  writeFileSync(join(d, "n.txt"), SEC + "\n"); commitAll(d, "s");
+  assert.equal(runGate(d, { cmd: OK }).status, "PASS"); // HEAD-relative diff is blind to it: the reason for the base
+  assert.match(runGate(d, { cmd: OK, base }).reasons.join(), /secret pattern/);
+});
+test("a secret committed then removed is still caught in history", () => {
+  const d = repo(); const base = head(d);
+  writeFileSync(join(d, "n.txt"), SEC + "\n"); commitAll(d, "s");
+  writeFileSync(join(d, "n.txt"), "clean\n"); commitAll(d, "rm");
+  assert.match(runGate(d, { cmd: OK, base }).reasons.join(), /secret pattern in diff/);
+});
+test("an unknown base fails closed", () => {
+  const d = repo();
+  assert.match(runGate(d, { cmd: OK, base: "deadbeef" }).reasons.join(), /base commit is missing/);
+});
+test("binary, UTF-16 and ignored-binary secrets fail (git repo)", () => {
+  const d = repo();
+  writeFileSync(join(d, "n.bin"), Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.from(SEC)]));
+  writeFileSync(join(d, "u.txt"), Buffer.from(SEC, "utf16le"));
+  writeFileSync(join(d, "o.txt"), Buffer.concat([Buffer.from("x"), Buffer.from(SEC, "utf16le")])); // odd alignment
+  const r = runGate(d, { cmd: OK }).reasons.join();
+  for (const f of ["n.bin", "u.txt", "o.txt"]) assert.match(r, new RegExp("secret pattern in " + f.replace(".", "[.]")));
+});
+test("non-git folder: binary, UTF-16, deep and big-file secrets fail; unscannable fails closed", () => {
+  const p = (files) => { const d = mkdtempSync(join(tmpdir(), "gate-np-")); for (const [n, c] of Object.entries(files)) { mkdirSync(join(d, n, ".."), { recursive: true }); writeFileSync(join(d, n), c); } return d; };
+  assert.match(runGate(p({ "n.bin": Buffer.concat([Buffer.from([0, 0]), Buffer.from(SEC)]) }), { cmd: OK }).reasons.join(), /secret pattern in n\.bin/);
+  assert.match(runGate(p({ "u.txt": Buffer.from(SEC, "utf16le") }), { cmd: OK }).reasons.join(), /secret pattern in u\.txt/);
+  assert.match(runGate(p({ "a/b/c/d/e/f/g/h/n.txt": SEC }), { cmd: OK }).reasons.join(), /secret pattern in a\/b\/c\/d\/e\/f\/g\/h\/n\.txt/);
+  const big = Buffer.concat([Buffer.alloc(2200000, 65), Buffer.from("\n" + SEC)]);
+  assert.match(runGate(p({ "big.txt": big }), { cmd: OK }).reasons.join(), /secret pattern in big\.txt/);
+  const deep = Array.from({ length: 18 }, (_, i) => "d" + i).join("/") + "/x.txt";
+  assert.match(runGate(p({ [deep]: "x" }), { cmd: OK }).reasons.join(), /scan incomplete/);
+  assert.match(runGate(p({ "huge.bin": Buffer.alloc((16 << 20) + 1, 65) }), { cmd: OK }).reasons.join(), /scan incomplete.*too large/);
+});

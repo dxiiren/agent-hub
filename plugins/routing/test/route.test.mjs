@@ -171,13 +171,23 @@ test("caller gate expands the ~ that paseo ls prints for the home folder", () =>
   let seen; runRoute({ ...o, gate: "g" }, p, routes, (cwd) => { seen = cwd; return { status: "PASS", reasons: [] }; });
   assert.ok(!seen.startsWith("~") && seen.endsWith(".paseo" + BS + "w"), seen);
 });
+test("route records the task's start commit as the gate base (committed work is judged)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process"); const { claimRequest } = await import("../../gate/server/store.mjs");
+  const d = mkdtempSync(join(tmpdir(), "gb-")); const gd = mkdtempSync(join(tmpdir(), "gd-"));
+  const g = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t.t", ...a], { cwd: d, encoding: "utf8" });
+  g("init", "-q"); writeFileSync(join(d, "a"), "1"); g("add", "."); g("commit", "-qm", "i");
+  const sha = g("rev-parse", "HEAD").trim();
+  runRoute({ ...o, cwd: d, gate: "x", gateDir: gd }, fake({ run: () => ({ status: "completed", agentId: "A9" }) }), routes, () => ({ status: "PASS", reasons: [] }));
+  assert.equal(claimRequest(gd, d).base, sha);
+});
 test("caller gate uses the same options as the hook: repo row maxLines, forbid, allow, cmd fallback", () => {
   let opts;
   const p = (a) => (a[0] === "ls" ? [{ id: "A9", cwd: "/r" }] : { status: "completed", agentId: "A9" });
   const rt = { ...routes, gates: [{ match: "^/r$", cmd: "rowcmd", maxLines: 7, forbid: "^[.]github/", allow: "^src/" }] };
   runRoute({ ...o }, p, rt, () => ({ status: "PASS", reasons: [] })); // no caller gate: nothing to run
   runRoute({ ...o, gate: "mine" }, p, rt, (cwd, x) => { opts = x; return { status: "PASS", reasons: [] }; });
-  assert.deepEqual(opts, { cmd: "mine", maxLines: 7, forbid: "^[.]github/", allow: "^src/" });
+  assert.deepEqual(opts, { base: null, cmd: "mine", maxLines: 7, forbid: "^[.]github/", allow: "^src/" });
 });
 test("forbidden-path edit FAILs through the CLI path with the real gate", async () => {
   const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs"); const { tmpdir } = await import("node:os");
