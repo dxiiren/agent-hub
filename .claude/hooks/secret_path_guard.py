@@ -5,9 +5,11 @@ Fails closed: unparsable input exits 2. Exit 2 = blocked.
 text guard = guardrail, not a sandbox; residual risk documented (see docs: a text scan of shell commands always has differentials)."""
 import json
 import re
+import subprocess
 import sys
 
 import fnmatch
+import functools
 import os
 import time
 
@@ -23,6 +25,7 @@ _BUDGET = 5000  # max directory entries looked at per token
 _SECONDS = 0.25  # wall-clock budget per token; running out blocks (fail closed)
 
 
+@functools.lru_cache(maxsize=256)  # one directory listing per distinct name (thousands of `?` tokens would otherwise rescan it each)
 def _expand(name: str) -> list[str] | None:
     """Plain wildcard name in the cwd, shell-like (dotfiles only for a leading dot).
     Bounded while expanding; None = budget exhausted (caller blocks)."""
@@ -46,6 +49,8 @@ def _hit(tok: str) -> bool:
         return False
     if not any(c in name for c in "*?["):
         return bool(PLAIN.match(name))
+    if len(name) > 255:  # no real file name is this long; fnmatch's translation of a long `[[[...` glob is quadratic
+        return True
     # glob in the last component: literal checks first, the filesystem only for a plain cwd name
     if name.strip("*?[]./"):
         return any(fnmatch.fnmatchcase(x, name) for x in SAMPLES)
@@ -75,7 +80,7 @@ SECRETISH = re.compile(r"\.e|\.p|\.k|env|pem|key|id_|cred", re.I)
 def _subst_glued(command: str) -> bool:
     """A command substitution touching a path-like token can assemble a secret name at run time
     (`.e$(true)nv`, `.e``nv`): fail closed when what is left of that token looks secret-ish."""
-    for m in re.finditer(r"[^\s;|&<>()]*(?:\$\([^()]*\)|`[^`]*`)[^\s;|&<>()]*", command):
+    for m in re.finditer(r"(?<![^\s;|&<>()])[^\s;|&<>()]*(?:\$\([^()]*\)|`[^`]*`)[^\s;|&<>()]*", command):
         left = SUBST.sub("", m.group(0))
         if left != m.group(0) and left.strip("'\"") and SECRETISH.search(left):
             return True
@@ -98,13 +103,13 @@ _NO_ANALYSIS = re.compile(
     r"|\w\s*\(\s*\)"                                       # name() { ...; }
     r"|(?:^|[;&|(\s])(?:declare|typeset|local|export|readonly)\s+-[A-Za-z]*n"  # nameref, any option cluster
     r"|(?:^|[;&|(\s])(?:declare|typeset|local)(?![\w-])"
-    r"|\$\{[^}]*[^\w}][^}]*\}|\$\{!"                         # ${x:-w} ${x-w} ${x:=w} ${x+w} ${x#p} ${x%p} ${x/p/r} ${!x}
+    r"|\$\{\w*[^\w}]|\$\{!"                         # ${x:-w} ${x-w} ${x:=w} ${x+w} ${x#p} ${x%p} ${x/p/r} ${!x}
     r"|\$\(\(|\$\["                                        # arithmetic
-    r"|\w=\(|\w\[[^\]]*\]=|\$\{\w+\[")                      # arrays
+    r"|\w=\(|\w\[[^\]]{0,300}\]=|\$\{\w+\[")                      # arrays
 _REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
 _ANYREF = re.compile(r"\$[{\w@*#?!$'\"-]")  # `$'...'` and `$"..."` count as references
 # the original rule, kept: an assignment next to a construct that sets or reads variables indirectly blocks even with no visible reference
-_AMBIGUOUS = re.compile(r"\beval\b|\bread\b|printf\s+-v|\b(?:declare|typeset|export)\s+-n|\$\{[^}]*[^\w}][^}]*\}|\$\{!")
+_AMBIGUOUS = re.compile(r"\beval\b|\bread\b|printf\s+-v|\b(?:declare|typeset|export)\s+-n|\$\{\w*[^\w}]|\$\{!")
 _STATE = {"deadline": None, "work": 0, "bodies": set()}
 _BUDGET_SECONDS = 1.5
 _BUDGET_WORK = 3000
@@ -250,6 +255,8 @@ def _var_glued(command: str) -> str | None:
         comp = tok.rsplit("/", 1)[-1]
         if not VARREF.search(comp) or re.fullmatch(r"(?:\$\{IFS\}|\$IFS)+", comp):
             continue
+        if len(comp) > 255:
+            return tok  # same fnmatch cost cap as _hit
         glob = VARREF.sub("*", comp.replace("${IFS}", " ")).lower()
         if len(glob.replace("*", "")) >= 2 and any(fnmatch.fnmatchcase(s, glob) for s in SAMPLES):
             return tok
@@ -279,6 +286,7 @@ def _scan(text: str, depth: int) -> str | None:
 
 def blocked(command: str) -> str | None:
     """Public entry: ONE deadline (about 1.5 s) and one work budget for the whole command, nested substitutions included; exhausted = blocked."""
+    _expand.cache_clear()
     _STATE.update(deadline=time.monotonic() + _BUDGET_SECONDS, work=0, bodies=set())
     try:
         return _blocked(command, 0)
@@ -313,19 +321,56 @@ def _blocked(command: str, _depth: int) -> str | None:
     return glued
 
 
+_MAX_BYTES = 8 * 1024
+_MAX_DOLLARS = 50
+_CHILD_SECONDS = 1.5
+_HIT_RC = 3  # child exit code for "blocked"; any other non-zero code is a crash and also blocks
+
+
+def _child() -> int:
+    """Child process: the regex analysis, which Python cannot interrupt, so the parent enforces the deadline."""
+    command = sys.stdin.read()
+    slow = os.environ.get("SECRET_PATH_GUARD_TEST_SLEEP")  # test hook: simulate a slow analysis (only ever makes the guard block more)
+    if slow:
+        time.sleep(float(slow))
+    hit = blocked(command)
+    if hit:
+        print(hit)
+        return _HIT_RC
+    return 0
+
+
+def _block(msg: str) -> int:
+    print(f"SECRET PATH GUARD: {msg}", file=sys.stderr)
+    return 2
+
+
 def main() -> int:
+    if "--child" in sys.argv[1:]:
+        return _child()
     try:
         payload = json.load(sys.stdin)
         command = str(payload["tool_input"]["command"])
     except (ValueError, KeyError, TypeError):
         print("secret_path_guard: unreadable hook input, blocked (fail closed)", file=sys.stderr)
         return 2
-    hit = blocked(command)
-    if hit:
-        print(f"SECRET PATH GUARD: command references a protected secret path ({hit}); use the "
-              "environment or the platform secret store instead.", file=sys.stderr)
-        return 2
-    return 0
+    if len(command.encode("utf-8", "replace")) > _MAX_BYTES:
+        return _block("command over 8 KB, blocked before analysis")
+    if command.count("$") > _MAX_DOLLARS:
+        return _block("command has more than 50 '$', blocked before analysis")
+    try:
+        r = subprocess.run([sys.executable, os.path.abspath(__file__), "--child"], input=command, text=True,
+                           capture_output=True, timeout=_CHILD_SECONDS)
+    except subprocess.TimeoutExpired:
+        return _block("analysis timed out, blocked (fail closed)")
+    except (OSError, ValueError):
+        return _block("analysis could not run, blocked (fail closed)")
+    if r.returncode == 0:
+        return 0
+    if r.returncode == _HIT_RC:
+        return _block(f"command references a protected secret path ({r.stdout.strip()}); use the "
+                      "environment or the platform secret store instead.")
+    return _block("analysis crashed, blocked (fail closed)")
 
 
 if __name__ == "__main__":

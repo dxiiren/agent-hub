@@ -254,5 +254,36 @@ try:
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
+# round 4: whole-hook behaviour (stdin JSON in, rc out): ReDoS class, size caps, child timeout
+def run_hook(cmd, env=None):
+    t0 = time.monotonic()
+    r = subprocess.run([sys.executable, os.path.join(H, "secret_path_guard.py")], input=json.dumps({"tool_input": {"command": cmd}}),
+                       text=True, capture_output=True, env=env, timeout=30)
+    return r.returncode, time.monotonic() - t0, r.stderr
+for label, c in (("brace a!", "echo ${" + "a!" * 5000 + "}"), ("brace unclosed", "echo ${" + "a!" * 3000), ("nested braces", "echo " + "${a!" * 40 + "}" * 40),
+                 ("bracket glob", "cat " + "[*" * 3000), ("bracket assign", "x=" + "a[" * 3000), ("backticks", "`" * 6000 + " .env"), ("sh -c", "sh -c '" * 1000)):
+    rc, dt, _ = run_hook(c)
+    check("r4 ReDoS %s blocks fast (rc %d, %.2fs)" % (label, rc, dt), rc == 2 and dt < 2)
+rc, dt, err = run_hook("echo " + "a" * 8300)
+check("r4 over 8 KB blocks", rc == 2 and "8 KB" in err)
+rc, dt, err = run_hook("echo " + "$a " * 51)
+check("r4 51 dollars block", rc == 2 and "'$'" in err)
+for c in ["git status", "cat README.md", "ls *.md"]:
+    rc, dt, _ = run_hook(c)
+    check("r4 normal passes %s (%.0f ms)" % (c, dt * 1000), rc == 0 and dt < 0.4)
+check("r4 secret still blocks through the child", run_hook("cat .env")[0] == 2)
+slow = dict(os.environ, SECRET_PATH_GUARD_TEST_SLEEP="5")
+rc, dt, err = run_hook("git status", slow)
+check("r4 child timeout exits 2 (%.2fs)" % dt, rc == 2 and "timed out" in err and dt < 3)
+check("r4 child crash exits 2", run_hook("git status", dict(os.environ, SECRET_PATH_GUARD_TEST_SLEEP="x"))[0] == 2)
+src = open(os.path.join(H, "secret_path_guard.py"), encoding="utf-8").read()
+try:
+    compile(src, "secret_path_guard.py", "exec"); import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error"); compile(src, "secret_path_guard.py", "exec")
+    check("r4 file compiles with no SyntaxWarning", True)
+except SyntaxError:
+    check("r4 file compiles with no SyntaxWarning", False)
+
 
 print("FAIL: " + ", ".join(fails) if fails else "ALL PASS"); sys.exit(1 if fails else 0)
