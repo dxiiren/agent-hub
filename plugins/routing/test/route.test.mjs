@@ -62,3 +62,39 @@ test("unsafe mode is dropped outside a worktree and kept (with --new-workspace w
   p = mk(); runRoute({ ...o, provider: "qwen/x" }, p, r2);
   assert.ok(p.calls.find((c) => c[0] === "run").includes("plan"));
 });
+
+import { cmpVer, newest, parseCodex, parseClaude, resolveEntry, stalePins } from "../resolve.mjs";
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const cacheFile = join(mkdtempSync(join(tmpdir(), "rs-")), "models.json");
+const slugs = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6.2-astra"];
+writeFileSync(cacheFile, JSON.stringify({ models: slugs.map((slug) => ({ slug, visibility: "list" })) }));
+const env = { CODEX_MODELS_CACHE: cacheFile };
+
+test("version sort: 6.1 > 6 > 5.6", () => {
+  assert.ok(cmpVer([6, 1], [6]) > 0 && cmpVer([6], [5, 6]) > 0);
+  assert.equal(newest(parseCodex(slugs), "sol").id, "gpt-6.1-sol");
+});
+test("astra is excluded even when it has the highest version", () => {
+  assert.equal(parseCodex(slugs).some((m) => m.family === "astra"), false);
+  assert.notEqual(resolveEntry("codex/latest", null, env), "codex/gpt-6.2-astra");
+});
+test("aliases resolve; a family without the newest version falls back to the newest overall", () => {
+  assert.match(resolveEntry("codex/latest", null, env), /^codex\/gpt-6\.1-/);
+  assert.equal(resolveEntry("codex/latest-terra", null, env), "codex/gpt-6.1-terra");
+  assert.equal(resolveEntry("codex/gpt-6-luna", null, env), "codex/gpt-6-luna"); // pins pass through
+  const only = writeFileSync(cacheFile, JSON.stringify({ models: [{ slug: "gpt-6.1-sol" }, { slug: "gpt-6-luna" }] }));
+  assert.equal(resolveEntry("codex/latest-luna", null, env), "codex/gpt-6-luna");
+  assert.throws(() => resolveEntry("codex/latest-terra", null, env));
+});
+test("claude and qoder aliases use the provider model list", () => {
+  const p = (a) => (a[2] === "claude-clean" ? [{ id: "claude-sonnet-5" }, { id: "claude-sonnet-5-5" }, { id: "claude-haiku-5-5" }] : [{ id: "efficient" }, { id: "fast" }]);
+  assert.equal(resolveEntry("claude/latest-sonnet", p, env), "claude-clean/claude-sonnet-5-5");
+  assert.equal(parseClaude(["claude-opus-5-5"])[0].ver.join("."), "5.5");
+  assert.equal(resolveEntry("qoder/efficient@latest", p, env), "qoder/efficient");
+});
+test("doctor warns on a pinned older model", () => {
+  writeFileSync(cacheFile, JSON.stringify({ models: slugs.map((slug) => ({ slug })) }));
+  assert.equal(stalePins({ routes: { a: ["codex/latest-sol", "codex/gpt-6-sol"] } }, env).length, 1);
+});

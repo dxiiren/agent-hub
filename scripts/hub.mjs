@@ -244,6 +244,14 @@ async function doctor(deep) {
     const st = e ? (e.status || e.state || '') : 'missing';
     row(/avail|ready|ok/i.test(st), `provider ${id}: status`, st);
   }
+  try { // latest aliases: show what they resolve to now, warn on a pinned older model
+    const { resolveCached, stalePins } = await import('../plugins/routing/resolve.mjs');
+    const rt = JSON.parse(readFileSync(join(REPO, 'config', 'routes', existsSync(join(REPO, 'config', 'routes', 'routes.local.json')) ? 'routes.local.json' : 'routes.template.json'), 'utf8'));
+    const lp = (a) => { const j = JSON.parse(paseo(['--json', ...a]).stdout || '[]'); return j; };
+    const aliases = [...new Set(Object.values(rt.routes || {}).flat())].filter((e) => /\/(latest|.*@latest)/.test(e));
+    for (const a of aliases) { try { console.log(`INFO  ${a} -> ${resolveCached(a, (x) => lp(x))}`); } catch (e) { console.log(`WARN  ${a} does not resolve: ${e.message}`); } }
+    for (const w of stalePins(rt)) console.log(`WARN  ${w}`);
+  } catch (e) { console.log(`WARN  alias check failed: ${e.message}`); }
   if (deep) {
     const dir = mkdtempSync(join(tmpdir(), 'hub-doctor-'));
     const model = { codex: 'codex/gpt-6.1-terra', 'claude-clean': 'claude-clean/claude-haiku-5-5' };

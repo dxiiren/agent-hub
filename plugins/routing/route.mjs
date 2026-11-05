@@ -2,13 +2,14 @@
 // Routing wrapper (decision 41): task type -> ordered provider/model chain; the caller may override;
 // a provider at its slot limit is skipped and a failed or timed-out one falls to the next entry.
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
-// Usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]
+// Usage: route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, writeRequest } from "../gate/server/store.mjs";
+import { resolveCached } from "./resolve.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -54,7 +55,9 @@ export function runRoute(o, paseo, routes) {
   if (!chain?.length) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   const slots = routes.slots ?? {};
   const trace = [];
-  for (const prov of chain) {
+  for (const entry of chain) {
+    let prov;
+    try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
@@ -76,6 +79,9 @@ export function runRoute(o, paseo, routes) {
 }
 
 function main(argv) {
+  if (argv[0] === "--resolve") { // print what an alias maps to right now
+    try { console.log(resolveCached(argv[1], cliPaseo(process.env.PASEO_HOME))); return 0; } catch (e) { console.error(e.message); return 1; }
+  }
   const [type, prompt, ...rest] = argv;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]'); return 2; }

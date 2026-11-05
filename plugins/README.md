@@ -11,3 +11,5 @@ Paseo plugins and CLIs for agent-hub. Install a plugin with `paseo plugin instal
 Tests: `npm test` (config check, node tests, python tests).
 Windows note: pass native paths (`C:/...`) in env vars to the daemon; a Git-Bash `/c/...` path is written to `C:\c\...`.
 Statusline: call the python file directly; going through `bin/agent-hub.cmd` adds about 45 ms of cmd.exe start-up.
+
+**Latest aliases.** A route entry may name `codex/latest`, `codex/latest-sol|terra|luna`, `claude/latest-opus|sonnet|haiku` or `qoder/<tier>@latest` instead of a pinned model. `route.mjs` resolves it at dispatch to the highest version the provider lists (Codex: `~/.codex/models_cache.json`, version-sorted, `astra` never chosen, a family without the newest version falls back to the newest overall for `codex/latest`; Claude and Qoder: `paseo provider models`), cached 10 min. `node plugins/routing/route.mjs --resolve <alias>` prints the mapping now; `just doctor` lists resolved aliases and warns about pinned older models.

@@ -1,5 +1,5 @@
 {
-  "_comment": "Default provider order per task type (section 24b capability bench, 05-11). A caller may override the provider and the gate. A busy or failed entry moves to the next one. Each entry is provider/model as the daemon config names them (see `paseo provider models <id>`). Copy to routes.local.json and replace <REPO_GATE_COMMAND> and the gate rows.",
+  "_comment": "Entries may be latest aliases (codex/latest[-sol|-terra], claude/latest-opus|sonnet|haiku, qoder/<tier>@latest) resolved at dispatch; see plugins/routing/resolve.mjs. Default provider order per task type (section 24b capability bench, 05-11). A caller may override the provider and the gate. A busy or failed entry moves to the next one. Each entry is provider/model as the daemon config names them (see `paseo provider models <id>`). Copy to routes.local.json and replace <REPO_GATE_COMMAND> and the gate rows.",
   "gateDefault": "<REPO_GATE_COMMAND>",
   "gates": [
     {
@@ -27,9 +27,9 @@
   "waitTimeout": "15m",
   "routes": {
     "code-edit": [
-      "codex/gpt-6.1-terra",
-      "codex/gpt-6.1-sol",
-      "claude-clean/claude-sonnet-5-5",
+      "codex/latest-terra",
+      "codex/latest-sol",
+      "claude/latest-sonnet",
       "qoder/efficient",
       "qwen-code-2"
     ],
@@ -37,25 +37,25 @@
       "qwen-laptop",
       "qwen-code-2",
       "qoder/efficient",
-      "codex/gpt-6-luna"
+      "codex/latest-terra"
     ],
     "summarise": [
       "qwen-laptop",
       "qoder/efficient",
       "qwen-code-2",
-      "codex/gpt-6-luna"
+      "codex/latest-terra"
     ],
     "test-scaffold": [
       "qwen-laptop",
       "qoder/efficient",
-      "codex/gpt-6.1-sol",
-      "claude-clean/claude-haiku-5-5"
+      "codex/latest-sol",
+      "claude/latest-haiku"
     ],
     "review": [
       "qwen-laptop",
       "qoder/efficient",
       "qwen-code-2",
-      "claude-clean/claude-haiku-5-5"
+      "claude/latest-haiku"
     ]
   }
 }
