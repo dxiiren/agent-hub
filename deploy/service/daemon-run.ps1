@@ -15,6 +15,8 @@ $env:AGENT_HUB_POLLER_DIR = Join-Path $Repo 'plugins/usage-otel/pollers'
 # Gates and agents may run hooks through Git Bash: put it first so Windows does not pick System32's WSL bash.exe.
 $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
 if ($git) { $gr = Split-Path (Split-Path $git); foreach ($d in @("$gr\bin", "$gr\usr\bin")) { if (Test-Path $d) { $env:Path = "$d;$env:Path" } } }
+# Logon/reboot: Docker Desktop + the usage stack come up on their own (hidden, does not delay the daemon).
+if ($env:AGENT_HUB_NO_USAGE_STACK -ne '1') { Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $Repo 'deploy\usage\ensure-usage.ps1')) }
 $paseo = (Get-Command paseo.cmd -ErrorAction SilentlyContinue).Source
 if (-not $paseo) { $paseo = (Get-Command paseo -ErrorAction Stop).Source }
 # Own hidden console + new process group: a stray CTRL_C_EVENT aimed at another console group (e.g. os.kill(pid, 0) on Windows) cannot reach the daemon.
