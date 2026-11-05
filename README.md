@@ -59,43 +59,23 @@ There is no dev server: `just test` exiting 0 means every config template parses
 
 ## Benchmarks
 
-Interim update: cells marked "running" are still being measured; "pending" means not started. Nothing is estimated.
-
 Measured 5 November 2026 through the installed hub: each task runs in a throwaway worktree and is judged by its own gate (never by the agent's say-so). Set A = 7 easy edits, set B = 10 hard code edits, set C = 3 tasks (log summary, test scaffold that must kill 3 mutants, code review). Latest version of each model is shown; most cells are n=1 or 2, so one task of difference is noise. Full method, per-tier Qoder credits, harness comparison and history are in the [guide](https://dxiiren.github.io/agent-hub/#bench).
-
-Sorted by set B pass rate, then set A pass rate, then set C pass rate, then median time (faster first). Running or pending cells count their passes so far and the row is marked (partial).
-
-Sorted by set B pass rate, then set A pass rate, then set C pass rate, then median time (faster first). Running or pending cells count their passes so far and the row is marked (partial).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a set that was not run drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
 
 Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
 
 | Model | Harness | Set A (7) | Set B (10) | Set C (3) | Median s | Performance |
 |---|---|---|---|---|---|---|
-| Qoder Efficient (partial) | Qoder | 7/7 | 1/1, running (1 of 10 done) | pending | 76 | 0.98* |
 | Codex gpt-6.1-sol | Codex | 7/7 | 10/10 | 3/3 | 82 | 0.98 |
 | Qoder Kimi-K3.1-Pro | Qoder | 7/7 | 9/10 | 3/3 | 87 | 0.92 |
 | Claude Sonnet 5.5 | Claude | 5/7 | 10/10 | 3/3 | 80 | 0.92 |
 | Claude Haiku 5.5 | Claude | 7/7 | 9/10 | 3/3 | 92 | 0.92 |
-| Codex gpt-6-astra * (partial) | Codex | 6/7 | 10/10 | 2/2, running (2 of 3 done) | 139 | 0.92 |
+| Codex gpt-6-astra * | Codex | 6/7 | 10/10 | 3/3 | 136 | 0.92 |
 | Qoder GLM-5.3 | Qoder | 6/7 | 9/10 | 3/3 | 70 | 0.91 |
 | Qoder DeepSeek-Flash | Qoder | 7/7 | 10/10 | 2/3 | 83 | 0.91 |
 | Qoder Fast | Qoder | 6/7 | 10/10 | 2/3 | 64 | 0.90 |
 | Codex gpt-6.1-terra | Codex | 6/7 | 10/10 | 2/3 | 67 | 0.90 |
 | Claude Opus 5.5 | Claude | 6/7 | 10/10 | 2/3 | 70 | 0.90 |
+| Qoder Efficient | Qoder | 7/7 | 10/10 | 2/3 | 179 | 0.87 |
 | Codex gpt-6-luna | Codex | 5/7 | 8/10 | 3/3 | 73 | 0.83 |
 | Qwen3.8-27B-NVFP (2-node cluster) | Qwen Code | 6/7 | 9/10 | 2/3 | 109 | 0.81 |
 | Qoder Qwen3.8-Flash | Qoder | 7/7 | 8/10 | 2/3 | 99 | 0.80 |
@@ -107,7 +87,7 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 | Qoder DeepSeek-V4-Pro | Qoder | 6/7 | 4/10 | 2/3 | 132 | 0.55 |
 | Qwen3.5-9B laptop, 32k (default) | Qwen Code | 7/7 | 1/10 | 3/3 | 76 | 0.53 |
 | Qwen3.5-9B laptop, 64k | OpenCode | 7/7 | 1/10 | 3/3 | 101 | 0.51 |
-| Qwen3.5-9B laptop, 32k (partial) | OpenCode | 1/3, running (3 of 7 done) | pending | pending | 641 | pending (needs B) |
+| Qwen3.5-9B laptop, 32k | OpenCode | 4/7 | 0/10 | 1/3 | 625 | 0.19 |
 
 * Benchmark only; not in routing unless the owner approves.
 
@@ -117,11 +97,11 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 
 | Qoder tier | Set A (7) | Set B (10) | Set C (3) | Median s | Performance | Credit multiplier | Credits charged per task |
 |---|---|---|---|---|---|---|---|
-| Efficient (partial) | 7/7 | 1/1, running (1 of 10 done) | pending | 76 | 0.98* | 0.00x | 0.00 (records ~0.50) |
 | Kimi-K3.1-Pro | 7/7 | 9/10 | 3/3 | 87 | 0.92 | 1.00x | 7.22 |
 | GLM-5.3 | 6/7 | 9/10 | 3/3 | 70 | 0.91 | 0.80x | 8.34 |
 | DeepSeek-Flash | 7/7 | 10/10 | 2/3 | 83 | 0.91 | 0.10x | 0.59 |
 | Fast | 6/7 | 10/10 | 2/3 | 64 | 0.90 | 0.80x | 5.63 |
+| Efficient | 7/7 | 10/10 | 2/3 | 179 | 0.87 | 0.00x | 0.00 (records ~0.74) |
 | Qwen3.8-Flash | 7/7 | 8/10 | 2/3 | 99 | 0.80 | 0.10x | 0.78 |
 | MiniMax-M3.1-Flash | 7/7 | 6/10 | 3/3 | 143 | 0.74 | 0.10x | 1.54 |
 | Qwen3.8-Max | 6/7 | 5/10 | 3/3 | 220 | 0.65 | 0.50x | 14.22 |
@@ -131,6 +111,24 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs); other cells are flat rate or local.
 
 Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
+
+## Changes 05-11
+
+- **Plugin hooks no longer block.** The gate plugin runs in the background and skips agents that are gone; the usage plugin no longer awaits the Qoder poller in the turn-before hook and polls the account only when the session transcript has no credits. Hooks now stay inside Paseo's 30 s RPC limit (2ebfef6).
+- **OTLP 5 s timeout.** MCP and OTLP calls from the usage plugin time out after 5 s, and an OTLP outage is logged once instead of on every turn.
+- **Usage stack starts itself.** Docker Desktop and the usage stack (collector, Prometheus, Grafana) come up on logon and on `just up`; `just doctor` now fails when the collector, Prometheus or Grafana is down (f8c7519).
+- **Qoder pinned to 1.1.81.** The hub uses qodercli 1.1.81 with a private config directory, because 1.1.83 ignores the tier model over ACP (served `auto`, no credits). Benchmarks check the pin before every cell.
+- **Daemon password hash at bcrypt cost 4.** The daemon bcrypt-checked the bearer token on every MCP request inside its single event loop; at cost 4 MCP calls stop saturating it.
+- **Laptop server fixes.** `--cache-ram 0` (the host prompt cache had grown llama-server to 3.5 GB of RAM) and the launcher never starts a second server while one is still loading.
+- **Routing order.** Codex, then Claude, then Qoder Efficient (free, 10/10 on set B), then DeepSeek-Flash, then the office Qwen3.8-27B-NVFP cluster, then the single-GPU Qwen3.8-27B. Qoder Efficient is free: charged 0.00 credits per task (it records about 0.7).
+- **Laptop context 64k.** The laptop model now defaults to a 64k context (`LAPTOP_CTX=32768` goes back): Qwen Code passes 4/10 hard edits at 64k against 1/10 at 32k, and the whole 8 GB card peaks at 7.5 GB with every layer on the GPU. OpenCode was worse at both sizes (1/10 at 64k, 0/10 at 32k).
+- **Benchmark refreshed.** Tables are A | B | C with a Performance column (0.5B + 0.2A + 0.2C + 0.1Speed), click-to-sort including Name, and the final laptop grid (Qwen Code and OpenCode at 32k and 64k).
+
+<!-- slots:start -->
+### Concurrency / slots
+
+To be refreshed with the acceptance run (retry on `DAEMON_UNREACHABLE` and the measured slot numbers per provider).
+<!-- slots:end -->
 
 ## Commands
 

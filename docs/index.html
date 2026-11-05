@@ -106,6 +106,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li><a href="#security">8. Security model</a></li>
 <li><a href="#ops">9. Install and operations</a></li>
 <li><a href="#multi">10. Multi-user</a></li>
+<li><a href="#changes">Changes 05-11</a></li>
 <li><a href="#bench">11. Benchmarks</a></li>
 <li><a href="#decisions">12. Decisions and rejections</a></li>
 <li><a href="#faq">13. FAQ</a></li>
@@ -133,7 +134,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li><b>No lead in the middle.</b> The caller dispatches straight to a provider. Zero Claude-lead tokens on the path.</li>
 <li><b>Verdict and diff back.</b> A gate checks the result on the daemon side, so it applies whoever sent the task.</li>
 <li><b>One usage view.</b> Tokens per model, provider, developer and day, plus credits where a provider bills in credits.</li>
-<li><b>Laptop model 100% on the GPU.</b> A Qwen3.5-9B model plus a 32k KV cache has to fit in 8 GB of VRAM, with no CPU or RAM offload.</li>
+<li><b>Laptop model 100% on the GPU.</b> A Qwen3.5-9B model plus a 64k KV cache has to fit in 8 GB of VRAM, with no CPU or RAM offload.</li>
 <li><b>Adopt, do not invent.</b> v1 is a thin layer on Paseo: plugins, config and scripts. The Paseo trademark is not used, hence the name <code>agent-hub</code>.</li>
 <li><b>Safe by default.</b> Loopback bind, a password, full-access modes only inside a throwaway worktree, a secret scan on every result.</li>
 </ul>
@@ -190,6 +191,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 
 <section id="routing">
 <h2><span class="n">4</span>Routing</h2>
+<p id="route-order">Default order for code edits: Codex, then Claude, then Qoder Efficient (free, 10/10 on the hard set), then DeepSeek-Flash, then the office Qwen3.8-27B-NVFP cluster, then the single-GPU Qwen3.8-27B. Qoder is pinned to qodercli 1.1.81 with a private config directory.</p>
 <p>The table is a JSON file: <code>config/routes/routes.local.json</code> (git-ignored), else the committed template, or the path in <code>AGENT_HUB_ROUTES</code>. <code>route.mjs</code> and the gate plugin read the same file.</p>
 <h3>Format</h3>
 <div class="pre"><pre><code>{
@@ -282,6 +284,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 
 <section id="usage">
 <h2><span class="n">6</span>Usage and cost tracking</h2>
+<p id="usage-resilience">Resilience: the plugin hooks run inside Paseo's 30 s RPC limit (the gate in the background, no await on the Qoder poller), MCP and OTLP calls time out after 5 s, an OTLP outage is logged once, and Docker Desktop plus the usage stack start on logon and <code>just up</code>; <code>just doctor</code> fails when the collector, Prometheus or Grafana is down.</p>
 <p>Every CLI reports usage differently, and two report none through the daemon. The usage plugin therefore combines what the daemon knows with each tool's own files, and everything ends in one pipeline.</p>
 <div class="fig"><svg viewBox="0 0 760 336" role="img" aria-label="Usage pipeline" style="min-width:640px"><defs><marker id="us" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs><rect class="bp" x="20" y="20" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="46.0" text-anchor="middle">Usage plugin, per turn</text><text class="t ts" x="140.0" y="62.0" text-anchor="middle">fills Qwen / Qoder from their own files</text><rect class="b" x="20" y="100" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="126.0" text-anchor="middle">Claude Code, Codex, Qwen Code</text><text class="t ts" x="140.0" y="142.0" text-anchor="middle">native OTLP metrics</text><rect class="b" x="20" y="180" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="206.0" text-anchor="middle">Host pollers on :9109</text><text class="t ts" x="140.0" y="222.0" text-anchor="middle">Qoder credits, OpenCode, limit %</text><rect class="b" x="20" y="260" width="240" height="58" rx="8"/><text class="t tb" x="140.0" y="286.0" text-anchor="middle">SGLang, llama-server</text><text class="t ts" x="140.0" y="302.0" text-anchor="middle">/metrics scrape (server-wide)</text><rect class="bp" x="330" y="20" width="190" height="58" rx="8"/><text class="t tb" x="425.0" y="46.0" text-anchor="middle">usage.jsonl + sessions/</text><text class="t ts" x="425.0" y="62.0" text-anchor="middle">&lt;id&gt;.sum.json</text><rect class="bp" x="330" y="100" width="190" height="58" rx="8"/><text class="t tb" x="425.0" y="126.0" text-anchor="middle">OTel collector</text><text class="t ts" x="425.0" y="142.0" text-anchor="middle">allow-list, strip identity</text><rect class="bp" x="330" y="190" width="190" height="58" rx="8"/><text class="t tb" x="425.0" y="216.0" text-anchor="middle">Prometheus</text><text class="t ts" x="425.0" y="232.0" text-anchor="middle">hub_tokens_total rule</text><rect class="bg" x="570" y="20" width="170" height="58" rx="8"/><text class="t tb" x="655.0" y="46.0" text-anchor="middle">statusline</text><text class="t ts" x="655.0" y="62.0" text-anchor="middle">60 ms budget</text><rect class="bg" x="570" y="190" width="170" height="58" rx="8"/><text class="t tb" x="655.0" y="216.0" text-anchor="middle">Grafana</text><text class="t ts" x="655.0" y="232.0" text-anchor="middle">provider and dev vars</text><line class="l" x1="260" y1="49" x2="330" y2="49" marker-end="url(#us)"/><line class="l" x1="260" y1="66" x2="330" y2="114" marker-end="url(#us)"/><line class="l" x1="260" y1="129" x2="330" y2="129" marker-end="url(#us)"/><line class="l" x1="425" y1="158" x2="425" y2="190" marker-end="url(#us)"/><line class="l" x1="260" y1="209" x2="330" y2="214" marker-end="url(#us)"/><line class="l" x1="260" y1="290" x2="330" y2="236" marker-end="url(#us)"/><line class="l" x1="520" y1="49" x2="570" y2="49" marker-end="url(#us)"/><line class="l" x1="520" y1="219" x2="570" y2="219" marker-end="url(#us)"/></svg></div>
 <h3>Per CLI: how the numbers arrive</h3>
@@ -315,6 +318,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 
 <section id="laptop">
 <h2><span class="n">7</span>The laptop model</h2>
+<p id="laptop-fixes">The server runs with <code>--cache-ram 0</code> (no host prompt cache), and the launcher never starts a second server while one is loading.</p>
 <p>The laptop runs Qwen3.5-9B (UD-Q4_K_XL) through llama.cpp's <code>llama-server</code>, driven by Qwen Code over ACP. One rule shapes everything: <b>the model must load 100% on the GPU</b>. A model that spills to the CPU is slow, hot, and eats RAM that the developer needs, so the hub would rather refuse than degrade.</p>
 <h3>Layer 1: install time</h3>
 <p><code>hub.mjs configure</code> asks <code>nvidia-smi</code> for total VRAM and registers the <code>qwen-laptop</code> provider only if it is at least 7500 MiB (override with <code>LAPTOP_MIN_VRAM_MIB</code>). The 9B model needs about 6.3 GB. No GPU, no provider.</p>
@@ -329,13 +333,13 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <figure><img src="images/doctor.png" alt="just doctor output: daemon, MCP and every provider check passing, laptop provider disabled by the GPU guard" width="900" height="339" loading="lazy"><figcaption><code>just doctor</code> on a machine where the guard refused the laptop model. That is correct behaviour, so it is a warning.</figcaption></figure>
 <h3>Layer 3: lazy start with one starter</h3>
 <p>Paseo probes each provider's status at start-up by sending only <code>initialize</code>. The launcher holds the model server back until the first <code>session/prompt</code> arrives on stdin, so a probe never loads 6 GB. When it does start, it takes an exclusive lock file (<code>wx</code>; stale after 180 s) because three parallel callers once started six servers. It also refuses if another process already holds more than 600 MiB of VRAM.</p>
-<div class="pre"><pre><code>llama-server -m $LAPTOP_MODEL_PATH --jinja -ngl 99 -c 32768 -np 1 -fa on \
+<div class="pre"><pre><code>llama-server -m $LAPTOP_MODEL_PATH --jinja -ngl 99 -c 65536 -np 1 -fa on \
   --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off \
   --temp 0.7 --top-p 0.8 --top-k 20 \
   --device CUDA0 --load-mode none \
-  --host 127.0.0.1 --port 8089 --alias qwen35-9b --metrics</code></pre></div>
+  --host 127.0.0.1 --port 8089 --alias qwen35-9b --metrics --cache-ram 0</code></pre></div>
 <ul>
-<li><code>-ngl 99</code> puts every layer on the GPU; <code>-c 32768 -np 1</code> is one 32k slot. With <code>-np 2</code> at 2 x 16k every request failed, because Qwen Code's own prompt is about 19k tokens. Extra concurrency is a queue inside llama-server, not a refusal.</li>
+<li><code>-ngl 99</code> puts every layer on the GPU; <code>-c 65536 -np 1</code> is one 64k slot (the default since the final laptop benchmark; <code>LAPTOP_CTX=32768</code> gives the old 32k). With <code>-np 2</code> at 2 x 16k every request failed, because Qwen Code's own prompt is about 19k tokens. Extra concurrency is a queue inside llama-server, not a refusal.</li>
 <li><code>--device CUDA0</code> selects the first CUDA device explicitly instead of letting the build pick a backend.</li>
 <li><code>--load-mode none</code> avoids memory-mapping the GGUF into system RAM. Measured: the working set fell from 7.1 GB to 1.1 GB and free RAM rose from 3.4 GB to 9.8 GB, with the model still 100% on the GPU.</li>
 <li><code>--metrics</code> exposes the Prometheus endpoint the usage stack scrapes. The server binds to loopback.</li>
@@ -449,6 +453,24 @@ docker compose up -d --build</code></pre></div>
 <p>True in-process multi-user stays out of scope for v1. Per-container is simple to reason about: the isolation boundary is Docker's, not application code.</p>
 </section>
 
+<section id="changes">
+<h2><span class="n">+</span>Changes 05-11</h2>
+<ul>
+<li><b>Plugin hooks no longer block.</b> The gate plugin runs in the background and skips agents that are gone; the usage plugin no longer awaits the Qoder poller in the turn-before hook and polls the account only when the session transcript has no credits. Hooks now stay inside Paseo's 30 s RPC limit (2ebfef6).</li>
+<li><b>OTLP 5 s timeout.</b> MCP and OTLP calls from the usage plugin time out after 5 s, and an OTLP outage is logged once instead of on every turn.</li>
+<li><b>Usage stack starts itself.</b> Docker Desktop and the usage stack (collector, Prometheus, Grafana) come up on logon and on <code>just up</code>; <code>just doctor</code> now fails when the collector, Prometheus or Grafana is down (f8c7519).</li>
+<li><b>Qoder pinned to 1.1.81.</b> The hub uses qodercli 1.1.81 with a private config directory, because 1.1.83 ignores the tier model over ACP (served <code>auto</code>, no credits). Benchmarks check the pin before every cell.</li>
+<li><b>Daemon password hash at bcrypt cost 4.</b> The daemon bcrypt-checked the bearer token on every MCP request inside its single event loop; at cost 4 MCP calls stop saturating it.</li>
+<li><b>Laptop server fixes.</b> <code>--cache-ram 0</code> (the host prompt cache had grown llama-server to 3.5 GB of RAM) and the launcher never starts a second server while one is still loading.</li>
+<li><b>Routing order.</b> Codex, then Claude, then Qoder Efficient (free, 10/10 on set B), then DeepSeek-Flash, then the office Qwen3.8-27B-NVFP cluster, then the single-GPU Qwen3.8-27B. Qoder Efficient is free: charged 0.00 credits per task (it records about 0.7).</li>
+<li><b>Laptop context 64k.</b> The laptop model now defaults to a 64k context (<code>LAPTOP_CTX=32768</code> goes back): Qwen Code passes 4/10 hard edits at 64k against 1/10 at 32k, and the whole 8 GB card peaks at 7.5 GB with every layer on the GPU. OpenCode was worse at both sizes (1/10 at 64k, 0/10 at 32k).</li>
+<li><b>Benchmark refreshed.</b> Tables are A | B | C with a Performance column (0.5B + 0.2A + 0.2C + 0.1Speed), click-to-sort including Name, and the final laptop grid (Qwen Code and OpenCode at 32k and 64k).</li>
+</ul>
+<!-- slots:start -->
+<h3>Concurrency / slots</h3>
+<p>To be refreshed with the acceptance run (retry on <code>DAEMON_UNREACHABLE</code> and the measured slot numbers per provider).</p>
+<!-- slots:end -->
+</section>
 <section id="bench">
 <h2><span class="n">11</span>Benchmarks</h2>
 <p>These are lab measurements taken on 5 November 2026 through the installed hub. They answer one question: <i>which model, in which harness, passes which kind of task, how fast, and at what cost.</i> The routing table in section 4 is derived from them. Models are listed by their latest version; older versions are kept only under "History". Every cell has finished; none is pending.</p>
@@ -465,17 +487,17 @@ docker compose up -d --build</code></pre></div>
 <p class="sortrule">Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial). Click a column header to sort.</p>
 <div class="tbl"><table>
 <tr><th>Model</th><th>Harness</th><th class="num">Set A (7)</th><th class="num">Set B (10)</th><th class="num">Set C (3)</th><th class="num">Median s</th><th class="num">Performance</th></tr>
-<tr><td>Qoder Efficient (partial)</td><td>Qoder</td><td class="num">7/7</td><td class="num">1/1, running (1 of 10 done)</td><td class="num">pending</td><td class="num">76</td><td class="num">0.98*</td></tr>
 <tr><td>Codex gpt-6.1-sol</td><td>Codex</td><td class="num">7/7</td><td class="num">10/10</td><td class="num">3/3</td><td class="num">82</td><td class="num">0.98</td></tr>
 <tr><td>Qoder Kimi-K3.1-Pro</td><td>Qoder</td><td class="num">7/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">87</td><td class="num">0.92</td></tr>
 <tr><td>Claude Sonnet 5.5</td><td>Claude</td><td class="num">5/7</td><td class="num">10/10</td><td class="num">3/3</td><td class="num">80</td><td class="num">0.92</td></tr>
 <tr><td>Claude Haiku 5.5</td><td>Claude</td><td class="num">7/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">92</td><td class="num">0.92</td></tr>
-<tr><td>Codex gpt-6-astra * (partial)</td><td>Codex</td><td class="num">6/7</td><td class="num">10/10</td><td class="num">2/2, running (2 of 3 done)</td><td class="num">139</td><td class="num">0.92</td></tr>
+<tr><td>Codex gpt-6-astra *</td><td>Codex</td><td class="num">6/7</td><td class="num">10/10</td><td class="num">3/3</td><td class="num">136</td><td class="num">0.92</td></tr>
 <tr><td>Qoder GLM-5.3</td><td>Qoder</td><td class="num">6/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">70</td><td class="num">0.91</td></tr>
 <tr><td>Qoder DeepSeek-Flash</td><td>Qoder</td><td class="num">7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">83</td><td class="num">0.91</td></tr>
 <tr><td>Qoder Fast</td><td>Qoder</td><td class="num">6/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">64</td><td class="num">0.90</td></tr>
 <tr><td>Codex gpt-6.1-terra</td><td>Codex</td><td class="num">6/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">67</td><td class="num">0.90</td></tr>
 <tr><td>Claude Opus 5.5</td><td>Claude</td><td class="num">6/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">70</td><td class="num">0.90</td></tr>
+<tr><td>Qoder Efficient</td><td>Qoder</td><td class="num">7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">179</td><td class="num">0.87</td></tr>
 <tr><td>Codex gpt-6-luna</td><td>Codex</td><td class="num">5/7</td><td class="num">8/10</td><td class="num">3/3</td><td class="num">73</td><td class="num">0.83</td></tr>
 <tr><td>Qwen3.8-27B-NVFP (2-node cluster)</td><td>Qwen Code</td><td class="num">6/7</td><td class="num">9/10</td><td class="num">2/3</td><td class="num">109</td><td class="num">0.81</td></tr>
 <tr><td>Qoder Qwen3.8-Flash</td><td>Qoder</td><td class="num">7/7</td><td class="num">8/10</td><td class="num">2/3</td><td class="num">99</td><td class="num">0.80</td></tr>
@@ -487,21 +509,9 @@ docker compose up -d --build</code></pre></div>
 <tr><td>Qoder DeepSeek-V4-Pro</td><td>Qoder</td><td class="num">6/7</td><td class="num">4/10</td><td class="num">2/3</td><td class="num">132</td><td class="num">0.55</td></tr>
 <tr><td>Qwen3.5-9B laptop, 32k (default)</td><td>Qwen Code</td><td class="num">7/7</td><td class="num">1/10</td><td class="num">3/3</td><td class="num">76</td><td class="num">0.53</td></tr>
 <tr><td>Qwen3.5-9B laptop, 64k</td><td>OpenCode</td><td class="num">7/7</td><td class="num">1/10</td><td class="num">3/3</td><td class="num">101</td><td class="num">0.51</td></tr>
-<tr><td>Qwen3.5-9B laptop, 32k (partial)</td><td>OpenCode</td><td class="num">1/3, running (3 of 7 done)</td><td class="num">pending</td><td class="num">pending</td><td class="num">641</td><td class="num">pending (needs B)</td></tr>
+<tr><td>Qwen3.5-9B laptop, 32k</td><td>OpenCode</td><td class="num">4/7</td><td class="num">0/10</td><td class="num">1/3</td><td class="num">625</td><td class="num">0.19</td></tr>
 </table></div>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
-<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
+<p>* Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
 
 <h3>Harness comparison for the same model</h3>
 <p class="sortrule">Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial). Click a column header to sort.</p>
@@ -517,7 +527,7 @@ docker compose up -d --build</code></pre></div>
 <tr><td>Qwen3.8-27B (single GPU)</td><td>Codex</td><td class="num">7/7</td><td class="num">6/10</td><td class="num">1/3</td><td class="num">233</td><td class="num">0.60</td></tr>
 <tr><td>Laptop Qwen3.5-9B, 32k</td><td>Qwen Code</td><td class="num">7/7</td><td class="num">1/10</td><td class="num">3/3</td><td class="num">76</td><td class="num">0.55</td></tr>
 <tr><td>Laptop Qwen3.5-9B, 64k</td><td>OpenCode</td><td class="num">7/7</td><td class="num">1/10</td><td class="num">3/3</td><td class="num">101</td><td class="num">0.53</td></tr>
-<tr><td>Laptop Qwen3.5-9B, 32k (partial)</td><td>OpenCode</td><td class="num">1/3, running (3 of 7 done)</td><td class="num">pending</td><td class="num">pending</td><td class="num">641</td><td class="num">pending (needs B)</td></tr>
+<tr><td>Laptop Qwen3.5-9B, 32k</td><td>OpenCode</td><td class="num">4/7</td><td class="num">0/10</td><td class="num">1/3</td><td class="num">625</td><td class="num">0.19</td></tr>
 </table></div>
 <p>Reading it: for the small laptop model the harness matters a lot (Qwen Code 4/10 against OpenCode 1/10 on identical tasks). On the large office model the harnesses are close and the cost is latency: a set B task takes 7 to 12 minutes there. Set C's c2 fails for every harness on both hosts, so that one is a task-side weakness, not a harness one.</p>
 
@@ -526,20 +536,17 @@ docker compose up -d --build</code></pre></div>
 <p>Only valid runs are counted: the assistant model in the record must equal the requested tier. All nine tiers have finished set B (10 hard edits, 420 s cap).</p>
 <div class="tbl"><table>
 <tr><th>Qoder tier</th><th>Set A (7)</th><th class="num">Set B (10)</th><th class="num">Set C (3)</th><th class="num">Median s</th><th class="num">Performance</th><th class="num">Credit multiplier</th><th class="num">Credits charged per task</th></tr>
-<tr><td>Efficient (partial)</td><td>7/7</td><td class="num">1/1, running (1 of 10 done)</td><td class="num">pending</td><td class="num">76</td><td class="num">0.98*</td><td class="num">0.00x</td><td class="num">0.00 (records ~0.50)</td></tr>
 <tr><td>Kimi-K3.1-Pro</td><td>7/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">87</td><td class="num">0.92</td><td class="num">1.00x</td><td class="num">7.22</td></tr>
 <tr><td>GLM-5.3</td><td>6/7</td><td class="num">9/10</td><td class="num">3/3</td><td class="num">70</td><td class="num">0.91</td><td class="num">0.80x</td><td class="num">8.34</td></tr>
 <tr><td>DeepSeek-Flash</td><td>7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">83</td><td class="num">0.91</td><td class="num">0.10x</td><td class="num">0.59</td></tr>
 <tr><td>Fast</td><td>6/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">64</td><td class="num">0.90</td><td class="num">0.80x</td><td class="num">5.63</td></tr>
+<tr><td>Efficient</td><td>7/7</td><td class="num">10/10</td><td class="num">2/3</td><td class="num">179</td><td class="num">0.87</td><td class="num">0.00x</td><td class="num">0.00 (records ~0.74)</td></tr>
 <tr><td>Qwen3.8-Flash</td><td>7/7</td><td class="num">8/10</td><td class="num">2/3</td><td class="num">99</td><td class="num">0.80</td><td class="num">0.10x</td><td class="num">0.78</td></tr>
 <tr><td>MiniMax-M3.1-Flash</td><td>7/7</td><td class="num">6/10</td><td class="num">3/3</td><td class="num">143</td><td class="num">0.74</td><td class="num">0.10x</td><td class="num">1.54</td></tr>
 <tr><td>Qwen3.8-Max</td><td>6/7</td><td class="num">5/10</td><td class="num">3/3</td><td class="num">220</td><td class="num">0.65</td><td class="num">0.50x</td><td class="num">14.22</td></tr>
 <tr><td>GLM-5.3-Flash</td><td>7/7</td><td class="num">3/10</td><td class="num">3/3</td><td class="num">132</td><td class="num">0.60</td><td class="num">0.10x</td><td class="num">0.63</td></tr>
 <tr><td>DeepSeek-V4-Pro</td><td>6/7</td><td class="num">4/10</td><td class="num">2/3</td><td class="num">132</td><td class="num">0.55</td><td class="num">0.50x</td><td class="num">2.93</td></tr>
 </table></div>
-<p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
-<p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
-<p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
 <p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
 <p>The Flash tiers cost under one credit per task, and DeepSeek-Flash passed all 10 hard edits for 0.84 credits per task, so it is the cheap Qoder lane for code edits (Fast also passes 10/10 but costs 7.9 credits per task). Qwen3.8-Max (5/10 for 19.6 credits), DeepSeek-V4-Pro (4/10), MiniMax (6/10) and GLM-5.3-Flash (3/10) are not routed.</p>
 
@@ -565,11 +572,11 @@ docker compose up -d --build</code></pre></div>
 <div class="tbl"><table>
 <tr><th>Setup</th><th class="num">Pass</th><th class="num">Wall, all 7</th><th class="num">VRAM</th><th class="num">Free RAM</th></tr>
 <tr><td>Ollama + Qwen Code, 32k</td><td class="num">7/7</td><td class="num">418 s</td><td class="num">6.48 GB</td><td class="num">2.2 GB</td></tr>
-<tr><td><b>llama-server + Qwen Code, 32k (chosen)</b></td><td class="num">7/7</td><td class="num">199 s</td><td class="num">6.22 GB</td><td class="num">4.9 GB</td></tr>
+<tr><td><b>llama-server + Qwen Code, 32k (first choice, now 64k)</b></td><td class="num">7/7</td><td class="num">199 s</td><td class="num">6.22 GB</td><td class="num">4.9 GB</td></tr>
 <tr><td>llama-server + OpenCode, 64k</td><td class="num">7/7</td><td class="num">223 s</td><td class="num">6.92 GB</td><td class="num">3.6 GB</td></tr>
 </table></div>
 <h3>Does the 9B need more context? (set B, laptop)</h3>
-<p>At 32k the 9B passed 1 of 10 hard edits; at 64k it passed 4 of 10. Three of the extra passes had prompts of 40k to 50k tokens, which cannot fit in 32k, so the small window was a real limit. The cost is memory: a 64k run peaks near 7.3 to 7.5 GiB of GPU memory (the whole card, including the desktop), right at the safe line, so 32k remains the default and 64k is a measured option. Qwen Code beat OpenCode on the same tasks by 4 to 1.</p>
+<p>At 32k the 9B passed 1 of 10 hard edits; at 64k it passed 4 of 10. Three of the extra passes had prompts of 40k to 50k tokens, which cannot fit in 32k, so the small window was a real limit. The cost is memory: a 64k run peaks near 7.3 to 7.5 GiB of GPU memory (the whole card, including the desktop), under the 8 GB card but with little headroom, so 64k is now the laptop default (set <code>LAPTOP_CTX=32768</code> to go back). Qwen Code beat OpenCode on the same tasks by 4 to 1.</p>
 
 <h3>How the findings changed the hub</h3>
 <h4>Laptop prompt cache (<code>--cache-ram 0</code>)</h4>
@@ -627,7 +634,7 @@ docker compose up -d --build</code></pre></div>
 <details class="faq"><summary>Where do real hosts and keys live?</summary><p>Outside the repo. Templates hold <code>&lt;PLACEHOLDER&gt;</code> values only, <code>just test</code> fails on a literal URL in a template, and real values go in git-ignored <code>*.local.*</code> files or environment variables. Agent CLI logins stay in each developer's own home.</p></details>
 <details class="faq"><summary>What does the daemon pin protect against?</summary><p>Paseo ships every few days and the plugin hook API is new. The installer pins the daemon version, each plugin declares a minimum version, and the plan is a rebase job per release that runs the 5x5 matrix before a human approves.</p></details>
 <details class="faq"><summary>Why does a Claude agent use a "clean" config?</summary><p>A default Claude agent inherits the developer's MCP servers and plugins and costs about 2 GB for its process tree. <code>claude-clean</code> starts it with an empty MCP set.</p></details>
-<details class="faq"><summary>Why only one laptop slot?</summary><p>One 9B model with a 32k context uses about 6.2 GB of an 8 GB card. Two slots either failed (2 x 16k cannot hold the client's own 19k prompt) or pushed VRAM past the safe limit and slowed both tasks. Extra callers queue in llama-server instead.</p></details>
+<details class="faq"><summary>Why only one laptop slot?</summary><p>One 9B model with a 64k context uses about 7.5 GB of an 8 GB card (6.2 GB at 32k). Two slots either failed (2 x 16k cannot hold the client's own 19k prompt) or pushed VRAM past the safe limit and slowed both tasks. Extra callers queue in llama-server instead.</p></details>
 <details class="faq"><summary>Why are tokens for Qwen Code and Qoder missing from the daemon?</summary><p>The daemon reports 0 for those CLIs. The usage plugin reads each tool's own session file and books the difference since the previous turn. Qoder bills in credits, so its rows show credits.</p></details>
 <details class="faq"><summary>Can a developer see another developer's usage?</summary><p>On the shared dashboard, yes by design: counts per provider, model and developer, never prompts. Each developer's daemon, logins and worktrees are separate.</p></details>
 <details class="faq"><summary>How do I undo the install?</summary><p><code>just uninstall</code> removes the service, the <code>agent-hub</code> MCP entries (the originals are in <code>.agent-hub.bak</code> files), the providers, the password hash and the secret. Paseo and your agent CLIs stay.</p></details>

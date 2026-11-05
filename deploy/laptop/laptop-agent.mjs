@@ -2,7 +2,7 @@
 // started only when the first prompt arrives, so Paseo's status probe (initialize only) never loads the model.
 // Refuses with exit 3 and the reason on stderr so the router falls back to the office model.
 //   node laptop-agent.mjs --check        pre-flight only (used by `just doctor`)
-// Env: LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH, QWEN_BIN (required); HEAVY_LOCK_GLOB, LAPTOP_PORT (8089), LAPTOP_CTX (32768),
+// Env: LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH, QWEN_BIN (required); HEAVY_LOCK_GLOB, LAPTOP_PORT (8089), LAPTOP_CTX (65536: Qwen Code passed 4/10 hard edits at 64k against 1/10 at 32k; 7.5 GB of the 8 GB card),
 //      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b).
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
@@ -60,7 +60,7 @@ async function ensureServer() {
       if (pnpStatus() !== 'OK' || !g.ok) throw new Error('GPU missing -> provider disabled');
       const u = g.usedMiB;
       if (u > Number(process.env.LAPTOP_BUSY_MIB || 600)) throw new Error(`GPU busy (${u} MiB used by another process)`);
-      const srv = spawn(E.LLAMA_SERVER_BIN, ['-m', E.LAPTOP_MODEL_PATH, '--jinja', '-ngl', '99', '-c', E.LAPTOP_CTX || '32768', '-np', '1', '-fa', 'on',
+      const srv = spawn(E.LLAMA_SERVER_BIN, ['-m', E.LAPTOP_MODEL_PATH, '--jinja', '-ngl', '99', '-c', E.LAPTOP_CTX || '65536', '-np', '1', '-fa', 'on',
         '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--reasoning', 'off', '--temp', '0.7', '--top-p', '0.8', '--top-k', '20',
         '--device', 'CUDA0', '--load-mode', 'none', '--host', '127.0.0.1', '--port', PORT, '--alias', ALIAS, '--metrics', '--cache-ram', '0'],
       { detached: true, stdio: 'ignore', windowsHide: true });
