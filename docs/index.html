@@ -456,6 +456,7 @@ docker compose up -d --build</code></pre></div>
 <section id="changes">
 <h2><span class="n">+</span>Changes 05-11</h2>
 <ul>
+<li><b>Laptop watchdog false-idle kill fixed.</b> The two laptop llama-server deaths during the benchmark (21:36, 21:45) were the hub watchdog judging a fresh agent idle and stopping the shared server, not a GPU driver reset. Idle now uses in-flight markers and shared last-use state, and CPU is not judged while the model loads (a5acf73, 3d9a87e).</li>
 <li><b>Acceptance run, 18-way burst.</b> 18 simultaneous tasks finished with no loss; slots are now Codex 3, Claude 2, Qoder 4, office cluster 6, office single GPU 3, laptop 1. <code>agent-hub route</code> retries a start up to 6 times with backoff and jitter, runs <code>--gate</code> itself in the real folder, and the gate fails closed outside a git work tree.</li>
 <li><b>Plugin hooks no longer block.</b> The gate plugin runs in the background and skips agents that are gone; the usage plugin no longer awaits the Qoder poller in the turn-before hook and polls the account only when the session transcript has no credits. Hooks now stay inside Paseo's 30 s RPC limit (2ebfef6).</li>
 <li><b>OTLP 5 s timeout.</b> MCP and OTLP calls from the usage plugin time out after 5 s, and an OTLP outage is logged once instead of on every turn.</li>

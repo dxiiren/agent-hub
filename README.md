@@ -114,6 +114,7 @@ Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under His
 
 ## Changes 05-11
 
+- **Laptop watchdog false-idle kill fixed.** The two laptop llama-server deaths during the benchmark (21:36, 21:45) were the hub watchdog judging a freshly started agent idle and stopping the shared server, not a GPU driver reset. Idle is now based on in-flight markers and shared last-use state, and CPU is not judged while the model loads (a5acf73, 3d9a87e).
 - **Acceptance run, 18-way burst.** 18 simultaneous tasks finished with no loss; slots are now Codex 3, Claude 2, Qoder 4, office cluster 6, office single GPU 3, laptop 1. `agent-hub route` retries a start up to 6 times with backoff and jitter on `DAEMON_UNREACHABLE`, runs `--gate` itself in the real folder, and the gate fails closed outside a git work tree.
 - **Plugin hooks no longer block.** The gate plugin runs in the background and skips agents that are gone; the usage plugin no longer awaits the Qoder poller in the turn-before hook and polls the account only when the session transcript has no credits. Hooks now stay inside Paseo's 30 s RPC limit (2ebfef6).
 - **OTLP 5 s timeout.** MCP and OTLP calls from the usage plugin time out after 5 s, and an OTLP outage is logged once instead of on every turn.
