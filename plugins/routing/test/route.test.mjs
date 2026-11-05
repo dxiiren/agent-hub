@@ -419,6 +419,19 @@ test("a finished route stops and archives its agent after the answer is read; --
   runRoute(o, fb, { ...routes, routes: { edit: ["codex/a", "qwen/b"] } });
   assert.ok(fb.calls.some((c) => c[0] === "archive" && c[1] === "X") && fb.calls.some((c) => c[0] === "archive" && c[1] === "Y"));
 });
+test("a route-created worktree is removed after the agent is archived; --keep and non-worktree routes leave it", () => {
+  const mk = (script) => { const calls = []; const f = (a) => { calls.push(a); return script(a); }; f.calls = calls; return f; };
+  const sc = (a) => (a[0] === "ls" ? [] : a[0] === "worktree" ? [{ name: "wt-1", agent: "A1xxxxx" }, { name: "other", agent: "-" }] : a[0] === "run" ? { status: "completed", agentId: "A1xxxxx-full" } : {});
+  const w = mk(sc);
+  runRoute({ ...o, provider: "qwen/b", worktree: true }, w, routes);
+  assert.deepEqual(w.calls.filter((c) => c[0] === "worktree" && c[1] === "archive"), [["worktree", "archive", "wt-1", "--cwd", o.cwd]]);
+  const k = mk(sc);
+  runRoute({ ...o, provider: "qwen/b", worktree: true, keep: true }, k, routes);
+  assert.ok(!k.calls.some((c) => c[0] === "worktree"));
+  const n = mk(sc);
+  runRoute({ ...o, provider: "qwen/b" }, n, routes);
+  assert.ok(!n.calls.some((c) => c[0] === "worktree"));
+});
 test("claude-wrap merges the hub rules into the --settings Paseo passes, so they cannot be overridden", async () => {
   const { mergeSettings } = await import("../../../scripts/claude-wrap.mjs");
   const rules = { permissions: { allow: ["Read(./**)"], deny: ["Read(.env)"] } };

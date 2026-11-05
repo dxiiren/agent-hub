@@ -143,7 +143,13 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   const slots = routes.slots ?? {};
   const trace = [];
   // A finished agent keeps its provider process (a claude is ~250 MB idle): stop and archive it once its answer and gate are read, unless --keep.
-  const retire = (id) => { if (!o.keep && id) { paseo(["stop", id]); paseo(["archive", id]); } };
+  // A route-created worktree (--new-workspace worktree) is removed with its agent, or it piles up under ~/.paseo/worktrees.
+  const retire = (id) => {
+    if (o.keep || !id) return;
+    const wt = o.worktree ? [].concat(paseo(["worktree", "ls"]) ?? []).find((w) => w.agent && w.agent !== "-" && id.startsWith(w.agent)) : null;
+    paseo(["stop", id]); paseo(["archive", id]);
+    if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
+  };
   const done = (r) => { retire(r.agentId); return r; };
   for (const entry of chain) {
     let prov;
