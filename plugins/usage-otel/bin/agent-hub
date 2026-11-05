@@ -1,5 +1,5 @@
 #!/bin/sh
-d=$(dirname "$0")
+d=$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })
 case "$1" in
   usage) exec python3 -S -E "$d/agent_hub_usage.py" "$@" ;;
   route) shift; exec node "$d/../../routing/route.mjs" "$@" ;;
