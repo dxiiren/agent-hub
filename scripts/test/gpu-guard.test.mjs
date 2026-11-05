@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { judge } from '../../deploy/laptop/gpu-guard.mjs';
+import { judge, ownedStopTarget, idleExpired } from '../../deploy/laptop/gpu-guard.mjs';
 
 const ok = { pnp: 'OK', smiOk: true, usedMiB: 6000, apps: [42], serverPid: 42, cpuPct: 3, idle: true };
 
@@ -26,4 +26,16 @@ test('--check refuses (exit 3) when the GPU is missing', { skip: process.platfor
   const r = spawnSync(process.execPath, [agent, '--check'], { encoding: 'utf8' });
   assert.equal(r.status, 3, r.stderr);
   assert.match(r.stderr, /GPU missing -> provider disabled/);
+});
+
+test('only the recorded pid is a stop target; a foreign listener or none is never stopped', () => {
+  assert.equal(ownedStopTarget({ pid: 42 }, 42), 42);
+  assert.equal(ownedStopTarget({ pid: 42 }, 99), null); // someone else's server took the port
+  assert.equal(ownedStopTarget(null, 99), null);        // hub never started one
+});
+test('keep-warm: idle timeout is honoured, a fresh prompt resets it', () => {
+  const own = { pid: 42, lastUsed: 1_000 };
+  assert.equal(idleExpired(own, 1_000 + 14 * 60_000, 15 * 60_000), false);
+  assert.equal(idleExpired(own, 1_000 + 16 * 60_000, 15 * 60_000), true);
+  assert.equal(idleExpired(null, 1e12, 1), false);
 });

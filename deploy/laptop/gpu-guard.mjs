@@ -1,6 +1,9 @@
 // GPU-only guard for the laptop model (owner rule: the model must load 100% on the GPU, never on the CPU).
 // Pure decision logic (judge) plus the Windows/NVIDIA probes. Used by laptop-agent.mjs (start + watchdog).
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 15000, windowsHide: true });
 
@@ -40,3 +43,13 @@ export function cpuSeconds(pid) {
 }
 
 export const stopPid = (pid) => sh('powershell', ['-NoProfile', '-Command', `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`]);
+
+// ---- ownership: the hub only ever stops a llama-server it started itself (a benchmark's or a teammate's server on the same port is left alone)
+const stateFile = (port) => join(tmpdir(), `agent-hub-laptop-${port}.json`);
+export function readOwn(port) { try { return JSON.parse(readFileSync(stateFile(port), 'utf8')); } catch { return null; } }
+export function writeOwn(port, own) { writeFileSync(stateFile(port), JSON.stringify(own)); }
+/** Stop target: the recorded pid, and only while it is still the listener on the port. Else null (foreign server or none). */
+export function ownedStopTarget(own, listener) { return own?.pid && listener === own.pid ? own.pid : null; }
+/** Keep-warm: an owned server is stopped only after idleMs without a prompt. */
+export function idleExpired(own, now, idleMs) { return Boolean(own?.pid) && now - (own.lastUsed ?? 0) > idleMs; }
+export { existsSync };
