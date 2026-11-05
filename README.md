@@ -59,7 +59,7 @@ There is no dev server: `just test` exiting 0 means every config template parses
 
 ## Benchmarks
 
-Measured 5 November 2026 through the installed hub: each task runs in a throwaway worktree and is judged by its own gate (never by the agent's say-so). Set B = 10 hard code edits, set C = 3 tasks (log summary, test scaffold that must kill 3 mutants, code review), set A = 7 easy edits. Latest version of each model is shown; most cells are n=1 or 2, so one task of difference is noise. Full method, per-tier Qoder credits, harness comparison and history are in the [guide](https://dxiiren.github.io/agent-hub/#bench).
+Measured 5 November 2026 through the installed hub: each task runs in a throwaway worktree and is judged by its own gate (never by the agent's say-so). Set A = 7 easy edits, set B = 10 hard code edits, set C = 3 tasks (log summary, test scaffold that must kill 3 mutants, code review). Latest version of each model is shown; most cells are n=1 or 2, so one task of difference is noise. Full method, per-tier Qoder credits, harness comparison and history are in the [guide](https://dxiiren.github.io/agent-hub/#bench).
 
 Interim update: cells marked "running" are still being measured; "pending" means not started. Nothing is estimated.
 
@@ -75,7 +75,7 @@ Interim update: cells marked "running" are still being measured; "pending" means
 | Qoder Fast | Qoder | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 83 | 0.80x | 6.82 |
 | Qoder DeepSeek-Flash | Qoder | 3/3, running (3 of 7 done) | 10/10 | 2/3 | 99 | 0.10x | 0.71 |
 | Qoder Qwen3.8-Flash | Qoder | 3/3, running (3 of 7 done) | 8/10 | 2/3 | 186 | 0.10x | 0.92 |
-| Qoder GLM-5.3-Flash | Qoder | 2/2, running (2 of 7 done) | 3/10 | 3/3 | 241 | 0.10x | 0.68 |
+| Qoder GLM-5.3-Flash | Qoder | 3/3, running (3 of 7 done) | 3/10 | 3/3 | 203 | 0.10x | 0.68 |
 | Qoder MiniMax-M3.1-Flash | Qoder | 2/2, running (2 of 7 done) | 6/10 | 3/3 | 188 | 0.10x | 1.90 |
 | Qoder DeepSeek-V4-Pro | Qoder | 3/3, running (3 of 7 done) | 4/10 | 2/3 | 189 | 0.50x | 3.50 |
 | Qoder Qwen3.8-Max | Qoder | 3/3, running (3 of 7 done) | 5/10 | 3/3 | 268 | 0.50x | 16.77 |
@@ -84,7 +84,7 @@ Interim update: cells marked "running" are still being measured; "pending" means
 | Qwen3.8-27B (single GPU) | Qwen Code | 7/7 | 7/10 | 2/3 | 115 | - | - |
 | Qwen3.8-27B-NVFP (2-node cluster) | Qwen Code | 6/7 | 9/10 | 2/3 | 109 | - | - |
 | Qwen3.5-9B laptop, 32k (default) | Qwen Code | 7/7 | 1/10 | 3/3 | 76 | - | - |
-| Qwen3.5-9B laptop, 64k (partial) | Qwen Code | 4/4, running (4 of 7 done) | 4/10 | pending | 143 | - | - |
+| Qwen3.5-9B laptop, 64k (partial) | Qwen Code | 4/5, running (5 of 7 done) | 4/10 | pending | 147 | - | - |
 | Qwen3.5-9B laptop, 64k (partial) | OpenCode | 1/1, running (1 of 7 done) | 1/10 | pending | 119 | - | - |
 | Qwen3.5-9B laptop, 32k (partial) | OpenCode | 1/1, running (1 of 7 done) | pending | 1/3 | 60 | - | - |
 
