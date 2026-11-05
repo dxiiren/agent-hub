@@ -75,6 +75,10 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 
 Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
 
+Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
+
+Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
+
 | Model | Harness | Set A (7) | Set B (10) | Set C (3) | Median s | Performance |
 |---|---|---|---|---|---|---|
 | Codex gpt-6.1-sol | Codex | 7/7 | 10/10 | 3/3 | 82 | 0.98 |
@@ -85,8 +89,8 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 | Qoder DeepSeek-Flash | Qoder | 7/7 | 10/10 | 2/3 | 83 | 0.91 |
 | Qoder Fast | Qoder | 6/7 | 10/10 | 2/3 | 64 | 0.90 |
 | Codex gpt-6.1-terra | Codex | 6/7 | 10/10 | 2/3 | 67 | 0.90 |
+| Codex gpt-6-astra * (partial) | Codex | 6/7 | 10/10 | pending | 139 | 0.90* |
 | Claude Opus 5.5 | Claude | 6/7 | 10/10 | 2/3 | 70 | 0.90 |
-| Codex gpt-6-astra * (partial) | Codex | 6/7 | 9/9, running (9 of 10 done) | pending | 150 | 0.89* |
 | Codex gpt-6-luna | Codex | 5/7 | 8/10 | 3/3 | 73 | 0.83 |
 | Qwen3.8-27B-NVFP (2-node cluster) | Qwen Code | 6/7 | 9/10 | 2/3 | 109 | 0.81 |
 | Qoder Qwen3.8-Flash | Qoder | 7/7 | 8/10 | 2/3 | 99 | 0.80 |
@@ -98,8 +102,8 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 | Qoder DeepSeek-V4-Pro | Qoder | 6/7 | 4/10 | 2/3 | 132 | 0.55 |
 | Qwen3.5-9B laptop, 32k (default) | Qwen Code | 7/7 | 1/10 | 3/3 | 76 | 0.53 |
 | Qwen3.5-9B laptop, 64k | OpenCode | 7/7 | 1/10 | 3/3 | 101 | 0.51 |
-| Qwen3.5-9B laptop, 32k (partial) | OpenCode | 0/1, running (1 of 7 done) | pending | pending | 632 | pending (needs B) |
 | Qoder Efficient (partial) | Qoder | 6/6, running (6 of 7 done) | pending | pending | 59 | pending (needs B) |
+| Qwen3.5-9B laptop, 32k (partial) | OpenCode | 0/1, running (1 of 7 done) | pending | pending | 632 | pending (needs B) |
 
 * Benchmark only; not in routing unless the owner approves.
 
@@ -107,7 +111,7 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 
 Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B, then credits per task (cheaper first). Partial rows count the cells done so far and are marked (partial).
 
-| Qoder tier | Set A (7) | Set B (10) | Set C (3) | Median s | Performance | Credit multiplier | Credits recorded per task |
+| Qoder tier | Set A (7) | Set B (10) | Set C (3) | Median s | Performance | Credit multiplier | Credits charged per task |
 |---|---|---|---|---|---|---|---|
 | Kimi-K3.1-Pro | 7/7 | 9/10 | 3/3 | 87 | 0.92 | 1.00x | 7.22 |
 | GLM-5.3 | 6/7 | 9/10 | 3/3 | 70 | 0.91 | 0.80x | 8.34 |
@@ -118,9 +122,9 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 | Qwen3.8-Max | 6/7 | 5/10 | 3/3 | 220 | 0.65 | 0.50x | 14.22 |
 | GLM-5.3-Flash | 7/7 | 3/10 | 3/3 | 132 | 0.60 | 0.10x | 0.63 |
 | DeepSeek-V4-Pro | 6/7 | 4/10 | 2/3 | 132 | 0.55 | 0.50x | 2.93 |
-| Efficient (partial) | 6/6, running (6 of 7 done) | pending | pending | 59 | pending (needs B) | 0.00x | 0.35 |
+| Efficient (partial) | 6/6, running (6 of 7 done) | pending | pending | 59 | pending (needs B) | 0.00x | 0.00 (records ~0.35) |
 
-Qoder credit multiplier = the "x Credit" label each model carries in the `qodercli` 1.1.81 ACP model list (Efficient is free: it records about 0.34-0.37 credits per task but is charged 0.00, per the Qoder billing page; billing shows recorded and charged separately, and charged = recorded x multiplier is not yet verified for paid tiers, so no charged column is shown). Credits recorded per task = mean from the run records. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs); other cells are flat rate or local.
+Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs); other cells are flat rate or local.
 
 Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
 
