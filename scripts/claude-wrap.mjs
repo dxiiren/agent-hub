@@ -41,7 +41,10 @@ export function buildArgs(rest, rules, mcp) {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const [bin, mcp, rulesFile, ...rest] = process.argv.slice(2);
-  const c = spawn(bin, buildArgs(rest, JSON.parse(readFileSync(rulesFile, "utf8")), mcp), { stdio: "inherit" });
+  const finalArgs = buildArgs(rest, JSON.parse(readFileSync(rulesFile, "utf8")), mcp);
+  // test hook: print the launch instead of starting claude (a Windows .cmd stand-in cannot be spawned without a shell)
+  if (process.env.AGENT_HUB_WRAP_DRYRUN === "1") { console.log(JSON.stringify({ bin, args: finalArgs })); process.exit(0); }
+  const c = spawn(bin, finalArgs, { stdio: "inherit" });
   c.on("exit", (code, sig) => process.exit(code ?? (sig ? 1 : 0)));
   c.on("error", (e) => { console.error(String(e)); process.exit(127); });
 }

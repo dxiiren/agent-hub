@@ -543,3 +543,12 @@ test("route CLI with a missing --cwd fails fast with a clear message (no daemon 
   const r = spawnSync(process.execPath, [fileURLToPath(new URL("../route.mjs", import.meta.url)), "summarise", "x", "--cwd", "/c/definitely/not/here-xyz"], { encoding: "utf8", timeout: 20000 });
   assert.equal(r.status, 2); assert.match(r.stderr, /not an existing folder/); assert.ok(Date.now() - t0 < 10000);
 });
+
+test("read-only task refused a read: the partial answer is returned with status permission, not lost", () => {
+  const rt = { ...routes, routes: { summarise: ["qwen/b"] } };
+  const p = (a) => a[0] === "ls" ? [] : a[0] === "logs" ? { text: "[assistant]\nPartial: the file starts with X." } : a[0] === "run" ? { status: "permission", agentId: "A7" } : {};
+  const r = runRoute({ ...o, type: "summarise" }, p, rt);
+  assert.equal(r.used, null); assert.equal(r.status, "permission");
+  assert.match(r.partial.answer, /Partial: the file starts with X/); assert.equal(r.partial.refusedRead, true);
+  assert.ok(r.trace.some((t) => t.status === "permission"));
+});

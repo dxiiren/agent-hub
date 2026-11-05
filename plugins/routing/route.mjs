@@ -166,6 +166,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
   };
   const done = (r) => { retire(r.agentId); return r; };
+  let partial = null;
   for (const entry of chain) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
@@ -205,9 +206,11 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       trace.push({ provider: prov, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
       return done(withAnswer({ used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo));
     }
+    // a read-only agent stopped on a refused read may still have written an answer: keep it (the refusal stays in the trace) in case no entry completes
+    if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
     if (j.agentId) retire(j.agentId); // a timed-out agent must not keep running while the next entry works
   }
-  return { used: null, trace };
+  return partial ? { used: null, status: "permission", partial, trace } : { used: null, trace };
 }
 
 /** Statusline source (cheap, no daemon call): one marker file per running route in <home>/usage/active, plus total.json (sum of routes.slots). Best effort; a killed route leaves a file the reader ignores after 30 min. */
