@@ -79,6 +79,8 @@ Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed
 
 Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
 
+Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
+
 | Model | Harness | Set A (7) | Set B (10) | Set C (3) | Median s | Performance |
 |---|---|---|---|---|---|---|
 | Codex gpt-6.1-sol | Codex | 7/7 | 10/10 | 3/3 | 82 | 0.98 |

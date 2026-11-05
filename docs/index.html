@@ -500,6 +500,7 @@ docker compose up -d --build</code></pre></div>
 <p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
 <p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
 <p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
+<p><b>Interim update:</b> cells marked "running" are still being measured; "pending" means not started. Nothing is estimated. * Codex gpt-6-astra: benchmark only; not in routing unless the owner approves. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs).</p>
 
 <h3>Harness comparison for the same model</h3>
 <p class="sortrule">Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial). Click a column header to sort.</p>
@@ -535,6 +536,7 @@ docker compose up -d --build</code></pre></div>
 <tr><td>DeepSeek-V4-Pro</td><td>6/7</td><td class="num">4/10</td><td class="num">2/3</td><td class="num">132</td><td class="num">0.55</td><td class="num">0.50x</td><td class="num">2.93</td></tr>
 <tr><td>Efficient (partial)</td><td>6/6, running (6 of 7 done)</td><td class="num">pending</td><td class="num">pending</td><td class="num">59</td><td class="num">pending (needs B)</td><td class="num">0.00x</td><td class="num">0.00 (records ~0.35)</td></tr>
 </table></div>
+<p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
 <p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
 <p>Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.34 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated.</p>
 <p>The Flash tiers cost under one credit per task, and DeepSeek-Flash passed all 10 hard edits for 0.84 credits per task, so it is the cheap Qoder lane for code edits (Fast also passes 10/10 but costs 7.9 credits per task). Qwen3.8-Max (5/10 for 19.6 credits), DeepSeek-V4-Pro (4/10), MiniMax (6/10) and GLM-5.3-Flash (3/10) are not routed.</p>
@@ -664,7 +666,7 @@ docker compose up -d --build</code></pre></div>
 <script id="bench-sort">
 (function(){
 var heads=['Capability table','Harness comparison','Qoder tiers'];
-function num(t){t=t.trim();var m=/^(\d+)\/(\d+)/.exec(t);if(m)return +m[2]?(+m[1]/+m[2]):null;if(/^-?\d+(\.\d+)?[x*]?$/.test(t))return parseFloat(t);return null;}
+function num(t){t=t.trim();var m=/^(\d+)\/(\d+)/.exec(t);if(m)return +m[2]?(+m[1]/+m[2]):null;if(/^-?\d+(\.\d+)?([x*]| \(records.*)?$/.test(t))return parseFloat(t);return null;}
 heads.forEach(function(h){
   var h3=[].slice.call(document.querySelectorAll('h3')).filter(function(e){return e.textContent.indexOf(h)===0})[0];
   if(!h3)return;var tb=h3.nextElementSibling;while(tb&&!tb.querySelector('table'))tb=tb.nextElementSibling;if(!tb)return;
