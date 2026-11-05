@@ -111,7 +111,7 @@ let chain = Promise.resolve(); let buf = '';
 const NL = String.fromCharCode(10);
 process.stdin.on('data', (d) => {
   buf += d; const lines = buf.split(NL); buf = lines.pop();
-  for (const l of lines) chain = chain.then(async () => { if (l.includes('"session/prompt"')) { lastPrompt = Date.now(); inflight++; markInflight(PORT); await ensureServer(); touch(); } child.stdin.write(l + NL); })
+  for (const l of lines) chain = chain.then(async () => { if (l.includes('"session/prompt"')) { inflight++; markInflight(PORT); await ensureServer(); touch(); } child.stdin.write(l + NL); })
     .catch((e) => { process.stderr.write('LAPTOP-REFUSED: ' + e.message + NL); child.kill(); process.exit(3); });
 });
 process.stdin.on('end', () => chain.then(() => child.stdin.end()));
