@@ -200,7 +200,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
     { "match": "&lt;REPO_PATH_REGEX&gt;", "cmd": "&lt;REPO_GATE_COMMAND&gt;",
       "maxLines": 400, "forbid": "^([.]env|[.]github/|.*[.]pem$)" }
   ],
-  "slots": { "codex": 2, "claude-clean": 2, "qoder": 1, "qwen-code-2": 2, "qwen-laptop": 1 },
+  "slots": { "codex": 3, "claude-clean": 2, "qoder": 4, "qwen-code-2": 6, "qwen-code": 3, "qwen-laptop": 1 },
   "modes": { "codex": "full-access", "claude-clean": "bypassPermissions", "qoder": "yolo",
              "qwen-code": "yolo", "qwen-laptop": "yolo" },
   "waitTimeout": "15m",
@@ -456,6 +456,7 @@ docker compose up -d --build</code></pre></div>
 <section id="changes">
 <h2><span class="n">+</span>Changes 05-11</h2>
 <ul>
+<li><b>Acceptance run, 18-way burst.</b> 18 simultaneous tasks finished with no loss; slots are now Codex 3, Claude 2, Qoder 4, office cluster 6, office single GPU 3, laptop 1. <code>agent-hub route</code> retries a start up to 6 times with backoff and jitter, runs <code>--gate</code> itself in the real folder, and the gate fails closed outside a git work tree.</li>
 <li><b>Plugin hooks no longer block.</b> The gate plugin runs in the background and skips agents that are gone; the usage plugin no longer awaits the Qoder poller in the turn-before hook and polls the account only when the session transcript has no credits. Hooks now stay inside Paseo's 30 s RPC limit (2ebfef6).</li>
 <li><b>OTLP 5 s timeout.</b> MCP and OTLP calls from the usage plugin time out after 5 s, and an OTLP outage is logged once instead of on every turn.</li>
 <li><b>Usage stack starts itself.</b> Docker Desktop and the usage stack (collector, Prometheus, Grafana) come up on logon and on <code>just up</code>; <code>just doctor</code> now fails when the collector, Prometheus or Grafana is down (f8c7519).</li>
@@ -468,7 +469,19 @@ docker compose up -d --build</code></pre></div>
 </ul>
 <!-- slots:start -->
 <h3>Concurrency / slots</h3>
-<p>To be refreshed with the acceptance run (retry on <code>DAEMON_UNREACHABLE</code> and the measured slot numbers per provider).</p>
+<p>Proven on 5 November 2026 on a fresh daemon: 18 tasks started at the same instant (one-word reply on each provider, no laptop), then 9 at once. All finished, with no <code>DAEMON_UNREACHABLE</code>, no plugin hook timeout, 65 to 161 s each, free RAM 7.3 GB down to 4.6 GB.</p>
+<table>
+<tr><th>Provider</th><th>Slots</th><th>Proven in one burst</th></tr>
+<tr><td>Codex</td><td>3</td><td>3</td></tr>
+<tr><td>Claude</td><td>2</td><td>2</td></tr>
+<tr><td>Qoder (Efficient, DeepSeek-Flash)</td><td>4</td><td>4</td></tr>
+<tr><td>Office Qwen Code, 2-GPU cluster</td><td>6</td><td>6</td></tr>
+<tr><td>Office Qwen Code, single GPU</td><td>3</td><td>3</td></tr>
+<tr><td>Laptop Qwen (one 64k slot)</td><td>1</td><td>tested alone</td></tr>
+</table>
+<p><b>What limits it, in order:</b> the daemon (one event loop; creating an agent takes 10 to 20 s once many start together), free laptop RAM (below 3 GB the laptop provider refuses to start), then the providers. The office servers could take more (cluster up to 8 requests, single GPU up to 4); do not go above these numbers without repeating the burst.</p>
+<p><b>Retry.</b> Paseo answers its 1.5 s status probe slowly while the daemon is busy, so a start can fail with <code>DAEMON_UNREACHABLE</code> or "Connection timed out" although nothing was started (upstream issue #6584). <code>agent-hub route</code> retries such a start up to 6 times (2, 4, 8, 16, 32 s plus jitter) after a random 0 to 2 s stagger. A start that created an agent is never retried.</p>
+<p><b>Gate.</b> <code>agent-hub route --gate</code> runs the gate itself, in the agent's real folder, with the same rules as the plugin hook. A first failure re-prompts the agent once and waits; the agent is frozen before the second check. Outside a git work tree the gate fails closed.</p>
 <!-- slots:end -->
 </section>
 <section id="bench">

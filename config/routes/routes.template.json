@@ -10,10 +10,11 @@
     }
   ],
   "slots": {
-    "codex": 2,
+    "codex": 3,
     "claude-clean": 2,
-    "qoder": 1,
-    "qwen-code-2": 2,
+    "qoder": 4,
+    "qwen-code-2": 6,
+    "qwen-code": 3,
     "qwen-laptop": 1
   },
   "modes": {

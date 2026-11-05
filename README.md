@@ -114,6 +114,7 @@ Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under His
 
 ## Changes 05-11
 
+- **Acceptance run, 18-way burst.** 18 simultaneous tasks finished with no loss; slots are now Codex 3, Claude 2, Qoder 4, office cluster 6, office single GPU 3, laptop 1. `agent-hub route` retries a start up to 6 times with backoff and jitter on `DAEMON_UNREACHABLE`, runs `--gate` itself in the real folder, and the gate fails closed outside a git work tree.
 - **Plugin hooks no longer block.** The gate plugin runs in the background and skips agents that are gone; the usage plugin no longer awaits the Qoder poller in the turn-before hook and polls the account only when the session transcript has no credits. Hooks now stay inside Paseo's 30 s RPC limit (2ebfef6).
 - **OTLP 5 s timeout.** MCP and OTLP calls from the usage plugin time out after 5 s, and an OTLP outage is logged once instead of on every turn.
 - **Usage stack starts itself.** Docker Desktop and the usage stack (collector, Prometheus, Grafana) come up on logon and on `just up`; `just doctor` now fails when the collector, Prometheus or Grafana is down (f8c7519).
@@ -127,7 +128,24 @@ Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under His
 <!-- slots:start -->
 ### Concurrency / slots
 
-To be refreshed with the acceptance run (retry on `DAEMON_UNREACHABLE` and the measured slot numbers per provider).
+Proven on 5 November 2026 on a fresh daemon, 18 tasks started at the same instant (a one-word reply on each provider, no laptop), then 9 at once:
+
+| Provider | Slots | Proven in one burst |
+| --- | --- | --- |
+| Codex | 3 | 3 |
+| Claude | 2 | 2 |
+| Qoder (Efficient and DeepSeek-Flash) | 4 | 4 |
+| Office Qwen Code, 2-GPU cluster | 6 | 6 |
+| Office Qwen Code, single GPU | 3 | 3 |
+| Laptop Qwen (one 64k slot) | 1 | tested alone |
+
+Result: 18 of 18 finished, no `DAEMON_UNREACHABLE`, no plugin hook timeout in the daemon log, 65 to 161 s each, free RAM 7.3 GB down to 4.6 GB. The office servers took 6 and 3 at once without queueing; they can take more (the cluster serves up to 8 requests, the single GPU up to 4), but the laptop is the limit: every extra client process costs about 150 MB, and a start is slow when the machine is busy.
+
+What limits it, in order: the daemon (one event loop; creating an agent takes 10 to 20 s once many start together), free laptop RAM (below 3 GB the laptop provider refuses to start), then the providers. Do not go above these numbers without repeating the burst.
+
+**Retry.** Paseo answers its 1.5 s status probe slowly while the daemon is busy, so a start can fail with `DAEMON_UNREACHABLE` or "Connection timed out" although nothing was started (upstream issue #6584). `agent-hub route` retries such a start up to 6 times (waits of 2, 4, 8, 16 and 32 s plus jitter) after a random 0 to 2 s stagger, and matches both the error code and the CLI crash text. A start that created an agent is never retried.
+
+**Gate.** `agent-hub route --gate` runs the gate itself, in the agent's real folder, with the same rules as the plugin hook. A first failure re-prompts the agent once and waits for it; the agent is then frozen before the second check. Outside a git work tree the gate fails closed: path rules cannot be evaluated, and a task with no check says "nothing to verify".
 <!-- slots:end -->
 
 ## Commands
