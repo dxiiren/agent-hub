@@ -301,11 +301,16 @@ async function doctor(deep) {
     const dir = mkdtempSync(join(tmpdir(), 'hub-doctor-'));
     const model = { codex: 'codex/gpt-6.1-terra', 'claude-clean': 'claude-clean/claude-haiku-5-5' };
     for (const id of want.filter((x) => !(x === 'qwen-laptop' && refused) && (!process.env.AGENT_HUB_ONLY || x === process.env.AGENT_HUB_ONLY))) {
-      const r = paseo(['run', '--provider', model[id] || id, '--cwd', dir, '--wait-timeout', '240s', '--json', 'Reply with exactly the word OK and do nothing else.']);
-      let j = {}; try { j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))); } catch { /* keep raw */ }
-      const aid = j.agentId || j.id;
-      const reply = aid ? paseo(['logs', aid]).stdout || '' : '';
-      const good = j.status === 'completed' && reply.split(String.fromCharCode(10)).some((l) => l.trim() === 'OK'); // the agent's own line, not the prompt echo
+      // a model may add a word to a one-word reply: up to 3 tries, the check itself stays strict
+      let r, j, aid, good = false;
+      for (let attempt = 0; attempt < 3 && !good; attempt++) {
+        if (aid) paseo(['delete', aid]);
+        r = paseo(['run', '--provider', model[id] || id, '--cwd', dir, '--wait-timeout', '240s', '--json', 'Reply with exactly the word OK and do nothing else.']);
+        j = {}; try { j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))); } catch { /* keep raw */ }
+        aid = j.agentId || j.id;
+        const reply = aid ? paseo(['logs', aid]).stdout || '' : '';
+        good = j.status === 'completed' && reply.split(String.fromCharCode(10)).some((l) => l.trim() === 'OK'); // the agent's own line, not the prompt echo
+      }
       row(good, `provider ${id}: live task`, good ? 'replied OK' : `status ${j.status || 'none'}; ${out(r).slice(0, 120).replace(/\s+/g, ' ')}`);
       if (aid) paseo(['delete', aid]);
     }
