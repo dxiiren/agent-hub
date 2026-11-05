@@ -50,4 +50,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && pro
 
 /** Environment for every hub-launched Qwen Code (office, office 2, laptop): a system-settings file that turns its global auto-memory off, so ~/.qwen/memories (written by earlier, unrelated tasks) is never read into a new task and no new memory is extracted. Always forced: the user's own value would let the leak back in. */
 export const QWEN_SYSTEM_SETTINGS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "qwen", "system-settings.json");
-export const qwenEnv = (env = process.env) => ({ ...env, QWEN_CODE_SYSTEM_SETTINGS_PATH: QWEN_SYSTEM_SETTINGS });
+export const QWEN_SYSTEM_SETTINGS_RO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "qwen", "system-settings-readonly.json");
+/** readOnly = the launcher was started as the "-ro" twin provider (--read-only): sensitive reads are denied by the CLI itself. */
+export const qwenEnv = (env = process.env, readOnly = false) => ({ ...env, QWEN_CODE_SYSTEM_SETTINGS_PATH: readOnly ? QWEN_SYSTEM_SETTINGS_RO : QWEN_SYSTEM_SETTINGS });
+export const takeReadOnlyFlag = (argv) => { const i = argv.indexOf("--read-only"); if (i < 0) return false; argv.splice(i, 1); return true; };

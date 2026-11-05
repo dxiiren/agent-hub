@@ -9,9 +9,10 @@ import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } fr
 import { freemem, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
-import { firstId, qwenEnv } from '../../plugins/routing/office.mjs';
+import { firstId, qwenEnv, takeReadOnlyFlag } from '../../plugins/routing/office.mjs';
 import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable } from './gpu-guard.mjs';
 
+const READ_ONLY = takeReadOnlyFlag(process.argv); // the "-ro" twin provider: sensitive reads denied by the CLI
 const E = process.env;
 const PORT = E.LAPTOP_PORT || '8089';
 const ALIAS = E.LAPTOP_ALIAS || 'qwen35-9b';
@@ -77,7 +78,7 @@ async function ensureServer() {
 let model = ALIAS;
 if (await up()) { try { model = await checkServed(); } catch (e) { refuse(e.message); } }
 const win = /\.(cmd|bat)$/i.test(E.QWEN_BIN);
-const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], env: qwenEnv(E), shell: win });
+const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], env: qwenEnv(E, READ_ONLY), shell: win });
 child.stdout.on('data', (d) => { process.stdout.write(d); const n = String(d).split('"stopReason"').length - 1; if (n) { inflight = Math.max(0, inflight - n); touch(); } });
 child.on('exit', (c) => { clearInflight(PORT); process.exit(c ?? 1); });
 // Keep-warm clock: a turn longer than LAPTOP_IDLE_MIN must not look idle to the reaper, so refresh lastUsed while a prompt is in flight and when it ends.

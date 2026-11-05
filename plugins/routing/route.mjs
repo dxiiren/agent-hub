@@ -77,6 +77,8 @@ export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencod
 export const knownProviders = (routes = {}) => new Set(["codex", ...Object.keys(routes.slots ?? {}), ...Object.keys(READ_ONLY_MODES), ...Object.values(routes.routes ?? {}).flat().map(base)]);
 /** Providers on which a read-only task may run: sensitive reads are ENFORCEABLY refused (claude-clean = PreToolUse read hook, Qwen = readguard). Qoder, plain claude, opencode, copilot and codex have no such enforcement (an in-cwd .env was read through qoder/efficient), so read-only types never run on them. Override with routes.readOnlyEnforced. */
 export const READ_ONLY_ENFORCED = ["claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop"];
+/** "qwen-laptop" / "qwen-code-2/x" -> "qwen-laptop-ro" / "qwen-code-2-ro/x" (read-only twin provider with the deny settings); other providers unchanged. */
+export const roTwin = (prov) => (/^qwen/.test(prov) ? prov.replace(/^([^/]+)/, "$1-ro") : prov);
 export const readOnlyEnforced = (prov, routes = {}) => (routes.readOnlyEnforced ?? READ_ONLY_ENFORCED).includes(prov);
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
@@ -122,18 +124,6 @@ export function headSha(cwd) {
   if (inRepo.status !== 0) return null;
   const r = spawnSync("git", ["rev-parse", "--verify", "HEAD"], { cwd, encoding: "utf8" });
   return r.status === 0 ? r.stdout.trim() : EMPTY_TREE;
-}
-
-/** Qwen Code in plan mode reads files without a permission request, so readguard never sees an in-cwd `.env`. Its own workspace settings can DENY them: for a read-only Qwen task write <cwd>/.qwen/settings.json with the Claude read-only deny list (sensitive Read globs + shell/write/recursive tools), merged into any existing file, and put the original back (or delete ours) when the run ends. Returns the restore function. Live proof 06-11: with it the same prompt gets "cannot read the .env file due to permission restrictions". */
-export function qwenReadDeny(cwd, templatePath = new URL("../../config/claude-clean/readonly-settings.template.json", import.meta.url)) {
-  const f = join(cwd, ".qwen", "settings.json");
-  const had = existsSync(f); const orig = had ? readFileSync(f, "utf8") : null; const dirHad = existsSync(join(cwd, ".qwen"));
-  const reads = JSON.parse(readFileSync(templatePath, "utf8")).permissions.deny.filter((d) => d.startsWith("Read("));
-  const deny = ["Bash", "Shell", "run_shell_command", "Edit", "Write", "ReadManyFiles", "Grep", ...reads, ...reads.map((r) => r.replace("Read(", "ReadFile(", 1))];
-  let cur = {}; try { if (orig) cur = JSON.parse(orig); } catch { cur = {}; }
-  cur.permissions = { ...(cur.permissions ?? {}), deny: [...new Set([...(cur.permissions?.deny ?? []), ...deny])] };
-  mkdirSync(join(cwd, ".qwen"), { recursive: true }); writeFileSync(f, JSON.stringify(cur, null, 2));
-  return () => { try { if (had) writeFileSync(f, orig); else { rmSync(f, { force: true }); if (!dirHad) rmdirSync(join(cwd, ".qwen")); } } catch { /* shortcut: a locked file stays; the changed-files check then fails the task loudly */ } };
 }
 
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
@@ -195,10 +185,13 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
     const rows = paseo(["ls"]);
-    const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
+    const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && [base(prov), base(prov) + "-ro"].includes(a.provider)).length;
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
-    const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
+    const ro0 = readOnlyType(o.type, routes);
+    // Qwen read-only twin: plan mode lets Qwen read an in-cwd .env with no permission request, so a read-only task runs on "<id>-ro", the same launcher started with --read-only, which points QWEN_CODE_SYSTEM_SETTINGS_PATH at config/qwen/system-settings-readonly.json (sensitive-read deny). Nothing is ever written under the task cwd.
+    const launch = ro0 ? roTwin(prov) : prov;
+    const args = ["run", "--cwd", o.cwd, "--provider", launch, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
     if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "no read-only mode for this provider (read-only task types never run on it)" }); continue; }
     if (ro && !readOnlyEnforced(base(prov), routes)) { trace.push({ provider: prov, skip: "no enforced sensitive-read guard for this provider (read-only task types never run on it)" }); continue; }
@@ -212,16 +205,13 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.gate || o.base) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base);
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
-    if (ro && base(prov).startsWith("qwen") && o.worktree) { trace.push({ provider: prov, skip: "read-only Qwen task cannot use --new-workspace worktree (the read deny file is written to --cwd only)" }); continue; }
     const guard = ro ? snapshot(o.cwd) : null;
-    const undeny = ro && base(prov).startsWith("qwen") ? qwenReadDeny(o.cwd) : () => {};
-    let j; try { j = paseo([...args, o.prompt]); } catch (e) { undeny(); throw e; }
+    let j = paseo([...args, o.prompt]);
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
     if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"), { cwd: o.cwd, allow: routes.readAllow });
-    undeny();
     const hint = j.status === "permission" ? { error: `agent asked for a permission its mode does not grant (type ${o.type}, mode ${mode ?? "provider default"}). Edit types (code-edit, test-scaffold) need --new-workspace worktree (full-access is dropped outside one, decision 21); read-only types run in the provider read-only mode and cannot edit.` } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {

@@ -158,6 +158,8 @@ function providers() {
       env: { LLAMA_SERVER_BIN: cfg.llama, LAPTOP_MODEL_PATH: cfg.laptopModel, QWEN_BIN: qwen, ...(cfg.laptopPort ? { LAPTOP_PORT: cfg.laptopPort } : {}),
         ...(opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') ? { HEAVY_LOCK_GLOB: opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') } : {}) } };
   } else notes.push(vram ? 'laptop model needs LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and qwen' : 'laptop model skipped: no GPU with >= 7.5 GiB VRAM (decision 35)');
+  // read-only twins (round 5): the same launcher with --read-only (deny settings for sensitive reads); read-only task types run only on these
+  for (const id of ['qwen-code', 'qwen-code-2', 'qwen-laptop']) if (p[id]) p[id + '-ro'] = { ...p[id], label: p[id].label + ' (read-only)', command: [...p[id].command, '--read-only'] };
   return { p, notes };
 }
 
@@ -284,7 +286,7 @@ async function doctor(deep) {
     else row(r.status === 0, 'laptop pre-flight (GPU visible, no heavy-run lock, free RAM >= 3 GB)', out(r).split(String.fromCharCode(10)).pop());
   }
   for (const id of want) {
-    if (id === 'qwen-laptop' && refused) continue;
+    if (id.startsWith('qwen-laptop') && refused) continue;
     const e = list.find((x) => (x.provider || x.id || x.name) === id);
     const st = e ? (e.status || e.state || '') : 'missing';
     row(/avail|ready|ok/i.test(st), `provider ${id}: status`, st);
@@ -301,7 +303,7 @@ async function doctor(deep) {
   if (deep) {
     const dir = mkdtempSync(join(tmpdir(), 'hub-doctor-'));
     const model = { codex: 'codex/gpt-6.1-terra', 'claude-clean': 'claude-clean/claude-haiku-5-5' };
-    for (const id of want.filter((x) => !(x === 'qwen-laptop' && refused) && (!process.env.AGENT_HUB_ONLY || x === process.env.AGENT_HUB_ONLY))) {
+    for (const id of want.filter((x) => !(x.startsWith('qwen-laptop') && refused) && (!process.env.AGENT_HUB_ONLY || x === process.env.AGENT_HUB_ONLY))) {
       // a model may add a word to a one-word reply: up to 3 tries, the check itself stays strict
       let r, j, aid, good = false;
       for (let attempt = 0; attempt < 3 && !good; attempt++) {
@@ -333,7 +335,7 @@ function plugins() {
 function unconfigure() {
   const f = join(HOME, 'config.json'); const c = readJson(f, null);
   if (c?.agents?.providers) {
-    for (const k of ['codex', 'claude-clean', 'qoder', 'qwen-code', 'qwen-code-2', 'opencode', 'qwen-laptop']) delete c.agents.providers[k];
+    for (const k of ['codex', 'claude-clean', 'qoder', 'qwen-code', 'qwen-code-2', 'opencode', 'qwen-laptop', 'qwen-code-ro', 'qwen-code-2-ro', 'qwen-laptop-ro']) delete c.agents.providers[k];
     delete c.daemon?.auth;
     if (c.daemon?.mcp) { c.daemon.mcp.enabled = false; c.daemon.mcp.injectIntoAgents = false; } // never leave MCP open without auth
     writeJson(f, c);
