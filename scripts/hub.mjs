@@ -106,10 +106,12 @@ function providers() {
   const empty = join(HUB_DIR, 'empty-mcp.json'); writeJson(empty, { mcpServers: {} });
   const claude = which('claude');
   if (claude) {
+    const ro = join(HUB_DIR, 'claude-readonly-settings.json'); writeFileSync(ro, readFileSync(join(REPO, 'config', 'claude-clean', 'readonly-settings.template.json'), 'utf8'));
     const wrap = join(HUB_DIR, WIN ? 'claude-clean.cmd' : 'claude-clean.sh');
+    const js = join(REPO, 'scripts', 'claude-wrap.mjs');
     writeFileSync(wrap, WIN
-      ? `@echo off\r\n"${claude}" --strict-mcp-config --mcp-config "${empty}" %*\r\n`
-      : `#!/bin/sh\nexec "${claude}" --strict-mcp-config --mcp-config "${empty}" "$@"\n`);
+      ? `@echo off\r\n"${process.execPath}" "${js}" "${claude}" "${empty}" "${ro}" %*\r\n`
+      : `#!/bin/sh\nexec "${process.execPath}" "${js}" "${claude}" "${empty}" "${ro}" "$@"\n`);
     if (!WIN) chmodSync(wrap, 0o755);
     p['claude-clean'] = { extends: 'claude', label: 'Claude (clean MCP)', command: [wrap] };
   } else notes.push('claude not installed');

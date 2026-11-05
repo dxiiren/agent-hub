@@ -141,7 +141,7 @@ test("doctor version comparison", () => {
 
 test("DAEMON_UNREACHABLE on start is retried up to 3 times with backoff, then succeeds", () => {
   let n = 0; const waits = [];
-  const raw = (args) => (args[0] === "ls" ? [] : args[0] === "logs" ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
+  const raw = (args) => (args[0] === "ls" ? [] : ["logs", "stop", "archive"].includes(args[0]) ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
   const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms), jitter: () => 0 }), routes);
   assert.equal(r.used, "codex/a"); assert.equal(n, 3); assert.deepEqual(waits, [2000, 4000]);
 });
@@ -196,7 +196,7 @@ test("re-prompt blocks (send, wait), freezes the agent (stop) and only then runs
   let n = 0;
   let r = runRoute({ ...o, gate: "g" }, mkp(null), routes, () => { order.push("gate"); return ++n === 1 ? { status: "FAIL", reasons: ["x"] } : { status: "PASS", reasons: [] }; });
   assert.equal(r.status, "completed");
-  assert.deepEqual(order.filter((x) => ["gate", "send", "wait", "stop"].includes(x)), ["gate", "send", "wait", "stop", "gate"]);
+  assert.deepEqual(order.filter((x) => ["gate", "send", "wait", "stop"].includes(x)), ["gate", "send", "wait", "stop", "gate", "stop"]);
   for (const bad of ["send", "wait"]) {
     r = runRoute({ ...o, gate: "g" }, mkp(bad), routes, () => ({ status: "FAIL", reasons: ["x"] }));
     assert.equal(r.status, "gate-failed"); assert.match(r.gate.reasons.join(), /failed: boom/);
@@ -276,7 +276,7 @@ test("markActive writes a per-route marker and the slot total; the returned fn r
 });
 
 test("read-only types use each provider's read-only mode, in or out of a worktree, ignoring caller and routes modes", () => {
-  const prov = { claude: "plan", "claude-clean": "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk", codex: "auto" };
+  const prov = { claude: "default", "claude-clean": "default", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk", codex: "auto" };
   assert.deepEqual(Object.fromEntries(Object.entries(prov).map(([k]) => [k, READ_ONLY_MODES[k]])), prov);
   for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
     const r2 = { slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
@@ -328,6 +328,19 @@ test("readguard: outside path, sensitive files in cwd, dot-dirs, missing path an
   assert.equal(batchAllowed([{ name: "read", kind: "read", paths: [] }], [cwd]).ok, false); // no path
   assert.equal(pathAllowed(j2(d, "outside", "data.txt"), [cwd, j2(d, "outside")]).ok, true); // explicit readAllow root
 });
+test("readguard: grep/glob/ls/list/read_many_files and pattern fields are denied, even on a clean cwd; directories are not files", () => {
+  const { cwd } = sandbox();
+  for (const n of ["grep", "glob", "ls", "list", "list_directory", "read_many_files"]) assert.equal(batchAllowed([{ name: n, kind: "search", paths: [cwd] }], [cwd]).ok, false, n);
+  assert.equal(batchAllowed([{ name: "read", kind: "read", paths: [cwd] }], [cwd]).ok, false); // a directory
+  assert.equal(batchAllowed([{ name: "read", kind: "read", paths: [j2(cwd, "app.log")], extras: true }], [cwd]).ok, false);
+  assert.equal(normalise({ permissions: [{ agentId: "A", request: { id: "R", name: "read", metadata: { rawRequest: { toolCall: { rawInput: { path: "/a", pattern: "*" } } } } } }] })[0].extras, true);
+});
+test("readguard: a relative path resolves against the task cwd (not the daemon cwd); a ../ escape is denied", () => {
+  const { cwd } = sandbox();
+  assert.ok(pathAllowed("app.log", [cwd]).ok);
+  assert.equal(pathAllowed(j2("..", "outside", "data.txt"), [cwd]).ok, false);
+  assert.equal(pathAllowed(j2("..", "cwd", ".env"), [cwd]).ok, false);
+});
 test("readguard: ~/.ssh, ~/.claude and PASEO_HOME are denied even for a broad readAllow root", () => {
   const { d } = sandbox(); const home = j2(d, "home"); md2(home); for (const s of [".ssh", ".claude", "ph"]) { md2(j2(home, s)); wf2(j2(home, s, "k"), "x"); }
   const env = { PASEO_HOME: j2(home, "ph") };
@@ -346,7 +359,7 @@ test("readguard: mixed batch is all-or-nothing; vague tools (search, find) and w
 });
 test("normalise: pending permission payload -> name, kind and every path", () => {
   const r = normalise({ permissions: [{ agentId: "A", request: { id: "R", name: "read", detail: { type: "read" }, metadata: { rawRequest: { toolCall: { kind: "read", locations: [{ path: "/a/b" }], rawInput: { file_path: "/a/b", path: "/c" } } } } } }] });
-  assert.deepEqual(r, [{ agentId: "A", id: "R", name: "read", kind: "read", paths: ["/a/b", "/c"] }]);
+  assert.deepEqual(r, [{ agentId: "A", id: "R", name: "read", kind: "read", paths: ["/a/b", "/c"], extras: false }]);
   assert.deepEqual(normalise({ permissions: [{ agentId: "A", request: { id: "R", name: "read" } }] })[0].paths, []);
 });
 const permFake = (pending, log) => (a) => {
@@ -389,4 +402,29 @@ test("every spawned run carries an explicit --cwd (never the daemon default)", (
   runRoute({ ...o, provider: "qwen/b", cwd: "/r" }, p, routes);
   const run = p.calls.find((c) => c[0] === "run");
   assert.equal(run[run.indexOf("--cwd") + 1], "/r");
+});
+
+test("a finished route stops and archives its agent after the answer is read; --keep (o.keep) leaves it; fallen-back attempts are retired too", () => {
+  const mk = (script) => { const calls = []; const f = (a) => { calls.push(a); return script(a); }; f.calls = calls; return f; };
+  const order = (p) => p.calls.map((c) => c[0]);
+  const ok = mk((a) => (a[0] === "ls" ? [] : a[0] === "logs" ? { text: "[User] q\nans" } : a[0] === "run" ? { status: "completed", agentId: "A1" } : {}));
+  const r = runRoute({ ...o, provider: "qwen/b" }, ok, routes);
+  assert.equal(r.answer, "ans");
+  assert.ok(order(ok).indexOf("logs") < order(ok).indexOf("archive"), "answer is read before the agent is archived");
+  assert.deepEqual(ok.calls.filter((c) => c[0] === "stop" || c[0] === "archive"), [["stop", "A1"], ["archive", "A1"]]);
+  const keep = mk((a) => (a[0] === "ls" ? [] : a[0] === "run" ? { status: "completed", agentId: "A2" } : {}));
+  runRoute({ ...o, provider: "qwen/b", keep: true }, keep, routes);
+  assert.ok(!keep.calls.some((c) => c[0] === "stop" || c[0] === "archive"));
+  const fb = mk((a) => (a[0] === "ls" ? [] : a[0] === "run" ? (a.includes("codex/a") ? { status: "timeout", agentId: "X" } : { status: "completed", agentId: "Y" }) : {}));
+  runRoute(o, fb, { ...routes, routes: { edit: ["codex/a", "qwen/b"] } });
+  assert.ok(fb.calls.some((c) => c[0] === "archive" && c[1] === "X") && fb.calls.some((c) => c[0] === "archive" && c[1] === "Y"));
+});
+test("claude-wrap merges the hub rules into the --settings Paseo passes, so they cannot be overridden", async () => {
+  const { mergeSettings } = await import("../../../scripts/claude-wrap.mjs");
+  const rules = { permissions: { allow: ["Read(./**)"], deny: ["Read(.env)"] } };
+  const a = mergeSettings(["--x", "1", "--settings", JSON.stringify({ fastMode: false }), "--y"], rules);
+  assert.deepEqual(a.slice(0, 3), ["--x", "1", "--y"]);
+  assert.equal(a.filter((v) => v === "--settings").length, 1);
+  const m = JSON.parse(a.at(-1));
+  assert.equal(m.fastMode, false); assert.deepEqual(m.permissions.deny, ["Read(.env)"]);
 });

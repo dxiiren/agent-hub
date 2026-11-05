@@ -2,7 +2,7 @@
 // Routing wrapper (decision 41): task type -> ordered provider/model chain; the caller may override;
 // a provider at its slot limit is skipped and a failed or timed-out one falls to the next entry.
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
-// Usage: route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]
+// Usage: route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -72,7 +72,7 @@ export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 // Read-only task types never get an unsafe mode outside a worktree (same rule as every type): a "summarise" prompt must not be able to edit files. They run in the provider's default mode, and a post-check fails the task if the folder changed.
 export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["summarise", "review"]).includes(type);
 /** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has no read-only mode: "auto" is its default-permissions mode, the post-check is the backstop. Override per provider with routes.readOnlyModes. */
-export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
+export const READ_ONLY_MODES = { claude: "default", "claude-clean": "default", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", codex: "auto", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
 export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
@@ -142,6 +142,9 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   if (!chain?.length) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   const slots = routes.slots ?? {};
   const trace = [];
+  // A finished agent keeps its provider process (a claude is ~250 MB idle): stop and archive it once its answer and gate are read, unless --keep.
+  const retire = (id) => { if (!o.keep && id) { paseo(["stop", id]); paseo(["archive", id]); } };
+  const done = (r) => { retire(r.agentId); return r; };
   for (const entry of chain) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
@@ -171,16 +174,16 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
-      return { used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace };
+      return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace });
     }
     if (j.status === "completed") {
-      if (!o.gate) return withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo);
+      if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo));
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
       const g = callerGate(o, j.agentId, paseo, gate, routes);
       trace.push({ provider: prov, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
-      return withAnswer({ used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo);
+      return done(withAnswer({ used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo));
     }
-    if (j.agentId) paseo(["stop", j.agentId]); // a timed-out agent must not keep running while the next entry works
+    if (j.agentId) retire(j.agentId); // a timed-out agent must not keep running while the next entry works
   }
   return { used: null, trace };
 }
@@ -202,7 +205,7 @@ function main(argv) {
   }
   const [type, prompt, ...rest] = argv;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
-  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H]'); return 2; }
+  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]'); return 2; }
   const home = opt("--home") ?? process.env.PASEO_HOME;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   const routes = loadRoutes();
@@ -211,7 +214,7 @@ function main(argv) {
   try { res = runRoute({
     type, prompt, provider: opt("--provider"), cwd: opt("--cwd") ?? process.cwd(), gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
-    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT,
+    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
   return res.used && res.status === "completed" ? 0 : 1;

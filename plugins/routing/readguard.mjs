@@ -1,12 +1,12 @@
 // Which pending permission requests of a read-only task may be auto-approved.
 // A request is allowed only when it is a plain local file read (strict tool-name list), carries at least one path, and every path
 // resolves (realpath) inside the task's cwd or an explicit routes.readAllow root without touching a sensitive file.
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { join, relative, resolve, basename, sep, isAbsolute } from "node:path";
 import os from "node:os";
 
 // shortcut: tool names differ per provider; this list is the ones seen live (read_file, glob, grep, ls). Add a name only after seeing its pending request carry a path.
-export const READ_TOOLS = /^(read|read_?file|read_?many_?files|glob|grep|ls|list|list_?directory)$/i;
+export const READ_TOOLS = /^(read|read_?file)$/i; // single-file reads only: grep, glob, ls, list, read_many_files recurse into dot-folders and credentials
 const SENSITIVE_NAME = /^(credentials|creds)|\.(pem|key|p12|pfx|jks|keystore)$|^\.env|^id_(rsa|ed25519|ecdsa|dsa)|secret/i;
 
 const real = (p) => { try { return realpathSync.native(p); } catch { return null; } };
@@ -22,9 +22,10 @@ export function deniedRoots(env = process.env, home = os.homedir()) {
 /** { ok, why } for one path. `roots` = [cwd, ...readAllow]. */
 export function pathAllowed(path, roots, env = process.env, home = os.homedir()) {
   if (!path || typeof path !== "string") return { ok: false, why: "no path" };
-  const abs = real(resolve(path));
-  if (!abs) return { ok: false, why: "path does not resolve" };
   const rr = roots.map((r) => real(resolve(r))).filter(Boolean);
+  const abs = real(isAbsolute(path) ? path : resolve(roots[0] ?? "", path)); // a relative path is the agent's, so it resolves against the task cwd
+  if (!abs) return { ok: false, why: "path does not resolve" };
+  try { if (!statSync(abs).isFile()) return { ok: false, why: "not a regular file" }; } catch { return { ok: false, why: "not a regular file" }; }
   const root = rr.find((r) => inside(r, abs));
   if (!root) return { ok: false, why: "outside cwd and readAllow" };
   if (deniedRoots(env, home).some((d) => inside(d, abs) && !inside(d, root))) return { ok: false, why: "protected folder" };
@@ -38,6 +39,7 @@ export function pathAllowed(path, roots, env = process.env, home = os.homedir())
 /** One normalised pending request ({name, kind, paths}) -> { ok, why }. */
 export function requestAllowed(req, roots, env, home) {
   if (!READ_TOOLS.test(String(req?.name ?? "").trim()) || (req.kind && req.kind !== "read" && req.kind !== "search")) return { ok: false, why: `tool ${req?.name} is not a plain read` };
+  if (req.extras) return { ok: false, why: "request has a pattern/glob/include/recursive field" };
   if (!req.paths?.length) return { ok: false, why: "request carries no path" };
   for (const p of req.paths) { const r = pathAllowed(p, roots, env, home); if (!r.ok) return { ok: false, why: `${p}: ${r.why}` }; }
   return { ok: true };

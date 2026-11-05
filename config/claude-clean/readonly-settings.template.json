@@ -1,0 +1,11 @@
+{
+  "_comment": "Passed to claude-clean with --settings. Read-only tasks run in default mode: reads inside the task folder pass silently, anything else raises a permission the router judges. Reads are limited to the task folder (./ is the agent's cwd); credentials, keys, env files and the hub/home secrets are denied in every mode (deny wins).",
+  "permissions": {
+    "allow": ["Read(./**)"],
+    "deny": [
+      "Read(.env)", "Read(.env.*)", "Read(credentials*)", "Read(creds*)", "Read(*.pem)", "Read(*.key)", "Read(.git/**)",
+      "Read(**/.env)", "Read(**/.env.*)", "Read(**/credentials*)", "Read(**/creds*)", "Read(**/*.pem)", "Read(**/*.key)", "Read(**/.git/**)",
+      "Read(~/.ssh/**)", "Read(~/.claude/**)", "Read(~/.codex/**)", "Read(~/.qoder/**)", "Read(~/.aws/**)", "Read(~/.paseo/agent-hub-secret)", "Read(~/.paseo/config.json)", "Read(~/.paseo/hub/**)"
+    ]
+  }
+}
