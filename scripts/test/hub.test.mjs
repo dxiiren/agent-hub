@@ -57,5 +57,5 @@ test('configure: qoder runs from a private config dir with no MCP servers', () =
   const q = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents.providers.qoder.command;
   const i = q.indexOf('--config-dir');
   assert.ok(q.includes('--acp') && i > 0);
-  assert.deepEqual(JSON.parse(readFileSync(join(q[i + 1], 'settings.json'), 'utf8')), {});
+  assert.deepEqual(JSON.parse(readFileSync(join(q[i + 1], 'settings.json'), 'utf8')), { general: { defaultPermissionMode: 'auto' } });
 });
