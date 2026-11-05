@@ -111,8 +111,21 @@ test("pattern length is capped", () => {
   assert.throws(() => repoGate({ gates: [{ match: "a".repeat(300) }] }, "/x"), /too long/);
 });
 
-test("a folder that is not a git repo is not failed for the missing diff", async () => {
-  const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+function plain(extra = {}) {
   const d = mkdtempSync(join(tmpdir(), "nogit-"));
-  const r = runGate(d, {}); assert.equal(r.status, "PASS"); assert.deepEqual(r.reasons, []);
+  for (const [k, v] of Object.entries(extra)) writeFileSync(join(d, k), v);
+  return d;
+}
+test("no repo + path rules: FAIL, rules cannot be evaluated (a)", () => {
+  const r = runGate(plain(), { cmd: OK, forbid: "^x" });
+  assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /not a git work tree: diff-based rules cannot be evaluated/);
+  assert.equal(runGate(plain(), { cmd: OK, allow: "^src/" }).status, "FAIL");
+});
+test("no repo + no cmd: FAIL nothing to verify (b)", () => {
+  const r = runGate(plain(), {}); assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /nothing to verify/);
+});
+test("no repo + cmd only: PASS, but a secret in the folder FAILs (c)", () => {
+  assert.equal(runGate(plain({ "a.txt": "hello" }), { cmd: OK }).status, "PASS");
+  const r = runGate(plain({ "k.txt": "key = AKIAABCDEFGHIJKLMNOP" }), { cmd: OK });
+  assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /secret pattern in k\.txt/);
 });

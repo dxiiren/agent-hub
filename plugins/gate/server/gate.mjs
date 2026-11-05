@@ -1,6 +1,6 @@
 // Gate core: pure functions, no Paseo imports, so the unit tests run under plain node.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,26 @@ export function repoGate(routes, cwd) {
   return d && !d.startsWith("<") ? { cmd: d } : {};
 }
 
+/** Secret scan of a plain folder: at most 2 MB of text, depth 4, skips .git and node_modules. */
+export function scanFolder(root, budget = { left: 2 << 20 }, depth = 0) {
+  const out = [];
+  let ents = [];
+  try { ents = readdirSync(root, { withFileTypes: true }); } catch { return out; }
+  for (const e of ents) {
+    if (budget.left <= 0) break;
+    if (e.name === ".git" || e.name === "node_modules") continue;
+    const f = join(root, e.name);
+    if (e.isDirectory()) { if (depth < 4) out.push(...scanFolder(f, budget, depth + 1)); continue; }
+    if (!e.isFile()) continue;
+    try {
+      const st = statSync(f); if (st.size > budget.left) continue;
+      budget.left -= st.size;
+      if (SECRET_RE.test(readFileSync(f, "utf8"))) out.push("secret pattern in " + e.name);
+    } catch { /* unreadable */ }
+  }
+  return out;
+}
+
 /**
  * Run the gate in `cwd`.
  * opts: { cmd, maxLines = 400, forbid (RegExp source or null), allow (RegExp source or null) }
@@ -49,9 +69,14 @@ export function runGate(cwd, opts = {}) {
   const { cmd, maxLines = 400, forbid = null, allow = null } = opts;
   const reasons = [];
   let diff = "", files = [];
-  // an agent made over MCP with no workspace lands in a plain folder: nothing to diff, so only the caller's cmd can gate it
+  // not a git work tree: the diff rules cannot run, so fail closed unless a cmd gate exists and no path rules were asked for
   let inRepo = true;
   try { git(cwd, ["rev-parse", "--is-inside-work-tree"]); } catch { inRepo = false; }
+  if (!inRepo) {
+    if (forbid || allow) reasons.push("not a git work tree: diff-based rules cannot be evaluated");
+    else if (!cmd) reasons.push("nothing to verify");
+    else reasons.push(...scanFolder(cwd)); // cmd-only PASS still gets a bounded secret scan of the folder
+  }
   if (inRepo) try {
     git(cwd, ["add", "-N", "."]); // intent-to-add so new files show in the diff
     diff = git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"]);
@@ -76,7 +101,7 @@ export function runGate(cwd, opts = {}) {
     const r = spawnSync(cmd, { cwd, shell: true, encoding: "utf8", timeout: 120_000 });
     if (r.status !== 0) reasons.push(`gate cmd exit ${r.status}: ` + (r.stderr || r.stdout || "").trim().slice(-300));
   }
-  return { status: reasons.length ? "FAIL" : "PASS", reasons, files: files.length, changed: added.length + removed.length, ranCmd: Boolean(cmd) };
+  return { status: reasons.length ? "FAIL" : "PASS", noRepo: !inRepo, reasons, files: files.length, changed: added.length + removed.length, ranCmd: Boolean(cmd) };
 }
 
 /** Attempt logic (decision 47): first failure -> RETRY (re-prompt once), second -> FAIL (back to the caller). */
