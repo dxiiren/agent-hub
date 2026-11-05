@@ -24,6 +24,7 @@ export function mergeSettings(args, rules, hook) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--settings" && i + 1 < args.length) { const v = args[++i]; try { add(JSON.parse(v.trim().startsWith("{") ? v : readFileSync(v, "utf8"))); } catch { /* unreadable value: ours only */ } } else out.push(args[i]);
   }
+  if (hook) merged.disableAllHooks = false;
   if (hook) merged.hooks = { ...merged.hooks, PreToolUse: [hook, ...(merged.hooks?.PreToolUse ?? [])] };
   return [...out, "--settings", JSON.stringify(merged)];
 }
@@ -33,8 +34,9 @@ export function buildArgs(rest, rules, mcp) {
   if (rest[0] === "--version") return rest;
   const base = ["--strict-mcp-config", "--mcp-config", mcp];
   if (!READONLY_MODES.includes(modeOf(rest))) return [...base, ...rest];
-  const noProject = rest.map((a) => (a.startsWith("--setting-sources=") ? "--setting-sources=user" : a));
-  return [...base, ...mergeSettings(noProject, rules, hookEntry())];
+  const noProject = []; // every --setting-sources form is dropped, then one `user` is appended: project/local allow rules and hooks cannot return
+  for (let i = 0; i < rest.length; i++) { if (rest[i] === "--setting-sources") i++; else if (!rest[i].startsWith("--setting-sources=")) noProject.push(rest[i]); }
+  return [...base, ...mergeSettings(noProject, rules, hookEntry()), "--setting-sources", "user"];
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
