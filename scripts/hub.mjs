@@ -9,6 +9,7 @@
 //      AGENT_HUB_CLIENT_ROOT (redirect every client config into a temp dir, for tests),
 //      OFFICE_QWEN_URL / OFFICE_QWEN_MODEL / LLAMA_SERVER_BIN / LAPTOP_MODEL_PATH / HEAVY_LOCK_GLOB
 //      (or the same keys in config/hub.local.json, git-ignored).
+import { writeJsonKeepEol } from '../plugins/routing/jsonfile.mjs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
@@ -56,7 +57,7 @@ function which(name) {
   if (r.status !== 0 || !lines.length) return '';
   return WIN ? lines.find((l) => /\.(cmd|exe|bat)$/i.test(l)) || lines[0] : lines[0];
 }
-const writeJson = (p, o) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(o, null, 2) + '\n'); };
+const writeJson = writeJsonKeepEol;
 const readJson = (p, d) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return d; } };
 
 // Owner-only file: 0600 on POSIX, current-user-only ACL on Windows. Called after every write of a file that holds the token.

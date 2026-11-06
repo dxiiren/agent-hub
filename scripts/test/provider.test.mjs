@@ -43,7 +43,7 @@ test('remove restores the config files byte for byte', async () => {
   remove('qwen-extra', p);
   const after = ['local', 'paseo', 'routes'].map((f) => existsSync(p[f]) ? readFileSync(p[f], 'utf8') : null);
   assert.deepEqual(JSON.parse(after[1]), JSON.parse(before[1])); assert.deepEqual(JSON.parse(after[2]), JSON.parse(before[2]));
-  const r = JSON.parse(after[2]); assert.ok(!('readOnlyEnforced' in r) && !('readOnlyModes' in r)); assert.ok(!('extraProviders' in JSON.parse(after[0])));
+  const r = JSON.parse(after[2]); assert.ok(!('readOnlyEnforced' in r) && !('readOnlyModes' in r)); assert.equal(after[0], null, 'hub.local.json did not exist before add and is gone again');
 });
 
 test('refuses a model the endpoint does not serve, writing nothing', async () => {
@@ -74,4 +74,25 @@ test('entries is what configure regenerates from hub.local.json', () => {
   const e = entries('qwen-x', { type: 'qwen-code', url: URL1, model: 'm1' }, 'qwen', '/repo');
   assert.equal(e['qwen-x'].command[1].replace(/\\/g, '/'), '/repo/deploy/office/office-agent.mjs');
   assert.ok(e['qwen-x-ro'].label.endsWith('(read-only)'));
+});
+
+test('remove restores the exact bytes (CRLF, explicit defaults, empty keys) and undoes by key with the same EOL when the files changed since', async () => {
+  const LF = String.fromCharCode(10), CR = String.fromCharCode(13, 10);
+  const crlf = (o) => JSON.stringify(o, null, 2).split(LF).join(CR) + CR;
+  const mk = () => {
+    const { p } = box();
+    writeFileSync(p.routes, crlf({ slots: { codex: 2 }, readOnlyEnforced: ['claude-clean', 'qwen-code', 'qwen-code-2', 'qwen-laptop'], readOnlyModes: {}, routes: { summarise: ['qwen-laptop'] } }));
+    writeFileSync(p.paseo, crlf({ version: 1 }));
+    writeFileSync(p.local, '{}');
+    return p;
+  };
+  const p = mk(); const before = ['local', 'paseo', 'routes'].map((f) => readFileSync(p[f]));
+  await add({ name: 'qwen-extra', url: URL1, model: 'm1', routes: 'summarise' }, p, opts());
+  assert.ok(readFileSync(p.routes, 'utf8').includes(CR), 'add keeps CRLF');
+  remove('qwen-extra', p);
+  ['local', 'paseo', 'routes'].forEach((f, i) => assert.ok(readFileSync(p[f]).equals(before[i]), f + ' byte-identical'));
+  const q = mk(); await add({ name: 'qwen-extra', url: URL1, model: 'm1' }, q, opts());
+  const r = JSON.parse(readFileSync(q.routes, 'utf8')); r.slots.codex = 5; writeFileSync(q.routes, crlf(r));
+  remove('qwen-extra', q);
+  const after = readFileSync(q.routes, 'utf8'); assert.ok(after.includes(CR) && !after.includes('qwen-extra'), 'CRLF kept, name gone'); assert.equal(JSON.parse(after).slots.codex, 5);
 });

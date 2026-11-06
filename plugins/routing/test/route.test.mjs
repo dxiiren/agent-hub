@@ -682,3 +682,31 @@ test("round 7: a hung `paseo logs` is killed after the logs timeout, retried onc
   const w = withAnswer({ agentId: "A" }, cliPaseo(undefined, { PASEO_BIN: "paseo" }, spawn), 0);
   assert.equal(w.answer, ""); assert.match(w.answerReason, /logs unreadable/);
 });
+
+import { inputError, AGENT_ID_RE } from "../route.mjs";
+import { writeJsonKeepEol } from "../jsonfile.mjs";
+test("round 9: every CLI value that becomes a path, label or paseo argument is allow-listed", () => {
+  const ok = { type: "summarise", provider: "qwen-code-2/x", cwd: "C:/work/a", home: "C:/Users/me/.paseo", mode: "plan", session: "fix-r7", dev: "me@pc", client: "claude" };
+  assert.equal(inputError(ok), null); assert.equal(inputError({}), null);
+  const BSL = String.fromCharCode(92), NL = String.fromCharCode(10);
+  for (const [k, vals] of Object.entries({ type: ["", "A b", "x;y", "--help", "a/b"], provider: ["--x", "a b", "a" + NL + "b", "../x", ""], mode: ["--x", "a b", "x" + NL], session: ["--x", "a b", "a/../b", "x" + NL, "a".repeat(65)], dev: ["-x", "a b", "a=b"], client: ["-x", "a;b"], cwd: ["-x", "a" + NL + "b", ""], home: ["-x", "a" + String.fromCharCode(0)] }))
+    for (const v of vals) assert.match(inputError({ ...ok, [k]: v }) ?? "", new RegExp("invalid " + k), k + " " + JSON.stringify(v));
+  assert.ok(AGENT_ID_RE.test("0a1b2c3d-4e5f-6789-abcd-ef0123456789")); assert.ok(!AGENT_ID_RE.test(".." + BSL + "x"));
+  const r = runRoute({ type: "summarise", prompt: "p", session: "bad id", cwd: "/r" }, () => { throw new Error("must not be called"); }, { routes: { summarise: ["qwen"] } });
+  assert.equal(r.status, "error"); assert.match(r.trace[0].error, /invalid session/);
+});
+test("round 9: grantReads answers only the route's own agent, only reads inside scope, never another agent's request", () => {
+  const { d, cwd } = sandbox(); const inC = j2(cwd, "app.log");
+  const log = []; const pend = [{ id: "1", agentId: "OTHER", name: "read", kind: "read", paths: [inC] }, { id: "2", agentId: "A", name: "read", kind: "read", paths: [inC] }];
+  grantReads(permFake(pend, log), { agentId: "A", status: "permission" }, 60, { cwd });
+  const permits = log.filter((c) => c[0] === "permit");
+  assert.deepEqual(permits, [["permit", "allow", "A", "2"]]);
+});
+test("round 9: JSON config writes keep the file's line endings", () => {
+  const CR = String.fromCharCode(13, 10), t = mk2(j2(tmpdir(), "eol-"));
+  const f = j2(t, "c.json"); wf2(f, "{" + CR + '  "a": 1' + CR + "}" + CR);
+  writeJsonKeepEol(f, { a: 2 }); assert.equal(readFileSync(f, "utf8"), "{" + CR + '  "a": 2' + CR + "}" + CR);
+  const g = j2(t, "n.json"); writeJsonKeepEol(g, { a: 1 }); assert.ok(!readFileSync(g, "utf8").includes(CR));
+  const oc = j2(t, "oc.json"); wf2(oc, JSON.stringify({ model: "office/A", provider: { office: { models: { A: { name: "A" } } } } }, null, 2).split(String.fromCharCode(10)).join(CR) + CR);
+  assert.equal(syncOpencode(oc, "B"), true); assert.ok(readFileSync(oc, "utf8").includes(CR));
+});

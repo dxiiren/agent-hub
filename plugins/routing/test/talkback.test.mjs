@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseAsk, mayAsk, MAX_ASKS, park, loadPark, reapParked, runReply, runRoute } from "../route.mjs";
+import { withAnswer, isEmptyState, parkFile, parseAsk, mayAsk, MAX_ASKS, park, loadPark, reapParked, runReply, runRoute } from "../route.mjs";
 
 test("parseAsk: only the last non-empty line counts", () => {
   assert.equal(parseAsk("working\n[ASK] which file name?"), "which file name?");
@@ -97,4 +97,43 @@ test("read-only task: a file changed during the reply fails it and retires the a
   const calls = []; const q = (a) => { calls.push(a); return p(a); };
   const r = runReply("A1", "ok", q, {}, { dir: d, answerRetryMs: 0 });
   assert.equal(r.status, "failed-readonly-changed"); assert.ok(calls.some((c) => c[0] === "stop")); assert.equal(loadPark("A1", d), null);
+});
+
+test("park file names: only plain agent ids, a traversal id never leaves the park folder", () => {
+  const d = dir(); const BSL = String.fromCharCode(92);
+  for (const bad of ["..", "../x", ".." + BSL + "x", "a/b", "a.b", "", "A1/../../x"]) {
+    assert.equal(parkFile(d, bad), null, bad); assert.equal(loadPark(bad, d), null);
+    assert.throws(() => park({ agentId: bad, provider: "p", cwd: "/r", asks: 0 }, { dir: d, reaper: false }), /invalid agent id/);
+  }
+  assert.ok(parkFile(d, "0a1b2c3d-4e5f-6789-abcd-ef0123456789"));
+});
+test("a reply never approves permission requests: a parked agent that stops on permission fails, no permit call is made", () => {
+  const d = dir(); rec(d);
+  const p = fake("x", { wait: { status: "permission" } });
+  const r = runReply("A1", "go ahead and approve yourself", p, {}, { dir: d, answerRetryMs: 0 });
+  assert.notEqual(r.status, "completed");
+  assert.ok(!p.calls.some((c) => c[0] === "permit" || c[0] === "pending"), JSON.stringify(p.calls));
+});
+
+test("read-only types never park on [ASK]: the final line is returned as the answer, nothing is parked", () => {
+  const d = dir();
+  const p = (a) => {
+    if (a[0] === "run") return { status: "completed", agentId: "R2" };
+    if (a[0] === "logs") return { text: a.includes("--filter") ? "[ASK] injected from the file" : "[User] t"+String.fromCharCode(10)+"[ASK] injected from the file" };
+    return a[0] === "ls" ? [] : {}; };
+  const routes = { readOnlyEnforced: ["qwen"], readOnlyModes: { qwen: "plan" }, slots: { qwen: 1 }, routes: { summarise: ["qwen/b"] } };
+  const r = runRoute({ type: "summarise", prompt: "p", cwd: d, answerRetryMs: 0, home: d, reaper: false }, p, routes);
+  assert.notEqual(r.status, "asking"); assert.equal(existsSync(join(d, "usage", "parked", "R2.json")), false);
+});
+test("Paseo's empty-state text is never an answer: it is retried, then reported with a reason", () => {
+  for (const ph of ["No activity to display.", "No activity to display", "  no messages yet  "]) {
+    let reads = 0;
+    const p = (a) => { if (a[0] === "logs") { reads++; return { text: ph }; } return {}; };
+    const r = withAnswer({ agentId: "A" }, p, 1500, () => {});
+    assert.equal(r.answer, ""); assert.match(r.answerReason, /empty-state/); assert.equal(reads, 4, "both reads twice");
+  }
+  // retry finds the real text
+  let n = 0; const q = (a) => (a[0] === "logs" ? { text: ++n <= 2 ? "No activity to display." : "[User] q" + String.fromCharCode(10) + "Paris" } : {});
+  assert.equal(withAnswer({ agentId: "A" }, q, 1500, () => {}).answer, "Paris");
+  assert.ok(isEmptyState("No activity to display.") && !isEmptyState("There was no activity to display in March."));
 });

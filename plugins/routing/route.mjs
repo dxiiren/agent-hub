@@ -6,11 +6,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
-import { runGate, gateOpts, EMPTY_TREE, SECRET_RE } from "../gate/server/gate.mjs";
+import { runGate, gateOpts, EMPTY_TREE, SECRET_RE, wrappedSecret } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { batchAllowed } from "./readguard.mjs";
 
@@ -122,17 +122,20 @@ export function lastAnswer(full, cap = 4096, assistant = null) {
   const a = run.join(NL).trim();
   return a.length > cap ? { answer: a.slice(0, cap), truncated: true } : { answer: a, truncated: false };
 }
+/** Paseo prints these when an agent has no transcript yet; they are UI text, never an answer. */
+export const isEmptyState = (t) => /^\s*(no activity to display|no activity|nothing to display|no (messages|output|logs?)( yet| to display)?)\.?\s*$/i.test(String(t ?? ""));
 /** Attach `answer` (always present: "" plus `answerReason` when nothing could be read). The log is re-read once when its last line is a tool line or the text is empty: the final message may not be flushed yet. */
 export function withAnswer(r, paseo, retryMs = 1500, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)) {
   if (!r.agentId) return r;
   const read = () => {
     const f = paseo(["logs", r.agentId]); const as = paseo(["logs", r.agentId, "--filter", "assistant"]);
-    return { f, a: lastAnswer(f?.text, 4096, as?.text ?? null) };
+    const a = lastAnswer(isEmptyState(f?.text) ? "" : f?.text, 4096, isEmptyState(as?.text) ? null : as?.text ?? null);
+    return { f, a: isEmptyState(a.answer) ? { answer: "", truncated: false } : a };
   };
   let x = read();
   const tail = lines(x.f?.text).filter((l) => l.trim()).pop() ?? "";
   if (retryMs && (!x.a.answer || TAG.test(tail))) { sleep(retryMs); const y = read(); if (y.a.answer) x = y; }
-  if (!x.a.answer) return { ...r, answer: "", answerReason: x.f?.error ? "logs unreadable: " + String(x.f.error).slice(0, 120) : "the agent log holds no assistant text" };
+  if (!x.a.answer) return { ...r, answer: "", answerReason: x.f?.error ? "logs unreadable: " + String(x.f.error).slice(0, 120) : "the agent log holds no assistant text (or only Paseo's empty-state text)" };
   return { ...r, answer: x.a.answer, ...(x.a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
 }
 
@@ -201,17 +204,25 @@ export const sha = (t) => createHash("sha1").update(String(t)).digest("hex");
 export const mayAsk = (asks) => asks < MAX_ASKS;
 const parkDir = (home) => join(home || process.env.PASEO_HOME || join(os.homedir(), ".paseo"), "usage", "parked");
 /** Remember what a parked agent needs for its reply (gate, base, worktree) and arm a detached reaper that stops it after PARK_SECONDS without a reply. */
+/** Paseo ids are UUIDs; the id becomes a file name, so allow only plain id characters and keep the resolved path inside the park folder. */
+export const AGENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+export function parkFile(dir, agentId) {
+  if (typeof agentId !== "string" || !AGENT_ID_RE.test(agentId)) return null;
+  const f = resolve(dir, agentId + ".json");
+  return f.startsWith(resolve(dir) + sep) ? f : null;
+}
 export function park(rec, { home, dir = parkDir(home), seconds = PARK_SECONDS, reaper = true } = {}) {
   const parkedAt = Date.now();
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, rec.agentId + ".json"), JSON.stringify({ ...rec, parkedAt }));
+  const f = parkFile(dir, rec.agentId); if (!f) throw new Error("invalid agent id for parking");
+  writeFileSync(f, JSON.stringify({ ...rec, parkedAt }));
   if (reaper) { // shortcut: one detached node per parked agent, not a daemon timer; upgrade if parking becomes frequent
     try { spawn(process.execPath, [fileURLToPath(import.meta.url), "--reap", rec.agentId, String(parkedAt), String(seconds), home ?? "", dir], { detached: true, stdio: "ignore", windowsHide: true }).unref(); } catch { /* the park file stays; a reply still works */ }
   }
   return parkedAt;
 }
-export const loadPark = (agentId, dir = parkDir()) => { try { return JSON.parse(readFileSync(join(dir, agentId + ".json"), "utf8")); } catch { return null; } };
-const dropPark = (agentId, dir = parkDir()) => { try { rmSync(join(dir, agentId + ".json"), { force: true }); } catch { /* best effort */ } };
+export const loadPark = (agentId, dir = parkDir()) => { try { return JSON.parse(readFileSync(parkFile(dir, agentId), "utf8")); } catch { return null; } };
+const dropPark = (agentId, dir = parkDir()) => { try { const f = parkFile(dir, agentId); if (f) rmSync(f, { force: true }); } catch { /* best effort */ } };
 /** Stop and archive a parked agent (and its route-created worktree). */
 export function retireParked(paseo, rec) {
   paseo(["stop", rec.agentId]); paseo(["archive", rec.agentId]);
@@ -228,7 +239,8 @@ export function reapParked(paseo, agentId, parkedAt, dir = parkDir()) {
  * It may ask again (up to MAX_ASKS questions in total); the original --gate runs on the final answer.
  */
 export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, dir = parkDir(), answerRetryMs, reaper = true, waitTimeout } = {}) {
-  if (SECRET_RE.test(String(text))) return { used: null, status: "rejected", error: "reply rejected: it looks like a credential, token or key. Reply without it." };
+  if (!parkFile(dir, agentId)) return { used: null, status: "error", error: `invalid agent id: only ${AGENT_ID_RE} is accepted` };
+  if (SECRET_RE.test(String(text)) || wrappedSecret(text)) return { used: null, status: "rejected", error: "reply rejected: it looks like a credential, token or key. Reply without it." };
   const rec = loadPark(agentId, dir);
   if (!rec) return { used: null, status: "error", error: `no parked agent ${agentId}: it never asked, already finished, or was stopped after ${PARK_SECONDS / 60} min without a reply` };
   dropPark(agentId, dir); // the reaper must not stop it while this reply runs
@@ -254,11 +266,27 @@ export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, di
   return out;
 }
 
+/** Allow-lists for every CLI/MCP value that becomes a paseo argument, a label or a path. Free text (prompt, reply text, --gate command) is the task itself and is not listed here. */
+const ALLOW = {
+  type: /^[a-z][a-z0-9-]{0,31}$/,
+  provider: /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/,
+  label: /^[A-Za-z0-9][A-Za-z0-9._@:-]{0,63}$/, // session, dev, client
+  mode: /^[A-Za-z0-9][A-Za-z0-9:/._#-]{0,119}$/,
+};
+export function inputError(o) {
+  for (const [k, re, v] of [["type", ALLOW.type, o.type], ["provider", ALLOW.provider, o.provider], ["mode", ALLOW.mode, o.mode], ["session", ALLOW.label, o.session], ["dev", ALLOW.label, o.dev], ["client", ALLOW.label, o.client]])
+    if (v !== undefined && v !== null && !(typeof v === "string" && re.test(v))) return `invalid ${k}: only ${re} is accepted`;
+  for (const [k, v] of [["cwd", o.cwd], ["home", o.home]])
+    if (v !== undefined && v !== null && (typeof v !== "string" || !v || v.startsWith("-") || [...v].some((c) => c.charCodeAt(0) < 32))) return `invalid ${k}: an absolute path without control characters or a leading dash is required`;
+  return null;
+}
+
 /**
  * Run a task through the chain. `paseo(args)` is injected (tests use a fake).
  * Returns { used, agentId, status, trace }; used is null when every entry failed.
  */
 export function runRoute(o, paseo, routes, gate = runGate) {
+  const bad = inputError(o); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
   const chain = o.provider ? [o.provider] : routes.routes?.[o.type];
   if (!chain?.length) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   const slots = routes.slots ?? {};
@@ -344,7 +372,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
       return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);
     }
-    if (j.status === "completed" && !o.noAsk) { // talk-back: the agent ended with `[ASK] <question>`: park it (alive, no gate, no retire) until `agent-hub reply`
+    if (j.status === "completed" && !o.noAsk && !ro) { // read-only types never park: text inside a summarised file could otherwise hold a slot for 10 min
+     // talk-back: the agent ended with `[ASK] <question>`: park it (alive, no gate, no retire) until `agent-hub reply`
       const a = withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs);
       const q = parseAsk(a.answer);
       if (q && j.agentId) {
@@ -389,13 +418,14 @@ function main(argv) {
     try { console.log(resolveCached(argv[1], cliPaseo(process.env.PASEO_HOME))); return 0; } catch (e) { console.error(e.message); return 1; }
   }
   if (argv[0] === "--reap") { // detached reaper armed by park(): --reap <agentId> <parkedAt> <seconds> <home> <dir>
-    const [, id, at, secs, h, d] = argv; const paseo = cliPaseo(h || process.env.PASEO_HOME);
+    const [, id, at, secs, h, d] = argv; if (!AGENT_ID_RE.test(id ?? "") || !(Number(secs) > 0) || !Number.isFinite(Number(secs))) return 2; const paseo = cliPaseo(h || process.env.PASEO_HOME);
     setTimeout(() => process.exit(reapParked(paseo, id, at, d || parkDir(h || undefined)) ? 0 : 1), Number(secs) * 1000); return null;
   }
   if (argv[0] === "reply") {
     const [, id, text, ...r] = argv;
     if (!id || !text) { console.error('usage: route.mjs reply <agentId> "<text>" [--home H]'); return 2; }
     const home = (r.includes("--home") ? r[r.indexOf("--home") + 1] : undefined) ?? process.env.PASEO_HOME;
+    { const e = inputError({ home }); if (e) { console.error("route: " + e); return 2; } }
     const res = runReply(id, text, withRetry(cliPaseo(home)), loadRoutes(), { dir: parkDir(home) });
     console.log(JSON.stringify(res));
     return res.status === "completed" ? 0 : res.status === "asking" ? 3 : 1;
@@ -405,14 +435,17 @@ function main(argv) {
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]'); return 2; }
   const home = opt("--home") ?? process.env.PASEO_HOME;
   const cwd = normCwd(opt("--cwd") ?? process.cwd());
+  const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
+  const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
+  if (early) { console.error("route: " + early); return 2; }
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   const routes = loadRoutes();
   const unmark = markActive(routes, opt("--provider"));
   let res;
   try { res = runRoute({
-    type, prompt: prompt + ASK_CLAUSE, provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
-    session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
+    type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
+    session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, freeMem: () => os.freemem() / 2 ** 30,
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));

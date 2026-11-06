@@ -1,6 +1,7 @@
 // Office / laptop model ids come from the server's own GET <base>/v1/models, never from config (owner 05-11: always the latest served model).
 // Cached 10 min per base URL in a temp file because route.mjs and the launchers are new processes per task.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { writeJsonKeepEol } from "./jsonfile.mjs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -41,7 +42,7 @@ export function syncOpencode(file, id) {
   if (j.model === `office/${id}`) return false;
   const o = j.provider.office; const old = Object.values(o.models)[0] ?? {};
   o.models = { [id]: { ...old, name: id } }; j.model = `office/${id}`;
-  writeFileSync(file, JSON.stringify(j, null, 2) + "\n"); return true;
+  writeJsonKeepEol(file, j); return true;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && process.argv[2] === "--id") {

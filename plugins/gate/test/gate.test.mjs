@@ -304,3 +304,26 @@ test("round 7: a bare JWT and a PGP private key block are secrets; ordinary dott
   const d = repo(); writeFileSync(join(d, "t.txt"), "x = " + jwt);
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern/);
 });
+
+test("round 8: a JWT wrapped over several lines is a secret, in a diff and in a file", () => {
+  const NL = String.fromCharCode(10);
+  const parts = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"];
+  assert.ok(bufHasSecret(Buffer.from(parts.join("." + NL))));
+  assert.ok(!bufHasSecret(Buffer.from("eyJ-not a token" + NL + "a.b.c")));
+  const d = repo(); const base = head(d); writeFileSync(join(d, "w.txt"), parts.join("." + NL) + NL);
+  assert.match(runGate(d, { cmd: OK, base }).reasons.join(), /secret pattern/);
+});
+
+test("round 9: every token-shaped secret is found wrapped over lines (LF and CRLF); case-insensitive forms and key names still match; prose does not", () => {
+  const LF = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
+  const jwt = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"];
+  const aws = "AK" + "IA" + "ABCDEFGHIJKLMNOP"; const ghp = "gh" + "p_" + "a".repeat(36);
+  const pem = ["-----BEGIN RSA PRIV" + "ATE KEY-----", "-----BEGIN PGP PRIV" + "ATE KEY BLOCK-----", "-----BEGIN PRIV" + "ATE KEY-----"];
+  const cases = [jwt.join("." + LF), jwt.join("." + CRLF), aws.slice(0, 7) + LF + aws.slice(7), aws.slice(0, 9) + CRLF + aws.slice(9), ghp.slice(0, 10) + LF + ghp.slice(10), ghp.slice(0, 20) + CRLF + ghp.slice(20),
+    ...pem, pem[0].replace("BEGIN ", "BEGIN" + LF), pem[1].replace("PGP ", "PGP" + CRLF)];
+  for (const c of cases) assert.ok(bufHasSecret(Buffer.from(c)), JSON.stringify(c).slice(0, 40));
+  assert.ok(bufHasSecret(Buffer.from(cases[0], "utf16le")), "utf16");
+  // mixed case and CRLF around key-name rules
+  for (const l of ["akia" + "ABCDEFGHIJKLMNOP", "Db_Pass" + "word=" + "hunter2hunter2hunter2" + CRLF, "BEARER abcdefghijklmnopqrstuvwxyz0123456789", pem[1].toLowerCase()]) assert.ok(SECRET_RE.test(l), JSON.stringify(l).slice(0, 30));
+  for (const l of ["risk- averse analysis of something long" + LF + "more words", "Ask a question" + CRLF + "about a task-management tool", "eyJ" + LF + "short"]) assert.ok(!bufHasSecret(Buffer.from(l)), l.slice(0, 20));
+});

@@ -3,13 +3,15 @@
 //   node scripts/hub.mjs provider list | remove <name>        (also: agent-hub provider ...)
 // Writes config/hub.local.json (extraProviders), the routes file (slots, modes, route chains) and the Paseo config.json entries (<name> and the read-only <name>-ro twin).
 // Restart the daemon afterwards (`just down && just up`) so Paseo reloads its providers.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelsUrl, safeId } from '../plugins/routing/office.mjs';
 import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
+import { writeJsonKeepEol } from '../plugins/routing/jsonfile.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const NAME_RE = /^qwen-[a-z0-9]+(-[a-z0-9]+)*$/; // routing derives the read-only twin only for names starting "qwen" (roTwin in route.mjs)
@@ -26,7 +28,11 @@ export function paths(env = process.env) {
     routes: env.AGENT_HUB_ROUTES || (existsSync(join(routesDir, 'routes.local.json')) ? join(routesDir, 'routes.local.json') : join(routesDir, 'routes.template.json')) };
 }
 const rd = (p, d) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return d; } };
-const wr = (p, o) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(o, null, 2) + '\n'); };
+const wr = writeJsonKeepEol; // keeps the file's own line endings
+const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
+const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
+const FILES = ['local', 'paseo', 'routes'];
+const undoPath = (p, name) => join(dirname(p.local), `hub.local.undo-${name}.json`); // matches .gitignore *.local.*
 
 /** Refuse unless GET <url>/v1/models lists `model`. `f` is injectable for tests. */
 export async function checkEndpoint(url, model, f = fetch) {
@@ -51,6 +57,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen' } = 
   if (!/^https?:\/\/[^\s"]+$/.test(url || '')) throw new Error('--url must be an http(s) base URL');
   if (!safeId(model)) throw new Error('--model must be a plain model id');
   if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');
+  const pre = Object.fromEntries(FILES.map((f) => [f, bytes(p[f])]));
   const local = rd(p.local, {});
   if (local.extraProviders?.[name]) throw new Error(`${name} already exists (remove it first)`);
   await checkEndpoint(url, model, f);
@@ -66,12 +73,15 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen' } = 
   routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), name])]; routes.readOnlyModes = { ...routes.readOnlyModes, [name]: 'plan' };
   for (const c of chains) routes.routes[c].push(name);
   wr(p.local, local); wr(p.routes, routes); wr(p.paseo, cfg);
+  // remove() puts the exact pre-add bytes back while nothing else touched the files since
+  writeFileSync(undoPath(p, name), JSON.stringify(Object.fromEntries(FILES.map((f) => [f, { pre: pre[f]?.toString('base64') ?? null, post: sha(bytes(p[f])) }]))));
   return { name, slots, routes: chains };
 }
 
 export function remove(name, p = paths()) {
   const local = rd(p.local, {});
   if (!local.extraProviders?.[name]) throw new Error(`${name} is not an added provider (list: ${Object.keys(local.extraProviders || {}).join(', ') || 'none'})`);
+  if (restoreSnapshot(name, p)) return; // untouched since add: byte-identical to before
   delete local.extraProviders[name]; if (!Object.keys(local.extraProviders).length) delete local.extraProviders;
   const routes = rd(p.routes, {});
   delete routes.slots?.[name]; delete routes.modes?.[name]; delete routes.readOnlyModes?.[name];
@@ -82,7 +92,17 @@ export function remove(name, p = paths()) {
   for (const c of Object.keys(routes.routes || {})) routes.routes[c] = routes.routes[c].filter((x) => x.split('/')[0] !== name);
   const cfg = rd(p.paseo, {});
   if (cfg.agents?.providers) { delete cfg.agents.providers[name]; delete cfg.agents.providers[name + '-ro']; }
+  if (cfg.agents?.providers && !Object.keys(cfg.agents.providers).length) delete cfg.agents.providers;
+  if (cfg.agents && !Object.keys(cfg.agents).length) delete cfg.agents;
   wr(p.local, local); wr(p.routes, routes); wr(p.paseo, cfg);
+}
+/** Restore each file whose bytes still equal what add() left; true when every file was restored. */
+function restoreSnapshot(name, p) {
+  let u; try { u = JSON.parse(readFileSync(undoPath(p, name), 'utf8')); } catch { return false; }
+  const done = FILES.filter((f) => u[f] && sha(bytes(p[f])) === u[f].post);
+  for (const f of done) { if (u[f].pre === null) rmSync(p[f], { force: true }); else writeFileSync(p[f], Buffer.from(u[f].pre, 'base64')); }
+  if (done.length === FILES.length) { rmSync(undoPath(p, name), { force: true }); return true; }
+  return false;
 }
 
 export const list = (p = paths()) => {
