@@ -1,9 +1,10 @@
 // Gate core: pure functions, no Paseo imports, so the unit tests run under plain node.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, rmSync, existsSync, mkdtempSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
 
 // Secret scanning is delegated to gitleaks (pinned version, rules = config/gitleaks.toml: the default rules plus a few of ours). No hand-written regexes here.
 export const GITLEAKS_VERSION = "8.30.1";
@@ -31,18 +32,25 @@ export function checkScanner(bin = gitleaksBin()) {
 }
 const norm = (l) => l.replace(/\s+/g, " ").trim();
 /** True when `text` holds a secret as is OR with the lines joined (a wrapped secret). Throws when the scanner cannot run. */
-export function hasSecret(text, bin = gitleaksBin()) {
+export function hasSecret(text, bin = gitleaksBin(), config = GITLEAKS_CONFIG) {
   const t = String(text);
   if (!t.trim()) return false;
   if (verified !== bin) { checkScanner(bin); verified = bin; }
   const NL = String.fromCharCode(10);
-  const joined = t.replaceAll(String.fromCharCode(13), NL).split(NL).map(norm).join("");
-  const input = t + NL + joined + NL;
+  const lines = t.replaceAll(String.fromCharCode(13), NL).split(NL).map(norm);
+  // A text header first (leading binary-looking bytes must not make gitleaks skip the stream) and a random canary last: the scan counts only when gitleaks reports the canary, so a skipped or truncated scan is "unavailable", never "clean".
+  const canary = "AGENTHUBCANARY" + randomBytes(16).toString("hex");
+  const input = ["agent-hub secret scan input", t, lines.join(NL), lines.join(""), canary, ""].join(NL);
+  const rep = join(mkdtempSync(join(SCAN_CWD, "r-")), "report.json");
   // --ignore-gitleaks-allow: a `gitleaks:allow` comment in the scanned text must not switch the scan off
-  const r = gl(["stdin", "--no-banner", "--no-color", "--log-level", "error", "--ignore-gitleaks-allow", "--exit-code", "7", "-c", GITLEAKS_CONFIG], input, bin, 30000 + 10000 * (input.length >> 20));
-  if (r.status === 7) return true;
-  if (r.status === 0) return false;
-  throw new Error("secret scanner unavailable: gitleaks exited " + r.status);
+  const r = gl(["stdin", "--no-banner", "--no-color", "--log-level", "error", "--ignore-gitleaks-allow", "--exit-code", "7", "--report-format", "json", "--report-path", rep, "-c", config], input, bin, 30000 + 10000 * (input.length >> 20));
+  if (r.status !== 7 && r.status !== 0) throw new Error("secret scanner unavailable: gitleaks exited " + r.status);
+  let found = null;
+  try { found = JSON.parse(readFileSync(rep, "utf8")); } catch { /* missing or unreadable report: treated as unavailable below */ }
+  rmSync(dirname(rep), { recursive: true, force: true });
+  if (Array.isArray(found) && found.some((f) => f.RuleID !== "agent-hub-canary")) return true; // a real finding blocks even when the canary was dropped (gitleaks drops the tail of some huge repeated-pattern inputs)
+  if (!Array.isArray(found) || !found.some((f) => f.RuleID === "agent-hub-canary")) throw new Error("secret scanner unavailable: canary not reported (input skipped or scan incomplete)");
+  return found.some((f) => f.RuleID !== "agent-hub-canary");
 }
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.

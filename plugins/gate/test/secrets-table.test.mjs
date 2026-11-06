@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { hasSecret, bufHasSecret } from "../server/gate.mjs";
 import { runReply } from "../../routing/route.mjs";
@@ -54,7 +55,7 @@ hasSecret("warm up");
 const T0 = process.hrtime.bigint(); hasSecret("x"); const SPAWN_MS = Number(process.hrtime.bigint() - T0) / 1e6; // process start cost of this machine (virus scanners make it 0.7 s)
 for (const [name, t] of Object.entries(ADVERSARIAL)) {
   test(`ReDoS: ${name} (${t.length} chars) is scanned in within 1 s of a bare process spawn`, () => {
-    const t0 = process.hrtime.bigint(); hasSecret(t); const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    const t0 = process.hrtime.bigint(); try { hasSecret(t); } catch (e) { assert.match(e.message, /secret scanner unavailable/); /* blocked, never passed */ } const ms = Number(process.hrtime.bigint() - t0) / 1e6;
     assert.ok(ms < SPAWN_MS + 1000, `${name}: ${ms.toFixed(1)} ms`);
   });
 }
@@ -87,4 +88,18 @@ test("fail closed: a missing, wrong-version or broken scanner throws 'secret sca
     const r = runReply("abc123", "a harmless reply", (a) => { sent.push(a); return {}; }, {}, { dir: process.env.TEMP || "/tmp", reaper: false });
     assert.equal(r.status, "rejected"); assert.match(r.error, /secret scanner unavailable/); assert.deepEqual(sent, []);
   } finally { if (old === undefined) delete process.env.AGENT_HUB_GITLEAKS; else process.env.AGENT_HUB_GITLEAKS = old; }
+});
+
+test("review fixes: leading binary bytes cannot hide a key; a skipped scan (no canary) blocks; loose placeholder prefixes do not allow a real key", () => {
+  const key = SECRETS.skProj;
+  for (const lead of [String.fromCharCode(0).repeat(64), String.fromCharCode(0x89) + "PNG" + CRLF + String.fromCharCode(0x1a, 0).repeat(40), String.fromCharCode(0xff, 0xfe).repeat(30)]) {
+    assert.ok(hasSecret(lead + LF + key), "string lead");
+    assert.ok(bufHasSecret(Buffer.concat([Buffer.from(lead, "latin1"), Buffer.from(LF + key)])), "buffer lead");
+  }
+  const noCanary = join(tmpdir(), "gl-no-canary.toml");
+  writeFileSync(noCanary, '[extend]' + LF + 'useDefault = true' + LF);
+  assert.throws(() => hasSecret("hello", undefined, noCanary), /canary not reported/);
+  assert.throws(() => hasSecret(key, undefined, noCanary), /canary not reported/);
+  for (const t of ["YOUR" + key, "REPLACE_ME_" + SECRETS.skAnt, "tok" + "en=YOUR" + key, "pass" + "word=REPLACE_ME_" + "Zx9kLm2pQrStUv" + "!" + LF + "x", "Bear" + "er YOUR" + "Zx9kLm2pQrStUvWxYz0123456789abcd"]) assert.ok(hasSecret(t), JSON.stringify(t).slice(0, 60));
+  for (const t of ["\"Author" + "ization\": \"Bear" + "er REPLACE_WITH_YOUR_GITHUB_PAT\"", "tok" + "en = <your-token-here-please>", "pass" + "word=\"<REDACTED_VALUE>\""]) assert.ok(!hasSecret(t), t);
 });

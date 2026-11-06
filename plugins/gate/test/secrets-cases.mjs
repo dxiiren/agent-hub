@@ -32,6 +32,8 @@ export const shapes = {
   "mixed case": (s) => s.toLowerCase(),
   "upper case": (s) => s.toUpperCase(),
   "mixed case split": (s) => wrap(s.toLowerCase(), CRLF, Math.floor(s.length / 2)),
+  "word chars on the lines before and after": (s) => "abc" + LF + s + LF + "def",
+  "word chars glued, split": (s) => "abc" + LF + s.slice(0, 6) + LF + s.slice(6) + LF + "def",
   "prose around": (s) => "see the note below" + LF + s + LF + "thanks",
   "diff-style prefix stripped, trailing blanks": (s) => "   " + s + "   " + LF + LF,
 };

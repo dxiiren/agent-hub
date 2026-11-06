@@ -1,4 +1,5 @@
 # agent-hub secret scanner config (gitleaks v8). Extends the default rules; adds only what they lack.
+# No word-boundary anchors in the custom rules: the gate also scans the line-joined form, where word characters of the next or previous line touch the secret.
 title = "agent-hub"
 
 [extend]
@@ -11,12 +12,14 @@ description = "assigned password, secret, token, api or private key"
 regex = '''(?i)(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*['"]? ?[:=] ?['"]?([^\s'"\[\]()<>{},;=][^\s'"\[\]()<>{},;]{7,})'''
 secretGroup = 1
 keywords = ["secret", "passw", "pwd", "token", "key", "credential"]
+# Allowlists match the WHOLE value only (anchored): a placeholder or an env-var name, never a secret that merely starts or ends like one.
 [[rules.allowlists]]
 condition = "OR"
 regexTarget = "secret"
 regexes = [
-  '''^[A-Za-z0-9_-]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)[A-Za-z0-9_]*$''',
-  '''(?i)^(?:REPLACE|CHANGE|YOUR|EXAMPLE|PLACEHOLDER|REDACTED|XXXX|<)[A-Za-z0-9_\-]*''',
+  '''^[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)[A-Z0-9_]*$''',
+  '''^(?:REPLACE|CHANGE|YOUR|EXAMPLE|PLACEHOLDER)_[A-Z0-9_]*$''',
+  '''^<[^>]*>$''',
 ]
 # an unquoted letters-only value is code naming something (token = parseToken), a quoted one is a secret
 [[rules.allowlists]]
@@ -26,18 +29,22 @@ regexes = ['''(?i)[:=] ?[a-z][a-z_.]*$''']
 [[rules]]
 id = "agent-hub-sk-key"
 description = "sk- style API key (OpenAI, Anthropic, OpenRouter, project keys)"
-regex = '''(?i)\bsk-[A-Za-z0-9_-]{20,}'''
+regex = '''(?i)sk-[A-Za-z0-9_-]{20,}'''
 keywords = ["sk-"]
+# lowercase words joined by hyphens are prose (ask-the-team-about-...), real keys are mixed case with digits
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''^sk-[a-z]+(?:-[a-z]+)*$''']
 
 [[rules]]
 id = "agent-hub-bearer"
 description = "Bearer token"
-regex = '''(?i)\bbearer ?([A-Za-z0-9\-._~+/]{20,})'''
+regex = '''(?i)bearer ?([A-Za-z0-9\-._~+/]{20,})'''
 secretGroup = 1
 keywords = ["bearer"]
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''(?i)^(?:REPLACE|CHANGE|YOUR|EXAMPLE|PLACEHOLDER)[A-Za-z0-9_\-]*''']
+regexes = ['''^(?:REPLACE|CHANGE|YOUR|EXAMPLE|PLACEHOLDER)_[A-Z0-9_]*$''']
 
 [[rules]]
 id = "agent-hub-private-key-header"
@@ -48,13 +55,13 @@ keywords = ["begin"]
 [[rules]]
 id = "agent-hub-aws-akia"
 description = "AWS access key id, any case"
-regex = '''(?i)\bAKIA[0-9A-Z]{16}\b'''
+regex = '''(?i)AKIA[0-9A-Z]{16}'''
 keywords = ["akia"]
 
 [[rules]]
 id = "agent-hub-github-token"
 description = "GitHub token, any length at least 30"
-regex = '''(?i)\bgh[pousr]_[A-Za-z0-9]{30,}'''
+regex = '''(?i)gh[pousr]_[A-Za-z0-9]{30,}'''
 keywords = ["gh"]
 
 [[rules]]
@@ -62,3 +69,10 @@ id = "agent-hub-jwt"
 description = "JWT in any case, also glued to other text (default rule is case-sensitive and word-bounded)"
 regex = '''(?i)eyj[a-z0-9_-]{8,}\.eyj[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}'''
 keywords = ["eyj"]
+
+# Scanner self-test: the gate appends a random canary and requires gitleaks to report it; a skipped or truncated scan is "unavailable", never "clean".
+[[rules]]
+id = "agent-hub-canary"
+description = "scanner canary"
+regex = '''AGENTHUBCANARY[0-9a-f]{32}'''
+keywords = ["agenthubcanary"]
