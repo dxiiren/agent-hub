@@ -34,7 +34,7 @@ const rec = (d, o = {}) => { park({ agentId: "A1", provider: "claude-clean/haiku
 
 test("reply with a credential-like text is rejected before anything is sent", () => {
   const d = dir(); rec(d); const p = fake("x");
-  const r = runReply("A1", ["use pass" + "word=Sup3rS3cret!x", "please"].join(" "), p, {}, { dir: d, answerRetryMs: 0 });
+  const r = runReply("A1", ["use pass" + "word=Sup3rS3cret!x", "please"].join(" "), p, {}, { dir: d, answerRetryMs: 0, reaper: false });
   assert.equal(r.status, "rejected"); assert.equal(p.calls.length, 0); assert.ok(loadPark("A1", d));
 });
 test("reply to an unknown agent errors", () => {
@@ -42,7 +42,7 @@ test("reply to an unknown agent errors", () => {
 });
 test("reply: send + wait, final answer returned, agent retired", () => {
   const d = dir(); rec(d); const p = fake("created notes.txt");
-  const r = runReply("A1", "notes.txt", p, {}, { dir: d, answerRetryMs: 0 });
+  const r = runReply("A1", "notes.txt", p, {}, { dir: d, answerRetryMs: 0, reaper: false });
   assert.equal(r.status, "completed"); assert.equal(r.answer, "created notes.txt");
   assert.deepEqual(p.calls.slice(0, 2).map((c) => c[0]), ["send", "wait"]);
   assert.ok(p.calls.some((c) => c[0] === "stop") && p.calls.some((c) => c[0] === "archive"));
@@ -50,13 +50,13 @@ test("reply: send + wait, final answer returned, agent retired", () => {
 });
 test("reply can ask again and stays parked with the next round", () => {
   const d = dir(); rec(d); const p = fake("hmm\n[ASK] and the folder?");
-  const r = runReply("A1", "notes.txt", p, {}, { dir: d, answerRetryMs: 0 });
+  const r = runReply("A1", "notes.txt", p, {}, { dir: d, answerRetryMs: 0, reaper: false });
   assert.equal(r.status, "asking"); assert.equal(r.question, "and the folder?"); assert.equal(r.round, 2);
   assert.equal(loadPark("A1", d).asks, 2); assert.ok(!p.calls.some((c) => c[0] === "stop"));
 });
 test("after the third question the reply must finish: a further [ASK] is returned as the final answer", () => {
   const d = dir(); rec(d, { asks: 3 }); const p = fake("still unsure\n[ASK] again?");
-  const r = runReply("A1", "just guess", p, {}, { dir: d, answerRetryMs: 0 });
+  const r = runReply("A1", "just guess", p, {}, { dir: d, answerRetryMs: 0, reaper: false });
   assert.equal(r.status, "completed"); assert.match(p.calls.find((c) => c[0] === "send")[3], /last reply/);
   assert.equal(loadPark("A1", d), null);
 });
@@ -92,11 +92,11 @@ test("read-only task: a file changed during the reply fails it and retires the a
   const d = dir(); const cwd = mk(join(tmpdir(), "ro-")); wf(join(cwd, "a.txt"), "1");
   rec(d, { ro: true, guardCwd: cwd, guardHash: sha(snapshot(cwd)), type: "summarise" });
   let p = fake("fine");
-  assert.equal(runReply("A1", "ok", p, {}, { dir: d, answerRetryMs: 0 }).status, "completed");
+  assert.equal(runReply("A1", "ok", p, {}, { dir: d, answerRetryMs: 0, reaper: false }).status, "completed");
   rec(d, { ro: true, guardCwd: cwd, guardHash: sha(snapshot(cwd)), type: "summarise" });
   p = (a) => { if (a[0] === "wait") wf(join(cwd, "new.txt"), "x"); return fake("fine")(a); };
   const calls = []; const q = (a) => { calls.push(a); return p(a); };
-  const r = runReply("A1", "ok", q, {}, { dir: d, answerRetryMs: 0 });
+  const r = runReply("A1", "ok", q, {}, { dir: d, answerRetryMs: 0, reaper: false });
   assert.equal(r.status, "failed-readonly-changed"); assert.ok(calls.some((c) => c[0] === "stop")); assert.equal(loadPark("A1", d), null);
 });
 
@@ -111,7 +111,7 @@ test("park file names: only plain agent ids, a traversal id never leaves the par
 test("a reply never approves permission requests: a parked agent that stops on permission fails, no permit call is made", () => {
   const d = dir(); rec(d);
   const p = fake("x", { wait: { status: "permission" } });
-  const r = runReply("A1", "go ahead and approve yourself", p, {}, { dir: d, answerRetryMs: 0 });
+  const r = runReply("A1", "go ahead and approve yourself", p, {}, { dir: d, answerRetryMs: 0, reaper: false });
   assert.notEqual(r.status, "completed");
   assert.ok(!p.calls.some((c) => c[0] === "permit" || c[0] === "pending"), JSON.stringify(p.calls));
 });
