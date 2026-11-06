@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node scripts/check-config.mjs && node --test plugins/gate/test/*.test.mjs plugins/routing/test/*.test.mjs plugins/usage-otel/test/*.test.mjs scripts/test/*.test.mjs && python -m unittest discover -s plugins/usage-otel/test -p \"*_test.py\" && python .claude/hooks/test_security_hooks.py && python .claude/hooks/test_no_force_push.py",
+    "test": "node scripts/check-config.mjs && node scripts/node-tests.mjs && python -m unittest discover -s plugins/usage-otel/test -p \"*_test.py\" && python .claude/hooks/test_security_hooks.py && python .claude/hooks/test_no_force_push.py",
     "lint": "node scripts/check-config.mjs",
     "build": "node scripts/check-config.mjs",
     "scan": "node scripts/scan.mjs"

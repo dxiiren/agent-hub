@@ -49,7 +49,7 @@ export default function contribute(server: PluginServerContext) {
     discover: async () => {
       let cfg = {};
       try { cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { /* no config: no cards */ }
-      return selfHostedProviders(cfg).map((p) => ({ key: p.name, label: p.name, harness: p.name, input: { name: p.name } }));
+      return selfHostedProviders(cfg).map((p) => ({ key: p.name, label: p.label, harness: "Self-hosted", input: { name: p.name } }));
     },
     fetch: async (input: { name: string }) => { try { return await selfHostedReport(input.name); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });

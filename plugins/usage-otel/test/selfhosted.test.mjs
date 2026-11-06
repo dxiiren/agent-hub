@@ -64,3 +64,19 @@ test("probe + cache against a local stub; key is sent but never in the report", 
   const down = await selfHostedReport("qwen-s", { env, readFeed: feed });
   assert.equal(down.details[0].tone, "danger");
 });
+
+test("card label is the provider's configured display name, falling back to the id", () => {
+  const l = selfHostedProviders({ agents: { providers: { a: { label: "Qwen Code A", command: ["x", "http://h:1/v1"] }, b: { command: ["x", "http://h:2/v1"] } } } });
+  assert.deepEqual(l.map((x) => x.label), ["Qwen Code A", "b"]);
+});
+test("the module loads when import.meta.url is undefined (Paseo bundles plugins that way; a load failure silently stops every usage record)", async () => {
+  const { readFileSync, writeFileSync, unlinkSync } = await import("node:fs");
+  const src = new URL("../server/selfhosted-usage.mjs", import.meta.url);
+  const tmp = new URL("../server/_nourl.tmp.mjs", import.meta.url);
+  writeFileSync(tmp, readFileSync(src, "utf8").replaceAll("import.meta.url", "undefined"));
+  try {
+    const m = await import(tmp.href + "?" + Date.now());
+    assert.equal(typeof m.selfHostedProviders, "function");
+    await m.selfHostedReport("none", { env: { PASEO_HOME: tmpdir() } }).catch(() => {}); // must not throw a TypeError from fileURLToPath
+  } finally { unlinkSync(tmp); }
+});

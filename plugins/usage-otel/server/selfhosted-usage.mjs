@@ -20,7 +20,7 @@ export function selfHostedProviders(cfg, local = {}) {
     let base = cmd.find((a) => /^https?:\/\//i.test(a));
     if (!base && p?.env?.LAPTOP_PORT) base = `http://127.0.0.1:${p.env.LAPTOP_PORT}/v1`; // the hub's laptop llama.cpp launcher serves on a local port
     if (!base) continue;
-    out.push({ name, base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: local.metricsUrls?.[name] });
+    out.push({ name, label: String(p?.label || name), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: local.metricsUrls?.[name] });
   }
   return out;
 }
