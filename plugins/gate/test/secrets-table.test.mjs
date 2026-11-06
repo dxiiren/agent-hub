@@ -79,6 +79,7 @@ const ADVERSARIAL = {
   "key assign repeated": A(11000, "pass" + "word="), "key quote repeated": A(11000, "pass" + "word='"), "key assign space": A(7000, "token = "),
   "value long quoted": "pass" + "word=\"" + A(100000, "a"), "value long unquoted": "pass" + "word=" + A(100000, "a"),
   "value long punct-less": "tok" + "en=" + A(100000, "a") + " ", "quote long": "secret:'" + A(100000, "ab"),
+  "delims after key": "token" + A(100000, "= "), "secret assign repeated": A(14000, "secret=a1"), "key word run then =": A(20000, "secret") + "=" + A(50, "a1"), "quote after key": A(16000, "pwd'= "),
   "newline joined": A(20000, "pass\n  word\n"),
 };
 for (const [name, t] of Object.entries(ADVERSARIAL)) {
@@ -90,4 +91,19 @@ for (const [name, t] of Object.entries(ADVERSARIAL)) {
 test("a secret in the middle of a 200 KB line, and across a window boundary, is still found", () => {
   const key = SECRETS.sk;
   for (const at of [0, 50000, 32768 - 5, 65536 - 10, 150000]) assert.ok(hasSecret(A(at, "x ") + key + A(100000, " y")), "at " + at);
+});
+
+test("bypass cases from the security review are blocked", () => {
+  const sk = SECRETS.sk, sp = (n) => " ".repeat(n);
+  const must = [
+    "Bear" + "er" + sp(5) + "abcdefghijklmnopqrstuvwxyz0123456789", "Bear" + "er" + sp(500) + "abcdefghijklmnopqrstuvwxyz0123456789",
+    "pass" + "word" + sp(21) + "=" + sp(21) + "hunter2hunter2hunter2", "tok" + "en" + sp(100) + ":" + sp(100) + "abcdefghij0123456789",
+    "-----BEGIN" + sp(70) + "RSA PRIVATE KEY-----", "-----BEGIN RSA" + sp(70) + "PRIVATE" + sp(70) + "KEY-----",
+    "pass" + "word=\"" + "a1".repeat(150) + "\"", "pass" + "word=\"" + "a1".repeat(150), "secret_key='" + "Zx9!".repeat(80),
+    "my_service_api_key_for_the_production_billing_system = " + "abcdefghijklmnop012345", "MY_SERVICE_PASSWORD_FOR_THE_PRODUCTION_BILLING_SYSTEM_V2=" + "hunter2hunter2hunter2",
+    "aws_secret_access_" + "key_for_a_very_long_service_name_here=" + "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "see this" + LF + "word" + SECRETS.jwt.slice(0, 20) + LF + SECRETS.jwt.slice(20), "prefix" + SECRETS.jwt, "x".repeat(30) + LF + SECRETS.jwt,
+    "ghp_" + "A".repeat(20) + LF + "A".repeat(16), sk.slice(0, 5) + CRLF + CRLF + sk.slice(5),
+  ];
+  for (const t of must) assert.ok(hasSecret(t), JSON.stringify(t).slice(0, 90));
 });

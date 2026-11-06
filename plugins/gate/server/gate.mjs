@@ -5,34 +5,28 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Every quantifier in this list is bounded, or runs over a class that cannot overlap its neighbour, and hasSecret feeds the regexes windows of at most WINDOW chars: no input backtracks more than linearly (test: 100 KB adversarial lines, under 200 ms each).
-// Key names holding a secret (with any prefix/suffix: DB_PASSWORD, aws_secret_access_key, password_field), then : or =, then a value.
-const SECRET_KEY = String.raw`(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w{0,40}`;
-// value: quoted 8+ non-space chars holding a digit or punctuation (or 16+ plain chars) | unquoted 8+ with a digit/punctuation and no brackets/parens, so `token = tokens[i]`, `password_field = input` and `token = parse_the_user_token` stay clean. Values are capped at 200 chars (a longer one still matches on its first 200).
+// Linear without quantifier caps (a cap is a bypass). hasSecret first NORMALIZES (every whitespace run becomes one space, lines trimmed; the wrapped form is the trimmed lines joined with nothing), so the patterns need only ` ?`.
+// Every run is over a class the next element cannot re-enter. The key rule is anchored on the ':' or '=' and looks BACK for the key (lookbehind): one backward scan per delimiter, never one forward scan per key word. Texts are scanned in overlapping WINDOW-char windows.
+// Key names holding a secret, with any prefix/suffix: DB_PASSWORD, aws_secret_access_key, my_service_api_key_for_billing.
+const SECRET_KEY = String.raw`(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*['"]? ?`;
+// value: quoted 8+ non-space chars holding a digit or punctuation (the closing quote is not required: a long or unterminated value still matches on its first 8) or 16+ plain chars | unquoted 8+ with a digit/punctuation and no brackets/parens/'=', so `token = tokens[i]`, `password_field = input` and `token = parse_the_user_token` stay clean.
 const PUNCT = String.raw`[\d!@#$%^&*+]`;
+const VAL = String.raw`[^ '"\[\]()<>{},;=]`;
 /**
- * THE secret list (gate diff, file bytes, reply scan all use hasSecret below). One builder, two shapes of the same rules:
- * per line (SECRET_RE) and on the lines trimmed and joined (JOINED_RE), which catches a secret wrapped over LF/CRLF lines or padded with spaces.
- * The joined shape only allows the gap after Bearer to be empty (the wrap may fall on the space).
- * Both are case-insensitive: AKIA, PEM headers, aws_secret_access_key, a password key, Bearer, sk- all match in any case.
+ * THE secret list (gate diff, file bytes, reply scan all use hasSecret below).
+ * Case-insensitive: AKIA, PEM headers, a secret/password key, Bearer, sk- all match in any case.
+ * The JWT is anchored on its first dot with a positive lookbehind for the header (a JWT glued to preceding word characters after line-joining still matches, and no start is tried inside a long run).
  */
-function secretRe(sq) {
-  const val = String.raw`[^\s'"\[\]()<>{},;]`;
-  return new RegExp(
-    String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN[A-Z \t]{0,40}PRIVATE[ \t]{0,4}KEY(?:[ \t]{0,4}BLOCK)?-----|(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer` + (sq ? String.raw`\s{0,4}` : String.raw`\s{1,4}`) + String.raw`[A-Za-z0-9\-._~+/]{20,}|aws\w{0,40}secret\w{0,40}['"]?\s{0,20}[:=]\s{0,20}['"]?[A-Za-z0-9/+=]{40}|` + SECRET_KEY +
-    String.raw`['"]?\s{0,20}[:=]\s{0,20}(?:['"](?=[^'"\s]{0,200}` + PUNCT + String.raw`)[^'"\s]{8,200}['"]|['"][A-Za-z0-9_\-\/+]{16,200}['"]|['"]?(?=` + val + String.raw`{0,200}` + PUNCT + String.raw`)` + val + String.raw`{8,200}))`, "i");
-}
-export const SECRET_RE = secretRe(false);
-const JOINED_RE = secretRe(true);
+export const SECRET_RE = new RegExp(
+  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN[A-Z ]*PRIVATE ?KEY(?: ?BLOCK)?-----|(?<=eyJ[A-Za-z0-9_-]{8,})\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer ?[A-Za-z0-9\-._~+/]{20,}|(?<=` + SECRET_KEY + String.raw`)[:=] ?(?:(?<=secret\w*['"]? ?[:=] ?)['"]?(?=[A-Za-z0-9/+=]{0,39}[\d/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=(])|['"](?=[^'" ]*` + PUNCT + String.raw`)[^'" ]{8,}|['"][A-Za-z0-9_\-\/+]{16,}|['"]?(?=` + VAL + String.raw`*` + PUNCT + String.raw`)` + VAL + String.raw`{8,}))`, "i");
 const LINES = /\r\n|\n|\r/;
-/** Lines trimmed and concatenated with no separator: a token wrapped at any column reads as one string again, while spaces inside a line stay (prose does not join into a match). */
-const joinLines = (t) => t.split(LINES).map((l) => l.trim()).join("");
-const WINDOW = 65536, STEP = 32768; // shortcut: a secret longer than STEP chars (32 KB) split across windows could be missed; none of the listed forms is that long
-const anyWindow = (re, t) => { if (t.length <= WINDOW) return re.test(t); for (let i = 0; i < t.length; i += STEP) if (re.test(t.slice(i, i + WINDOW))) return true; return false; };
-/** True when `text` holds a secret: on any single line, or with the line breaks removed (a wrapped secret). Long lines are scanned in overlapping 64 KB windows. */
+const norm = (l) => l.replace(/\s+/g, " ").trim();
+const WINDOW = 16384, STEP = 8192; // shortcut: a secret longer than STEP (8 KB) split across windows could be missed; none of the listed forms is that long
+const anyWindow = (t) => { if (t.length <= WINDOW) return SECRET_RE.test(t); for (let i = 0; i < t.length; i += STEP) if (SECRET_RE.test(t.slice(i, i + WINDOW))) return true; return false; };
+/** True when `text` holds a secret: on any single (normalized) line, or on the lines joined with nothing (a wrapped secret). */
 export function hasSecret(text) {
-  const t = String(text);
-  return t.split(LINES).some((l) => anyWindow(SECRET_RE, l)) || anyWindow(JOINED_RE, joinLines(t));
+  const lines = String(text).split(LINES).map(norm);
+  return lines.some(anyWindow) || anyWindow(lines.join(""));
 }
 export const wrappedSecret = hasSecret;
 export const wrappedJwt = hasSecret;
