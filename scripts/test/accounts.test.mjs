@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { add, remove, edit, list, describe, accountDirOf } from '../provider.mjs';
+import { add, remove, edit, list, describe, accountDirOf, api, slug } from '../provider.mjs';
 import { KINDS, loginCommand, hasAccounts, kindOf } from '../provider-kinds.mjs';
 
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
@@ -108,4 +108,29 @@ test('display names are unique: a taken label is refused, a taken auto-default g
   await add({ name: 'claude-w', kind: 'claude', account: 'w', accountDir: join(t, 'w'), model: 'm1' }, p, cli(['m1']));
   await assert.rejects(add({ name: 'claude-w2', kind: 'claude', account: 'w2', accountDir: join(t, 'w2'), model: 'm1', label: 'Claude w' }, p, cli(['m1'])), /already used/);
   await edit('qwen-b', { slots: '5' }, p, o); assert.equal(L()['qwen-b'], 'Qwen Code 10.1.2.3 #2', 'edit keeps its own name without colliding with itself');
+});
+
+test('names: any lower-case id is accepted; empty name is made from the display name (unique); a non-"qwen" name still gets its read-only twin routed', async () => {
+  const { p, read } = box();
+  const o = { f: async () => ({ ok: true, json: async () => ({ data: [{ id: 'm' }] }) }), which: () => 'qwen' };
+  assert.equal(slug('Lab box #2'), 'lab-box-2');
+  const r1 = await add({ name: '', label: 'Lab box', url: 'http://10.1.2.3:8000/v1', model: 'm', routes: 'summarise' }, p, o);
+  assert.equal(r1.name, 'lab-box');
+  const r2 = await add({ label: 'Lab box 2', url: 'http://10.1.2.3:8001/v1', model: 'm' }, p, o);
+  assert.equal(r2.name, 'lab-box-2');
+  const r3 = await add({ url: 'http://10.1.2.3:8002/v1', model: 'm', label: 'Lab box' + ' x' }, p, o);
+  assert.equal(r3.name, 'lab-box-x');
+  assert.ok(read('paseo').agents.providers['lab-box-ro'], 'twin exists'); assert.deepEqual(read('routes').twins, ['lab-box', 'lab-box-2', 'lab-box-x']);
+  const { roTwin } = await import('../../plugins/routing/route.mjs');
+  assert.equal(roTwin('lab-box', read('routes')), 'lab-box-ro'); assert.equal(roTwin('lab-box', {}), 'lab-box');
+  remove('lab-box', p); remove('lab-box-2', p); remove('lab-box-x', p); assert.equal(read('routes').twins, undefined);
+});
+
+test('load-models path: UI verb -> backend -> GET <base>/v1/models fills the list; failure returns the reason and what to fix', async () => {
+  const seen = [];
+  const f = async (u, init) => { seen.push({ u, timeout: !!init?.signal }); return { ok: true, json: async () => ({ data: [{ id: 'Qwen3.8-27B' }] }) }; };
+  const r = await api({ verb: 'models', args: { kind: 'qwen-code', url: 'http://h.example:8005/v1' } }, box().p, { f });
+  assert.deepEqual(r.models, [{ id: 'Qwen3.8-27B', label: 'Qwen3.8-27B' }]); assert.equal(seen[0].u, 'http://h.example:8005/v1/models'); assert.ok(seen[0].timeout, 'has a timeout signal');
+  await assert.rejects(api({ verb: 'models', args: { kind: 'qwen-code', url: 'http://h.example:8005/v1' } }, box().p, { f: async () => { throw new Error('ECONNREFUSED'); } }), /GET http:\/\/h.example:8005\/v1\/models -> ECONNREFUSED/);
+  await assert.rejects(api({ verb: 'models', args: { kind: 'qwen-code', url: 'not a link' } }, box().p, { f }), /http\(s\) base URL/);
 });

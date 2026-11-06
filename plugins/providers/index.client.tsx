@@ -30,6 +30,8 @@ function Screen() {
   const [models, setModels] = useState<Model[]>([]);
   const [custom, setCustom] = useState(false);
   const [modelErr, setModelErr] = useState<string | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [formKey, setFormKey] = useState(0);
@@ -53,15 +55,27 @@ function Screen() {
     if (endpoint && !/^https?:\/\/[^\s"]+$/.test(vals.url ?? "")) { setModels([]); setModelErr(null); return; }
     let live = true;
     const t = setTimeout(async () => {
-      setModelErr(null);
+      setModelErr(null); setLoadingModels(true);
       const r: any = await call({ verb: "models", args: { kind, url: vals.url, key: vals.key, provider: editing ?? undefined } });
       if (!live) return;
+      setLoadingModels(false);
       if (r.error) { setModels([]); return setModelErr(r.error); }
       setModels(r.models);
       setVals((v) => (v.model || !r.models[0] ? v : { ...v, model: r.models[0].id }));
     }, endpoint ? 700 : 0);
-    return () => { live = false; clearTimeout(t); };
-  }, [kind, k, vals.url, vals.key, editing, call]);
+    return () => { live = false; clearTimeout(t); setLoadingModels(false); };
+  }, [kind, k, vals.url, vals.key, editing, call, retry]);
+  // The plugin Settings inputs expose no autoComplete prop, so a password manager filled saved hub-login values into the model fields (the page port showed up there). Switch autofill off on this screen's inputs, and restore on leave.
+  useEffect(() => {
+    const touched = new Map<Element, [string | null, string | null, string | null]>();
+    const apply = () => document.querySelectorAll("input, textarea").forEach((el) => {
+      if (touched.has(el)) return;
+      touched.set(el, [el.getAttribute("autocomplete"), el.getAttribute("data-1p-ignore"), el.getAttribute("data-lpignore")]);
+      el.setAttribute("autocomplete", (el as HTMLInputElement).type === "password" ? "new-password" : "off"); el.setAttribute("data-1p-ignore", "true"); el.setAttribute("data-lpignore", "true");
+    });
+    apply(); const obs = new MutationObserver(apply); obs.observe(document.body, { childList: true, subtree: true });
+    return () => { obs.disconnect(); touched.forEach((v, el) => { v[0] === null ? el.removeAttribute("autocomplete") : el.setAttribute("autocomplete", v[0]); v[1] === null ? el.removeAttribute("data-1p-ignore") : el.setAttribute("data-1p-ignore", v[1]); v[2] === null ? el.removeAttribute("data-lpignore") : el.setAttribute("data-lpignore", v[2]); }); };
+  }, []);
   const routesArg = () => Object.entries(pos).filter(([, v]) => v !== OFF).map(([c, v]) => (v === "end" ? c : `${c}:${v}`)).join(",");
   const submit = async () => {
     setBusy(true); setMsg(null);
@@ -103,7 +117,8 @@ function Screen() {
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
               onChangeText={(t) => setVals((v) => ({ ...v, [f.id]: t }))} />
           ))}
-          {modelErr ? <SettingsRow label={S.model} error={`${S.modelsFailed} ${modelErr}`} /> : null}
+          <SettingsAction label={S.model} hint={loadingModels ? S.loading : modelErr ? undefined : models.length ? S.found(models.length) : S.modelsWait} actionLabel={loadingModels ? S.loading : modelErr ? S.retry : S.reload} disabled={loadingModels} onPress={() => setRetry((n) => n + 1)} />
+          {modelErr ? <SettingsRow label={S.modelsFailed} error={modelErr} /> : null}
           <SettingsSelect label={S.model} value={custom || (vals.model && !models.some((m) => m.id === vals.model)) ? CUSTOM : vals.model ?? ""} options={modelOptions}
             onValueChange={(v) => { if (v === CUSTOM) { setCustom(true); setVals((x) => ({ ...x, model: "" })); } else { setCustom(false); setVals((x) => ({ ...x, model: v })); } }} />
           {custom || (vals.model && !models.some((m) => m.id === vals.model)) ? <SettingsInput key={`m${formKey}`} label={S.modelType} initialValue={vals.model ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, model: t }))} /> : null}
@@ -115,7 +130,7 @@ function Screen() {
           {Object.keys(routeTypes).map((c) => (
             <SettingsSelect key={c} label={c} value={pos[c] ?? OFF} options={posOptions(c)} onValueChange={(v) => setPos((p) => ({ ...p, [c]: v }))} />
           ))}
-          <SettingsAction label={editing ? `${S.save}: ${editing}` : S.add} actionLabel={busy ? S.adding : editing ? S.save : S.add} disabled={busy || (!editing && !name)} onPress={() => void submit()} />
+          <SettingsAction label={editing ? `${S.save}: ${editing}` : S.add} actionLabel={busy ? S.adding : editing ? S.save : S.add} disabled={busy} onPress={() => void submit()} />
           {editing ? <SettingsAction label={editing} actionLabel={S.cancelEdit} onPress={reset} /> : null}
         </SettingsCard>
       </SettingsSection>

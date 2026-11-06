@@ -15,7 +15,9 @@ import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
 import { writeJsonKeepEol, readJsonStrict } from '../plugins/routing/jsonfile.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const NAME_RE = KINDS['qwen-code'].nameRe; // routing derives the read-only twin only for names starting "qwen" (roTwin in route.mjs)
+export const NAME_RE = KINDS['qwen-code'].nameRe; // any lower-case id; routing finds the read-only twin of a non-"qwen" name through routes.twins (roTwin in route.mjs)
+/** An id from a display name ("Lab box #2" -> "lab-box-2"). */
+export const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').replace(/^[^a-z]+/, '');
 // A type = how to launch it. Add a type here (one function) to support another OpenAI-compatible launcher.
 export const TYPES = {
   'qwen-code': { command: (repo, s, bin) => [process.execPath, join(repo, 'deploy', 'office', 'office-agent.mjs'), bin, s.url, s.model] },
@@ -85,7 +87,9 @@ async function verifyKind(k, { url, model, key }, { f = fetch, run } = {}) {
 }
 
 export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run, preOverride, skipVerify } = {}) {
-  const k = kindOf(a.kind ?? a.type); const type = k.type; const { name, model, url } = a; const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
+  const k = kindOf(a.kind ?? a.type); const type = k.type; const { model, url } = a;
+  let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
+  if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
   const readOnly = !(a.readOnly === false || a.readOnly === 'false' || a.readOnly === 'off');
   const slots = Number(a.slots ?? 2);
   const account = a.account ? String(a.account) : undefined;
@@ -131,7 +135,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   if (ownish(k, spec)) {
     routes.slots = { ...routes.slots, [name]: slots }; routes.modes = { ...routes.modes, [name]: 'yolo' };
     // the -ro twin runs the same launcher with the sensitive-read deny settings, so summarise/review may run on it (route.mjs refuses read-only types on unlisted providers)
-    if (k.own && k.twin && readOnly) { routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), name])]; routes.readOnlyModes = { ...routes.readOnlyModes, [name]: 'plan' }; }
+    if (k.own && k.twin && readOnly) { if (!/^qwen/.test(name)) routes.twins = [...new Set([...(routes.twins ?? []), name])]; routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), name])]; routes.readOnlyModes = { ...routes.readOnlyModes, [name]: 'plan' }; }
   }
   for (const { c, pos } of chains) { const l = routes.routes[c]; l.splice(pos ? Math.min(pos - 1, l.length) : l.length, 0, token); }
   if (type === 'opencode') { mkdirSync(join(hubDir, 'xdg'), { recursive: true }); writeJsonKeepEol(join(hubDir, `opencode-${name}.json`), opencodeFile(name, spec)); }
@@ -153,6 +157,7 @@ function removeManual(name, p, local = rd(p.local, {})) {
   // add() materialised the built-in defaults and an empty readOnlyModes: drop what is back to its default so the file returns to its pre-add form
   if (routes.readOnlyEnforced && routes.readOnlyEnforced.length === READ_ONLY_ENFORCED.length && READ_ONLY_ENFORCED.every((x) => routes.readOnlyEnforced.includes(x))) delete routes.readOnlyEnforced;
   if (routes.readOnlyModes && !Object.keys(routes.readOnlyModes).length) delete routes.readOnlyModes;
+  if (routes.twins) { routes.twins = routes.twins.filter((x) => x !== name); if (!routes.twins.length) delete routes.twins; }
   for (const c of Object.keys(routes.routes || {})) routes.routes[c] = routes.routes[c].filter((x) => (ownish(k, spec) ? x.split('/')[0] !== name : x !== token));
   const cfg = rd(p.paseo, {});
   if (ownish(k, spec) && cfg.agents?.providers) { delete cfg.agents.providers[name]; delete cfg.agents.providers[name + '-ro']; }

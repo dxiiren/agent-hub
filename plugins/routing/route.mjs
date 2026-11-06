@@ -93,7 +93,7 @@ export const knownProviders = (routes = {}) => new Set(["codex", ...Object.keys(
 /** Providers on which a read-only task may run: sensitive reads are ENFORCEABLY refused (claude-clean = PreToolUse read hook, Qwen = readguard). Qoder, plain claude, opencode, copilot and codex have no such enforcement (an in-cwd .env was read through qoder/efficient), so read-only types never run on them. Override with routes.readOnlyEnforced. */
 export const READ_ONLY_ENFORCED = ["claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop"];
 /** "qwen-laptop" / "qwen-code-2/x" -> "qwen-laptop-ro" / "qwen-code-2-ro/x" (read-only twin provider with the deny settings); other providers unchanged. */
-export const roTwin = (prov) => (/^qwen/.test(prov) ? prov.replace(/^([^/]+)/, "$1-ro") : prov);
+export const roTwin = (prov, routes = {}) => (/^qwen/.test(prov) || (routes.twins ?? []).includes(prov.split("/")[0]) ? prov.replace(/^([^/]+)/, "$1-ro") : prov); // twins: names not starting "qwen" that were added with a read-only twin
 export const readOnlyEnforced = (prov, routes = {}) => (routes.readOnlyEnforced ?? READ_ONLY_ENFORCED).includes(prov);
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
@@ -347,7 +347,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     let wt = null; // this entry's route-created worktree
     const ro0 = readOnlyType(o.type, routes);
     // Qwen read-only twin: plan mode lets Qwen read an in-cwd .env with no permission request, so a read-only task runs on "<id>-ro", the same launcher started with --read-only, which points QWEN_CODE_SYSTEM_SETTINGS_PATH at config/qwen/system-settings-readonly.json (sensitive-read deny). Nothing is ever written under the task cwd.
-    const launch = ro0 ? roTwin(prov) : prov;
+    const launch = ro0 ? roTwin(prov, routes) : prov;
     const args = ["run", "--cwd", o.cwd, "--provider", launch, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
     if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "no read-only mode for this provider (read-only task types never run on it)" }); continue; }

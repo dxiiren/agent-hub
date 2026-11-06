@@ -23,7 +23,7 @@ const ACCOUNT_ENDPOINT = { by: 'endpoint', usage: 'feed', help: 'Another account
 /** type -> definition. `base` = an installed CLI provider reached as <base>/<model> in route chains (no new Paseo provider is created). */
 export const KINDS = {
   'qwen-code': { aliases: ['qwen'], label: 'Qwen Code (OpenAI-compatible endpoint)', fields: ENDPOINT_FIELDS, modelsFrom: 'endpoint', own: true, twin: true, slots: true, account: ACCOUNT_ENDPOINT,
-    nameRe: /^qwen-[a-z0-9]+(-[a-z0-9]+)*$/, nameHelp: 'must start with "qwen-" (e.g. qwen-lab)' },
+    nameRe: /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/, nameHelp: 'lower-case letters, digits, dashes; leave empty to make it from the display name' },
   // opencode has no key field: it runs without a hub launcher, so its agent could read a stored key
   opencode: { label: 'OpenCode (OpenAI-compatible endpoint)', fields: ENDPOINT_FIELDS.filter((f) => f.id !== 'key'), modelsFrom: 'endpoint', own: true, twin: false, slots: true, account: ACCOUNT_ENDPOINT,
     nameRe: /^opencode-[a-z0-9]+(-[a-z0-9]+)*$/, nameHelp: 'must start with "opencode-" (e.g. opencode-lab)' },
