@@ -41,18 +41,19 @@ export default function contribute(server: PluginServerContext) {
     discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
     fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
-  // One card per self-hosted OpenAI-compatible provider, read from the Paseo config on every discovery
-  server.registerUsageSource({
-    id: "selfhosted",
-    label: "Self-hosted",
-    input: z.object({ name: z.string() }),
-    discover: async () => {
-      let cfg = {};
-      try { cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { /* no config: no cards */ }
-      return selfHostedProviders(cfg).map((p) => ({ key: p.name, label: p.label, harness: "Self-hosted", input: { name: p.name } }));
-    },
-    fetch: async (input: { name: string }) => { try { return await selfHostedReport(input.name); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
-  });
+  // One usage source per self-hosted OpenAI-compatible provider, so the card title is the provider's configured display name.
+  // Read from the Paseo config at plugin load: a provider added later shows up after the plugin is reloaded.
+  let cfg: any = {};
+  try { cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { /* no config: no cards */ }
+  for (const p of selfHostedProviders(cfg)) {
+    server.registerUsageSource({
+      id: `selfhosted-${p.name}`,
+      label: p.label,
+      input: z.object({ name: z.string() }),
+      discover: async () => [{ key: p.name, label: p.name, harness: "Self-hosted", input: { name: p.name } }],
+      fetch: async (input: { name: string }) => { try { return await selfHostedReport(input.name); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+    });
+  }
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
   return () => {};
 }
