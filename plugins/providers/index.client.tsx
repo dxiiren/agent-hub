@@ -7,7 +7,7 @@ import { S } from "./client/strings";
 
 type Field = { id: string; label: string; type: string; required?: boolean; help?: string };
 type Kind = { type: string; label: string; fields: Field[]; slots: boolean; readOnlyTwin: boolean; nameHelp: string; ownProvider: boolean };
-type Added = { name: string; type: string; model: string; url?: string; slots?: number; keySet?: boolean; routes: string[] };
+type Added = { name: string; label?: string; type: string; model: string; url?: string; slots?: number; keySet?: boolean; routes: string[] };
 type Model = { id: string; label: string };
 const OFF = "off";
 
@@ -58,7 +58,7 @@ function Screen() {
     reset(); await refresh();
   };
   const startEdit = (a: Added) => {
-    setEditing(a.name); setKind(a.type); setName(a.name); setVals({ model: a.model, ...(a.url ? { url: a.url } : {}) }); setSlots(String(a.slots ?? 2));
+    setEditing(a.name); setKind(a.type); setName(a.name); setVals({ model: a.model, ...(a.url ? { url: a.url } : {}), ...(a.label ? { label: a.label } : {}) }); setSlots(String(a.slots ?? 2));
     setPos(Object.fromEntries(a.routes.map((c) => [c, "end"]))); setModels([]); setFormKey((n) => n + 1); setMsg(null);
   };
   const del = async (n: string) => {
@@ -82,6 +82,7 @@ function Screen() {
           {msg ? <SettingsRow label={msg.text} error={msg.ok ? null : msg.text} /> : null}
           <SettingsSelect label={S.kind} value={kind} options={kinds.map((x) => ({ label: x.label, value: x.type }))} disabled={!!editing} onValueChange={(v) => { setKind(v); setModels([]); setVals({}); setFormKey((n) => n + 1); }} />
           <SettingsInput key={`n${formKey}`} label={S.name} hint={k?.nameHelp ?? S.nameHint} initialValue={name} disabled={!!editing} placeholder={S.nameHint} onChangeText={setName} />
+          {k?.ownProvider ? <SettingsInput key={`l${formKey}`} label={S.label} hint={S.labelHint} initialValue={vals.label ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, label: t }))} /> : null}
           {k?.fields.filter((f) => f.type !== "model").map((f) => (
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
               onChangeText={(t) => setVals((v) => ({ ...v, [f.id]: t }))} />

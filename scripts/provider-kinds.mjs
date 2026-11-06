@@ -74,5 +74,9 @@ function defaultRun(cmd, args) { return spawnSync(cmd, args, { encoding: 'utf8',
 export const modelListed = (model, models) => /^latest(-|$)/.test(model) || models.some((m) => [m.id, m.label].some((x) => String(x).toLowerCase() === String(model).replace(/@latest$/, '').toLowerCase() || x === model));
 
 loadCustom();
+/** Host part of an endpoint URL for display: "local" for loopback, "" when the URL does not parse. */
+export const hostOf = (url) => { try { const h = new URL(url).hostname; return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(h) ? 'local' : h; } catch { return ''; } };
+/** Default display name of a provider: "<Kind> <host>" (e.g. "Qwen Code 10.0.0.5"); the user can override it with --label / the Display name field. */
+export const displayName = (short, url) => `${short} ${hostOf(url)}`.trim();
 export { KEY_ENV };
 export const hubDirOf = (paseoCfgPath) => join(paseoCfgPath, '..', 'hub');

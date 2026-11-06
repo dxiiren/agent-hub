@@ -18,6 +18,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { entries as extraEntries } from './provider.mjs';
+import { displayName } from './provider-kinds.mjs';
 
 process.noDeprecation = true; // shell:true is needed only to run .cmd shims; our args are fixed
 const WIN = process.platform === 'win32';
@@ -135,11 +136,11 @@ function providers() {
 
   const qwen = which('qwen');
   if (qwen && cfg.officeUrl) {
-    p['qwen-code'] = { extends: 'acp', label: 'Qwen Code (office)', command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl, cfg.officeModel] }; // model id re-read from /v1/models at spawn; officeModel is the fallback
+    p['qwen-code'] = { extends: 'acp', label: displayName('Qwen Code', cfg.officeUrl), command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl, cfg.officeModel] }; // model id re-read from /v1/models at spawn; officeModel is the fallback
   } else notes.push('qwen-code needs the qwen CLI and OFFICE_QWEN_URL');
 
   if (qwen && cfg.officeUrl2 && cfg.officeModel2) { // optional second office host (a free tier when the first is loaded)
-    p['qwen-code-2'] = { extends: 'acp', label: 'Qwen Code (office 2)', command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl2, cfg.officeModel2] };
+    p['qwen-code-2'] = { extends: 'acp', label: displayName('Qwen Code', cfg.officeUrl2), command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl2, cfg.officeModel2] };
   }
 
   const oc = which('opencode');
@@ -156,7 +157,7 @@ function providers() {
 
   const vram = gpuFits();
   if (vram && qwen && cfg.llama && cfg.laptopModel) {
-    p['qwen-laptop'] = { extends: 'acp', label: 'Qwen Code (laptop GPU)',
+    p['qwen-laptop'] = { extends: 'acp', label: 'Qwen Code laptop',
       command: [process.execPath, join(REPO, 'deploy', 'laptop', 'laptop-agent.mjs')],
       env: { LLAMA_SERVER_BIN: cfg.llama, LAPTOP_MODEL_PATH: cfg.laptopModel, QWEN_BIN: qwen, ...(cfg.laptopPort ? { LAPTOP_PORT: cfg.laptopPort } : {}),
         ...(opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') ? { HEAVY_LOCK_GLOB: opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') } : {}) } };

@@ -4,6 +4,8 @@ export const S = {
   intro: "Add a model endpoint or CLI model to the hub. It does exactly what `agent-hub provider add` does; the kinds and their fields come from scripts/provider-kinds.mjs.",
   kind: "Kind",
   name: "Name",
+  label: "Display name (optional)",
+  labelHint: "Shown in the provider list. Default: kind and host.",
   nameHint: "Lowercase letters, digits and dashes",
   model: "Model",
   modelPick: "Pick from the list",

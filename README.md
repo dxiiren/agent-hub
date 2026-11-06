@@ -210,14 +210,14 @@ Every kind also takes a name, parallel slots (kinds with their own provider), wh
 agent-hub provider kinds
 agent-hub provider models --kind qwen --url http://127.0.0.1:8000/v1          # what the endpoint serves
 agent-hub provider add qwen-lab --kind qwen --url http://127.0.0.1:8000/v1 --model my-model \
-    [--key <api key>] [--slots 2] [--routes code-edit:2,summarise] [--readonly false]
+    [--key <api key>] [--slots 2] [--routes code-edit:2,summarise] [--readonly false] [--label "Display name"]
 agent-hub provider add fast-tier --kind qoder --model <tier from: paseo provider models qoder> --routes code-edit
 agent-hub provider edit qwen-lab --slots 4        # also --model --url --key --routes --readonly
 agent-hub provider list
 agent-hub provider remove qwen-lab
 ```
 
-`--routes code-edit:2,summarise` puts the provider second in the `code-edit` chain and at the end of `summarise`. `add` refuses a URL that is not http(s), an endpoint that does not answer `/v1/models`, a model the endpoint or CLI does not list, and a name already in use; nothing is written when it refuses. The API key (qwen kind) lives in `config/hub.local.json` (git-ignored) and in the provider's `env` in the Paseo config, and goes only to the hub's launcher (`deploy/office/office-agent.mjs`), which keeps it in a small local auth proxy and starts the agent with the key removed from its environment: the agent and its shell commands never see it, and it is never on a command line or in a log. `remove` puts the configuration files back byte for byte while nothing else has changed them since; `edit` keeps that guarantee relative to the original add.
+The provider list shows each added provider as "<Kind> <host>" (for example `Qwen Code 10.0.0.5`, or `Qwen Code local` for localhost) unless you pass `--label`; its read-only twin (a separate Paseo entry, because Paseo has no way to hide an entry from its list) is that name plus "(read-only)". `--routes code-edit:2,summarise` puts the provider second in the `code-edit` chain and at the end of `summarise`. `add` refuses a URL that is not http(s), an endpoint that does not answer `/v1/models`, a model the endpoint or CLI does not list, and a name already in use; nothing is written when it refuses. The API key (qwen kind) lives in `config/hub.local.json` (git-ignored) and in the provider's `env` in the Paseo config, and goes only to the hub's launcher (`deploy/office/office-agent.mjs`), which keeps it in a small local auth proxy and starts the agent with the key removed from its environment: the agent and its shell commands never see it, and it is never on a command line or in a log. `remove` puts the configuration files back byte for byte while nothing else has changed them since; `edit` keeps that guarantee relative to the original add.
 
 **Add your own kind** (any ACP agent CLI, any other OpenAI-compatible launcher). The built-in kinds live in `scripts/provider-kinds.mjs`; yours go in `config/provider-kinds.local.json` (git-ignored) or the file named by `AGENT_HUB_KINDS`, and appear in both the CLI and the UI:
 

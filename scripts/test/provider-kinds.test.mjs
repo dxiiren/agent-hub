@@ -135,3 +135,16 @@ test('two providers added then removed in the SAME order restore hand-formatted 
   assert.deepEqual(sha(), before);
   assert.ok(!existsSync(join(p.local, '..', 'hub.local.undo-base.json')) && !existsSync(join(p.local, '..', 'hub.local.undo-fast-tier.json')), 'no undo files left behind');
 });
+
+test('display names default to "<Kind> <host>" (local for loopback), --label overrides, twins get (read-only)', async () => {
+  const { entries } = await import('../provider.mjs'); const { displayName, hostOf } = await import('../provider-kinds.mjs');
+  assert.equal(displayName('Qwen Code', 'http://example.test:8000/v1'), 'Qwen Code example.test');
+  assert.equal(hostOf('http://127.0.0.1:1/v1'), 'local'); assert.equal(hostOf('http://localhost/v1'), 'local'); assert.equal(hostOf('nonsense'), '');
+  const e = entries('qwen-a', { type: 'qwen-code', url: 'http://example.test:8000/v1', model: 'm' }, 'qwen', '/repo');
+  assert.equal(e['qwen-a'].label, 'Qwen Code example.test'); assert.equal(e['qwen-a-ro'].label, 'Qwen Code example.test (read-only)');
+  assert.equal(entries('qwen-a', { type: 'qwen-code', url: 'http://example.test/v1', model: 'm', label: 'Lab box' }, 'qwen', '/repo')['qwen-a'].label, 'Lab box');
+  const { p } = box();
+  await add({ name: 'qwen-l', kind: 'qwen', url: URL1, model: 'm1', label: 'My lab' }, p, { f: served(['m1']), which: () => 'q' });
+  assert.equal(list(p)[0].label, 'My lab');
+  await assert.rejects(add({ name: 'qwen-m', kind: 'qwen', url: URL1, model: 'm1', label: 'bad"quote' }, p, { f: served(['m1']), which: () => 'q' }), /--label/);
+});
