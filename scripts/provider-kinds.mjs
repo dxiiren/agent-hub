@@ -51,7 +51,7 @@ function loadCustom() {
       nameRe: new RegExp(`^${id}-[a-z0-9]+(-[a-z0-9]+)*$`), nameHelp: `must start with "${id}-"` };
   }
 }
-export const RESERVED = new Set(['qwen-code', 'qwen-code-2', 'qwen-laptop', 'qoder', 'codex', 'claude', 'claude-clean', 'opencode']);
+export const RESERVED = new Set(['qoder', 'codex', 'claude', 'claude-clean', 'opencode']);
 
 export function kindOf(t = 'qwen-code') {
   const type = Object.keys(KINDS).find((k) => k === t || KINDS[k].aliases?.includes(t));

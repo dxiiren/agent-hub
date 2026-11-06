@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { migrate, remove, list } from '../provider.mjs';
-import { runRoute } from '../../plugins/routing/route.mjs';
+import { migrate, remove, list, add } from '../provider.mjs';
+import { runRoute, readOnlyMode } from '../../plugins/routing/route.mjs';
 
 const E = (url, extra = {}) => ({ extends: 'acp', label: 'Qwen Code x', command: ['node', '/r/deploy/office/office-agent.mjs', 'qwen', url, 'm1'], ...extra });
 function old() {
@@ -67,4 +67,28 @@ test('the shipped routes template references only ids Paseo detects itself (code
   for (const id of [...Object.keys(rt.slots), ...Object.keys(rt.modes)]) assert.equal(id, 'codex');
   const deny = JSON.parse(readFileSync(new URL('../../config/qwen/system-settings-readonly.json', import.meta.url), 'utf8')).permissions.deny;
   for (const d of ['Edit', 'Write', 'Bash', 'Shell', 'run_shell_command', 'Read(.env)', 'Read(**/.env)', 'Read(**/credentials*)', 'Read(**/*.pem)']) assert.ok(deny.includes(d), d);
+});
+
+test('Paseo own Remove (config.json only) leaves nothing behind: list/add forget the hub records, and the same name can be added again', async () => {
+  const { p, read } = old(); migrate(p);
+  const c = read('paseo'); delete c.agents.providers['qwen-code']; writeFileSync(p.paseo, JSON.stringify(c));
+  assert.deepEqual(list(p).map((x) => x.name), ['qwen-code-2', 'qwen-laptop']);
+  const rt = read('routes'); assert.ok(!JSON.stringify(rt).includes('"qwen-code"'), JSON.stringify(rt)); assert.equal(rt.slots['qwen-code'], undefined);
+  const r = await add({ name: 'qwen-code', url: 'http://h1:1/v1', model: 'm1', slots: '2', routes: 'summarise' }, p, { f: async () => ({ ok: true, json: async () => ({ data: [{ id: 'm1' }] }) }), which: () => 'qwen' });
+  assert.equal(r.name, 'qwen-code');
+});
+
+test('fail closed: a stale or unknown read-only mode never reaches a Qwen provider as a normal mode; built-in Qwen ids always get read-only; migrate repairs a stale value', () => {
+  const modes = []; const paseo = (a) => (a[0] === 'run' ? (modes.push(a.includes('--mode') ? a[a.indexOf('--mode') + 1] : null), { status: 'completed', agentId: 'A' }) : a[0] === 'ls' ? [] : {});
+  const o = { type: 'summarise', prompt: 'p', cwd: process.cwd() };
+  const rt = { slots: {}, readOnlyEnforced: ['lab-box', 'qwen-code'], readOnlyModes: { 'lab-box': 'plan', 'qwen-code': 'plan' }, routes: { summarise: ['lab-box', 'qwen-code'] } };
+  assert.equal(readOnlyMode('lab-box', rt), undefined); assert.equal(readOnlyMode('qwen-code', rt), 'read-only'); assert.equal(readOnlyMode('lab-box', { readOnlyModes: { 'lab-box': 'read-only' } }), 'read-only');
+  assert.equal(readOnlyMode('claude-clean', { readOnlyModes: { 'claude-clean': 'bypassPermissions' } }), undefined, 'an unsafe override on a known kind is refused');
+  const r = runRoute(o, paseo, rt);
+  assert.deepEqual(modes, ['read-only'], 'only the built-in id ran, and in read-only'); assert.match(JSON.stringify(r.trace), /no verified read-only mode/);
+  const none = runRoute(o, paseo, { ...rt, routes: { summarise: ['lab-box'] } }); assert.equal(none.used, null); assert.equal(modes.length, 1, 'nothing launched');
+  const { p, read } = old(); migrate(p);
+  const loc = read('local'); loc.extraProviders['lab-box'] = { type: 'qwen-code', url: 'http://h:1/v1', model: 'm' }; writeFileSync(p.local, JSON.stringify(loc));
+  const r2 = read('routes'); r2.readOnlyModes['lab-box'] = 'plan'; writeFileSync(p.routes, JSON.stringify(r2));
+  assert.equal(migrate(p).changed, true); assert.equal(read('routes').readOnlyModes['lab-box'], 'read-only'); assert.deepEqual(migrate(p), { changed: false });
 });

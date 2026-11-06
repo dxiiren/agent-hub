@@ -63,3 +63,13 @@ test('a legacy read-only launch (initialReadOnly) is read-only from the first me
   const p = modeProxy({ input, output, initialReadOnly: true, spawnAgent: launch });
   assert.deepEqual(spawned, [true]); input.end(); p.kill();
 });
+
+test('deny by default: an unknown or missing mode id restarts the agent read-only, never normal', async () => {
+  for (const params of [{ modeId: 'bogus-mode' }, {}]) {
+    spawned.length = 0; const s = session(); const r = await open(s);
+    const d = mkdtempSync(join(tmpdir(), 'acpp-')); const f = join(d, 'w.txt');
+    assert.deepEqual((await s.call('session/set_mode', { sessionId: r.sessionId, ...params })).result, {});
+    assert.deepEqual(spawned, [false, true]);
+    assert.equal((await s.prompt(r.sessionId, `WRITE ${f}`)).text, 'REFUSED write'); assert.ok(!existsSync(f)); s.close();
+  }
+});

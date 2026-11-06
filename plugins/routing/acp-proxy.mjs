@@ -14,7 +14,7 @@ const lines = (stream, fn) => createInterface({ input: stream, crlfDelay: Infini
  * Returns { done } resolving with the agent's exit code.
  */
 export function modeProxy({ spawnAgent, input = process.stdin, output = process.stdout, initialReadOnly = false, roBaseMode = 'plan', beforeForward, onAgentLine, timeoutMs = 60000 }) {
-  let agent = null, ro = false, gen = 0, prompted = false, init = null, sess = null, outer = null, inner = null, awaiting = null, hub = 0;
+  let agent = null, known = new Set(), ro = false, gen = 0, prompted = false, init = null, sess = null, outer = null, inner = null, awaiting = null, hub = 0;
   const waits = new Map();
   let exit; const done = new Promise((r) => { exit = r; });
   const toAgent = (m) => agent.stdin.write(JSON.stringify(m) + NL);
@@ -39,7 +39,8 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
       awaiting = null;
       if (m.result) {
         inner = m.result.sessionId ?? inner ?? sess.params?.sessionId; outer = inner;
-        const a = m.result.modes?.availableModes; if (Array.isArray(a) && !a.some((x) => x.id === RO_MODE.id)) a.push(RO_MODE);
+        const a = m.result.modes?.availableModes; if (Array.isArray(a)) for (const x of a) known.add(x.id);
+        if (Array.isArray(a) && !a.some((x) => x.id === RO_MODE.id)) a.push(RO_MODE);
         if (ro && m.result.modes) m.result.modes.currentModeId = RO_MODE.id;
       }
       return toClient(m);
@@ -65,7 +66,8 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
     else if (m.method === 'session/new' || m.method === 'session/load') { sess = m; awaiting = m.id; if (m.method === 'session/load') inner = outer = m.params?.sessionId; }
     else if (m.method === 'session/prompt') prompted = true;
     else if (m.method === 'session/set_mode') {
-      if (m.params?.modeId === RO_MODE.id) {
+      // deny by default: read-only unless the client names a mode the agent itself offers (a missing or unknown mode id never reaches the agent as a normal mode)
+      if (m.params?.modeId === RO_MODE.id || !known.has(m.params?.modeId)) {
         if (ro) return reply(m.id, {});
         if (prompted || !sess) return fail(m.id, 'read-only must be chosen before the first prompt');
         try { await restartReadOnly(); } catch (e) { return fail(m.id, `read-only restart failed: ${e.message}`); }

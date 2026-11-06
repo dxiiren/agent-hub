@@ -62,7 +62,7 @@ test('refuses an unreachable endpoint and a non-OK answer', async () => {
 
 test('refuses bad names, duplicates, unknown routes and types', async () => {
   const { p } = box();
-  for (const name of ['qwen-code', 'qwen-x-ro', 'Qwen-X', '9bad']) await assert.rejects(add({ name, url: URL1, model: 'm1' }, p, opts()), /name must match/);
+  for (const name of ['qwen-x-ro', 'Qwen-X', '9bad']) await assert.rejects(add({ name, url: URL1, model: 'm1' }, p, opts()), /name must match/);
   await assert.rejects(add({ name: 'qwen-x', url: URL1, model: 'm1', routes: 'nope' }, p, opts()), /unknown route type nope/);
   await assert.rejects(add({ name: 'qwen-x', url: URL1, model: 'm1', type: 'zzz' }, p, opts()), /unknown type zzz/);
   await assert.rejects(add({ name: 'qwen-x', url: 'ftp://x', model: 'm1' }, p, opts()), /http\(s\)/);

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { withAnswer, grantReads, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
 const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop", "opencode", "qoder"]; // fake providers in tests: enforcement is tested separately
-const routes = { readOnlyEnforced: ALL, readOnlyModes: { codex: "auto", qwen: "plan" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
+const routes = { readOnlyEnforced: ALL, readOnlyModes: { codex: "auto", qwen: "read-only" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
   const calls = [];
   const f = (args) => { calls.push(args); return args[0] === "worktree" && args[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : args[0] === "ls" ? (script.ls ?? []) : args[0] === "stop" ? {} : args[0] === "provider" ? (script.providers ?? {}) : script.run(args); };
@@ -232,7 +232,7 @@ test("paseo CLI crash text (top-level await, no agentId, non-zero exit) is trans
 });
 
 test("read-only types never get an unsafe mode outside a worktree; a caller mode override is ignored too", () => {
-  const r2 = { ...routes, modes: { codex: "full-access", qwen: "yolo" }, routes: { summarise: ["codex/a"], review: ["qwen/b"] } };
+  const r2 = { ...routes, modes: { codex: "full-access", qwen: "yolo" }, routes: { summarise: ["claude-clean/a"], review: ["qwen/b"] } };
   const mk = () => fake({ run: () => ({ status: "completed", agentId: "A" }) });
   for (const [type, mode] of [["summarise", undefined], ["review", undefined], ["summarise", "yolo"], ["review", "bypassPermissions"]]) {
     const p = mk(); runRoute({ ...o, type, mode }, p, r2);
@@ -244,7 +244,7 @@ test("read-only types never get an unsafe mode outside a worktree; a caller mode
 test("a read-only task that changed files in its folder is failed", async () => {
   const { mkdtempSync, writeFileSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
   const d = mkdtempSync(join(tmpdir(), "ro-"));
-  const r2 = { ...routes, routes: { summarise: ["codex/a"] } };
+  const r2 = { ...routes, routes: { summarise: ["claude-clean/a"] } };
   const bad = fake({ run: () => { writeFileSync(join(d, "new.txt"), "x"); return { status: "completed", agentId: "A" }; } });
   const r = runRoute({ ...o, type: "summarise", cwd: d }, bad, r2);
   assert.equal(r.status, "failed-readonly-changed");
@@ -297,7 +297,7 @@ test("read-only types use each provider's read-only mode, in or out of a worktre
     const run = f.calls.find((c) => c[0] === "run");
     assert.equal(run[run.indexOf("--mode") + 1], m, p);
   }
-  assert.equal(readOnlyMode("x", { readOnlyModes: { x: "ro" } }), "ro");
+  assert.equal(readOnlyMode("x", { readOnlyModes: { x: "ro" } }), undefined, "unknown kind: only the proxy mode counts"); assert.equal(readOnlyMode("x", { readOnlyModes: { x: "read-only" } }), "read-only");
 });
 
 test("lastAnswer: text after the last tagged line, capped at 4 KB with a flag", () => {
@@ -395,7 +395,7 @@ test("grantReads: in-cwd read is allowed and waits again; outside path, no path 
 });
 test("a read-only route whose agent stops on a read of a cwd file completes without a fallback; a read outside cwd or a write still fails", () => {
   const { d, cwd } = sandbox();
-  const r2 = { readOnlyEnforced: ALL, readOnlyModes: { qwen: "plan" }, slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
+  const r2 = { readOnlyEnforced: ALL, readOnlyModes: { qwen: "read-only" }, slots: {}, routes: { summarise: ["qwen/a", "qwen/b"] } };
   let path = j2(cwd, "app.log");
   const p = (a) => {
     if (a[0] === "ls") return [];
@@ -578,7 +578,7 @@ test("codex has no read-only mode: a read-only type skips it, an edit type still
   const runs = [];
   const p = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { status: "completed", agentId: "Z" }; } return a[0] === "worktree" && a[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : a[0] === "ls" ? [] : {}; };
   const r = runRoute({ type: "summarise", prompt: "x", cwd: process.cwd() }, p, rt);
-  assert.deepEqual(runs, ["qwen-code/b"]); assert.match(JSON.stringify(r.trace), /no read-only mode/);
+  assert.deepEqual(runs, ["qwen-code/b"]); assert.match(JSON.stringify(r.trace), /no verified read-only mode/);
   runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: process.cwd(), worktree: true, base: "a".repeat(40) }, p, rt);
   assert.deepEqual(runs, ["codex/a"]);
 });

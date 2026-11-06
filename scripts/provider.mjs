@@ -87,6 +87,7 @@ async function verifyKind(k, { url, model, key }, { f = fetch, run } = {}) {
 }
 
 export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run, preOverride, skipVerify } = {}) {
+  if (!preOverride) reconcile(p);
   const k = kindOf(a.kind ?? a.type); const type = k.type; const { model, url } = a;
   let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
   if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
@@ -215,6 +216,18 @@ function restoreSnapshot(name, p) {
 }
 
 /**
+ * Paseo's own "Remove provider" (Settings > Providers) deletes only the Paseo entry. Forget what the hub still records for such a provider
+ * (extraProviders, slots, modes, read-only lists, route chain entries), so a removed provider leaves nothing behind and its name can be added again.
+ */
+export function reconcile(p = paths()) {
+  const prov = rd(p.paseo, null)?.agents?.providers; const local = rd(p.local, {});
+  if (!prov || !local.extraProviders) return [];
+  const gone = Object.entries(local.extraProviders).filter(([n, s]) => { try { return ownish(kindOf(s.type), s) && !prov[n]; } catch { return false; } }).map(([n]) => n);
+  for (const n of gone) removeManual(n, p, rd(p.local, {}));
+  return gone;
+}
+
+/**
  * One-time, idempotent move to "no presets, no twins": the Qwen entries an older hub seeded (qwen-code, qwen-code-2, qwen-laptop) become ordinary
  * user-added providers (recorded in hub.local.json extraProviders, so Remove works), the "-ro" twins are deleted, and read-only routing uses the
  * session mode "read-only" of the base id. Their Paseo entries are kept byte for byte. The three files' exact previous bytes are saved in
@@ -239,13 +252,14 @@ export function migrate(p = paths(), { undo } = {}) {
     return null;
   };
   const adopt = ['qwen-code', 'qwen-code-2', 'qwen-laptop'].filter((id) => prov[id] && !local.extraProviders?.[id]).map((id) => [id, spec(id, prov[id])]).filter(([, sp]) => sp);
-  const stale = twins.length || routes?.twins;
+  const fix = routes ? Object.entries(local.extraProviders ?? {}).filter(([n, sp]) => sp.type === 'qwen-code' && sp.readOnly !== false && routes.readOnlyModes?.[n] !== 'read-only').map(([n]) => n) : []; // stale "plan" (or none) on a Qwen provider
+  const stale = twins.length || routes?.twins || fix.length;
   if (!adopt.length && !stale) return { changed: false };
   const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
   for (const [id, sp] of adopt) local.extraProviders = { ...local.extraProviders, [id]: sp };
   for (const t of twins) delete prov[t];
   if (routes) {
-    const names = new Set([...adopt.map(([id]) => id), ...twins.map((t) => t.slice(0, -3))]);
+    const names = new Set([...adopt.map(([id]) => id), ...twins.map((t) => t.slice(0, -3)), ...fix]);
     delete routes.twins;
     if (names.size) {
       routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), ...names])];
@@ -262,6 +276,7 @@ export function migrate(p = paths(), { undo } = {}) {
 
 /** Added providers for display. The API key is never returned, only keySet. */
 export const list = (p = paths()) => {
+  reconcile(p);
   const routes = rd(p.routes, {});
   return Object.entries(rd(p.local, {}).extraProviders || {}).map(([name, s]) => { const { key, ...rest } = s; const own = ownish(kindOf(s.type), s); const token = chainToken(name, s);
     return { name, ...rest, ...(key ? { keySet: true } : {}), slots: routes.slots?.[name],

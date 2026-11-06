@@ -12,6 +12,7 @@ import os from "node:os";
 import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
 import { runGate, gateOpts, EMPTY_TREE, hasSecret } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
+import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
 import { batchAllowed } from "./readguard.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -93,7 +94,15 @@ export const knownProviders = (routes = {}) => new Set(["codex", ...Object.keys(
 /** Providers on which a read-only task may run: sensitive reads are ENFORCEABLY refused (claude-clean = PreToolUse read hook, Qwen = readguard). Qoder, plain claude, opencode, copilot and codex have no such enforcement (an in-cwd .env was read through qoder/efficient), so read-only types never run on them. Override with routes.readOnlyEnforced. */
 export const READ_ONLY_ENFORCED = ["claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop"];
 export const readOnlyEnforced = (prov, routes = {}) => (routes.readOnlyEnforced ?? READ_ONLY_ENFORCED).includes(prov);
-export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
+/** Modes that really are read-only, per provider family. A mode outside this set is never used for a read-only task (fail closed: the route refuses, it never falls back to the default mode). */
+const SAFE_MODES = { claude: ["plan"], "claude-clean": ["plan"], opencode: ["plan"], qoder: ["dontAsk"], copilot: [READ_ONLY_MODES.copilot] };
+/** The one read-only mode a read-only task may use on `prov`, or undefined (= refuse). Qwen-style providers (the hub's ACP proxy launcher: the three built-in ids and every user-added one) always get "read-only", whatever readOnlyModes says; a user-added id whose recorded mode is not "read-only" (stale "plan") is refused until `provider migrate` fixes it. */
+export const readOnlyMode = (prov, routes = {}) => {
+  if (READ_ONLY_MODES[prov] === "read-only") return "read-only";
+  const safe = SAFE_MODES[prov];
+  if (safe) { const m = routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov]; return safe.includes(m) ? m : undefined; }
+  return routes.readOnlyModes?.[prov] === "read-only" ? "read-only" : undefined; // unknown kind: only the proxy's own mode counts
+};
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
 export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
   for (let i = 0; i < max && j.status === "permission" && j.agentId; i++) {
@@ -350,7 +359,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // Qwen read-only: the launcher (acp-proxy.mjs) offers the session mode "read-only"; choosing it restarts qwen with the deny settings (config/qwen/system-settings-readonly.json). Nothing is ever written under the task cwd.
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
-    if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "no read-only mode for this provider (read-only task types never run on it)" }); continue; }
+    if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "provider has no verified read-only mode (read-only task types never run on it; for a Qwen provider run `agent-hub provider migrate`)" }); continue; }
     if (ro && !readOnlyEnforced(base(prov), routes)) { trace.push({ provider: prov, skip: "no enforced sensitive-read guard for this provider (read-only task types never run on it)" }); continue; }
     const mode = ro ? readOnlyMode(base(prov), routes) : o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
     if (o.worktree) {
@@ -439,6 +448,7 @@ function main(argv) {
     if (!id || !text) { console.error('usage: route.mjs reply <agentId> "<text>" [--home H]'); return 2; }
     const home = (r.includes("--home") ? r[r.indexOf("--home") + 1] : undefined) ?? process.env.PASEO_HOME;
     { const e = inputError({ home }); if (e) { console.error("route: " + e); return 2; } }
+    try { migrate(); } catch { /* best effort */ }
     const res = runReply(id, text, withRetry(cliPaseo(home)), loadRoutes(), { dir: parkDir(home) });
     console.log(JSON.stringify(res));
     return res.status === "completed" ? 0 : res.status === "asking" ? 3 : 1;
@@ -453,6 +463,7 @@ function main(argv) {
   if (early) { console.error("route: " + early); return 2; }
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
+  try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed
   const routes = loadRoutes();
   const unmark = markActive(routes, opt("--provider"));
   let res;
