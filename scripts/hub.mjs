@@ -161,7 +161,7 @@ function providers() {
       env: { LLAMA_SERVER_BIN: cfg.llama, LAPTOP_MODEL_PATH: cfg.laptopModel, QWEN_BIN: qwen, ...(cfg.laptopPort ? { LAPTOP_PORT: cfg.laptopPort } : {}),
         ...(opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') ? { HEAVY_LOCK_GLOB: opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') } : {}) } };
   } else notes.push(vram ? 'laptop model needs LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and qwen' : 'laptop model skipped: no GPU with >= 7.5 GiB VRAM (decision 35)');
-  for (const [n, sp] of Object.entries(local.extraProviders || {})) if (qwen) Object.assign(p, extraEntries(n, sp, qwen)); // added with `provider add`; their -ro twins come with them
+  for (const [n, sp] of Object.entries(local.extraProviders || {})) if (qwen || sp.type !== 'qwen-code') Object.assign(p, extraEntries(n, sp, qwen, REPO, HUB_DIR)); // added with `provider add`; their -ro twins come with them
   // read-only twins (round 5): the same launcher with --read-only (deny settings for sensitive reads); read-only task types run only on these
   for (const id of ['qwen-code', 'qwen-code-2', 'qwen-laptop']) if (p[id]) p[id + '-ro'] = { ...p[id], label: p[id].label + ' (read-only)', command: [...p[id].command, '--read-only'] };
   return { p, notes };
@@ -334,7 +334,7 @@ async function doctor(deep) {
 function plugins() {
   const f = join(HOME, 'config.json'); const c = readJson(f, {});
   if (!c.pluginsEnabled) { c.pluginsEnabled = true; writeJson(f, c); ok('pluginsEnabled set; restart the daemon (just down ; just up) if the installs below fail'); }
-  for (const d of ['gate', 'usage-otel']) {
+  for (const d of ['gate', 'usage-otel', 'providers']) {
     const r = paseo(['plugin', 'install', join(REPO, 'plugins', d)]);
     (r.status === 0 ? ok : (m) => console.log('[FAIL] ' + m))(`plugin ${d}: ${out(r).split(String.fromCharCode(10)).pop()}`);
   }

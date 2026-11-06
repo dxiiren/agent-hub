@@ -1,14 +1,25 @@
 // Gate core: pure functions, no Paseo imports, so the unit tests run under plain node.
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, existsSync, mkdtempSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 
 // Secret scanning is delegated to gitleaks (pinned version, rules = config/gitleaks.toml: the default rules plus a few of ours). No hand-written regexes here.
 export const GITLEAKS_VERSION = "8.30.1";
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+// The Paseo plugin bundler leaves import.meta.url undefined, which made this module throw at load (gate "failed" in `paseo plugin ls`): fall back to AGENT_HUB_REPO, then the install path in the Paseo config.
+function repoRoot() {
+  try { return join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."); } catch { /* bundled */ }
+  if (process.env.AGENT_HUB_REPO) return process.env.AGENT_HUB_REPO;
+  try {
+    const cfg = JSON.parse(readFileSync(join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "config.json"), "utf8"));
+    const p = Object.values(cfg.plugins ?? {}).map((x) => x?.path).find((x) => x && existsSync(join(x, "..", "..", "config", "gitleaks.toml")));
+    if (p) return join(p, "..", "..");
+  } catch { /* no config */ }
+  return process.cwd();
+}
+const ROOT = repoRoot();
 export const GITLEAKS_CONFIG = join(ROOT, "config", "gitleaks.toml");
 /** Binary: AGENT_HUB_GITLEAKS, else <repo>/tools/gitleaks/ (installed by the README steps), else `gitleaks` on PATH. */
 export function gitleaksBin(env = process.env) {

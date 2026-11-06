@@ -6,6 +6,7 @@ import { servedModel, qwenEnv, takeReadOnlyFlag } from '../../plugins/routing/of
 const readOnly = takeReadOnlyFlag(process.argv); // the "-ro" twin provider
 const [bin, base, fallback] = process.argv.slice(2);
 const model = await servedModel(base, { fallback });
-const child = spawn(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, '--openai-api-key', 'none', '--model', model],
-  { stdio: 'inherit', env: qwenEnv(process.env, readOnly), shell: /\.(cmd|bat)$/i.test(bin) });
+const child = spawn(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, ...(process.env.HUB_OPENAI_API_KEY ? [] : ['--openai-api-key', 'none']), '--model', model],
+  { stdio: 'inherit', env: { ...qwenEnv(process.env, readOnly), ...(process.env.HUB_OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.HUB_OPENAI_API_KEY } : {}) }, // an endpoint key travels in env, never argv
+   shell: /\.(cmd|bat)$/i.test(bin) });
 child.on('exit', (c) => process.exit(c ?? 1));

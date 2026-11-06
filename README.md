@@ -186,17 +186,59 @@ Run `just` with no arguments to list every recipe. The ones you'll use daily:
 | `just claudex` | Launch Claude Code (Sonnet, all permissions) |
 | `just claudeo` / `just claudeh` | Same, on Opus / Haiku |
 
-## Adding a provider (another Qwen Code endpoint)
+## Add a provider (UI or CLI)
 
-Paseo's web UI cannot do this. Settings > Providers > "Add provider" lists a fixed catalog of ACP agents (Qwen Code, Qoder, Gemini CLI ...), each added with its stock command: no URL, model or env field, and the provider page only lets you add a custom model id to an existing provider. A catalog "Qwen Code" would also have no endpoint and would overwrite the hub's `qwen-code` entry. So the hub has its own command, which does what the UI cannot:
+Paseo's own Settings > Providers > "Add provider" is a fixed catalog of ACP agents: each is added with its stock command, with no URL, model or key field. Agent Hub adds the missing piece, with the same behaviour from the web UI and the command line.
+
+**What you can add (a "kind"):**
+
+| Kind | What it is | Fields |
+| --- | --- | --- |
+| `qwen` | [Qwen Code](https://github.com/QwenLM/qwen-code) on any OpenAI-compatible endpoint (vLLM, SGLang, llama.cpp, Ollama, a hosted API) | base URL, model, optional API key |
+| `opencode` | OpenCode on any OpenAI-compatible endpoint | base URL, model, optional API key |
+| `qoder`, `codex`, `claude` | one more model of a CLI you have installed and signed in to (route entry `<cli>/<model>`; no new Paseo provider) | model |
+
+Every kind also takes a name, parallel slots (kinds with their own provider), which task types it serves with its position in each route chain, and (qwen) whether to create the read-only twin that `summarise` and `review` need. Model lists are read live: from the endpoint's `GET /v1/models`, or from `paseo provider models <cli>` for the CLI kinds. Nothing about your hosts, models or accounts is built in.
+
+**Prerequisites:** Node 20 or newer, a running hub (`just up`), and for the kind you pick its CLI on your `PATH` (`qwen`, `opencode`, `qodercli`, `codex` or `claude`). Works the same on Windows, macOS and Linux.
+
+**From the web UI.** Run `node scripts/hub.mjs plugins` once and restart the daemon (`just down && just up`). Open the hub page (default `http://127.0.0.1:6767`), then **Settings > Add provider (Agent Hub)**: pick the kind, give it a name, paste the base URL (and key, which is masked and never shown again), press **Load models** and pick one (or type an id), set slots and the task types, then **Add provider**. A provider with its own Paseo entry needs one daemon restart, which the screen tells you; a CLI-model entry is live at once. The list below the form has **Edit** and **Remove** for each added provider.
+
+**From the command line** (`agent-hub provider ...`, or `node scripts/hub.mjs provider ...`):
 
 ```
-agent-hub provider add qwen-extra --url <openai-compatible base url> --model <served model id> [--slots 2] [--routes code-edit,summarise]
+agent-hub provider kinds
+agent-hub provider models --kind qwen --url http://127.0.0.1:8000/v1          # what the endpoint serves
+agent-hub provider add qwen-lab --kind qwen --url http://127.0.0.1:8000/v1 --model my-model \
+    [--key <api key>] [--slots 2] [--routes code-edit:2,summarise] [--readonly false]
+agent-hub provider add fast-tier --kind qoder --model <tier from: paseo provider models qoder> --routes code-edit
+agent-hub provider edit qwen-lab --slots 4        # also --model --url --key --routes --readonly
 agent-hub provider list
-agent-hub provider remove qwen-extra
+agent-hub provider remove qwen-lab
 ```
 
-(`node scripts/hub.mjs provider ...` is the same command.) `add` refuses unless `GET <url>/v1/models` lists the model. It then writes the provider and its read-only `qwen-extra-ro` twin into the Paseo `config.json`, the endpoint into `config/hub.local.json` (`extraProviders`, so `configure` regenerates it), and the slots, the yolo mode and the route chains into the routes file. Names start with `qwen-` (routing derives the read-only twin from that prefix). Nothing is routed to a new provider until you pass `--routes`. Restart the daemon afterwards (`just down && just up`) so Paseo reloads its providers. `--type qwen-code` is the only type today; another OpenAI-compatible launcher is one function in `TYPES` in `scripts/provider.mjs`.
+`--routes code-edit:2,summarise` puts the provider second in the `code-edit` chain and at the end of `summarise`. `add` refuses a URL that is not http(s), an endpoint that does not answer `/v1/models`, a model the endpoint or CLI does not list, and a name already in use; nothing is written when it refuses. The API key lives in `config/hub.local.json` (git-ignored) and in the provider's `env` in the Paseo config, and reaches the agent through the environment, never a command line or a log. `remove` puts the configuration files back byte for byte while nothing else has changed them since; `edit` keeps that guarantee relative to the original add.
+
+**Add your own kind** (any ACP agent CLI, any other OpenAI-compatible launcher). The built-in kinds live in `scripts/provider-kinds.mjs`; yours go in `config/provider-kinds.local.json` (git-ignored) or the file named by `AGENT_HUB_KINDS`, and appear in both the CLI and the UI:
+
+```json
+{
+  "myagent": {
+    "label": "My agent (OpenAI-compatible)",
+    "launch": ["{node}", "/path/to/my-launcher.mjs", "{url}", "{model}"],
+    "modelsFrom": "endpoint",
+    "fields": [
+      { "id": "url", "label": "Base URL", "type": "url", "required": true },
+      { "id": "model", "label": "Model", "type": "model", "required": true },
+      { "id": "key", "label": "API key (optional)", "type": "secret" }
+    ]
+  }
+}
+```
+
+`launch` is the ACP command Paseo should run (`{node}`, `{repo}`, `{url}`, `{model}` are filled in; the key arrives in `HUB_OPENAI_API_KEY`). Names of this kind start with `myagent-`. Use `"base": "<an installed provider id>"` instead of `launch` for a kind that only adds `<base>/<model>` route entries.
+
+The UI is one small Paseo plugin (`plugins/providers`) drawn from this same schema with Paseo's own Settings components; all of its text is in `plugins/providers/client/strings.ts`. A Paseo-side change to put these fields into the built-in "Add provider" dialog would be a better home for it; none is needed for this to work.
 
 ## Security
 
