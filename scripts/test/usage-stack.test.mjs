@@ -10,7 +10,7 @@ test('probeStack reports a dead stack as not ok and a live one as ok', async () 
   const base = `http://127.0.0.1:${s.address().port}`;
   const up = await probeStack({ collector: base + '/', prometheus: base + '/-/ready', grafana: base + '/api/health' });
   assert.ok(up.every((x) => x.ok), JSON.stringify(up));
-  s.close();
+  s.close(); s.closeAllConnections(); // close() alone keeps undici's pooled keep-alive socket open: the 'down' probe then reached the closed-over server and the test failed intermittently
   const down = await probeStack({ collector: base + '/', grafana: base + '/api/health' });
   assert.ok(down.every((x) => !x.ok), JSON.stringify(down));
 });
