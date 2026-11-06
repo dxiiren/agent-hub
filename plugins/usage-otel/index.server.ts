@@ -39,5 +39,6 @@ export default function contribute(server: PluginServerContext) {
     discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
     fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
+  qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
   return () => {};
 }
