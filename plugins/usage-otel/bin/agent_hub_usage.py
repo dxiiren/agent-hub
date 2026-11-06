@@ -1,6 +1,6 @@
 """agent-hub usage --session <id> [--json] [--dir D] | --all
 Reads the per-session usage file written by the usage plugin. Stdlib only, no heavy imports: statusline budget is 60 ms."""
-import os, sys
+import os, re, sys
 
 
 def usage_dir():
@@ -11,7 +11,9 @@ def usage_dir():
 
 
 def safe(s):
-    return "".join(c if c.isalnum() or c in "._-" else "_" for c in s)[:80]
+    # same rule as usage.mjs safe(): ASCII only, and a Windows device name (CON, NUL, COM1 ..., any extension) gets a "_" prefix
+    t = re.sub(r"[^A-Za-z0-9._-]", "_", s)[:80]
+    return "_" + t if re.match(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])([.].*)?$", t, re.S) else t
 
 
 def summarize(path):
@@ -68,4 +70,5 @@ def main(argv):
     return 0
 
 
-sys.exit(main(sys.argv[1:]))
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

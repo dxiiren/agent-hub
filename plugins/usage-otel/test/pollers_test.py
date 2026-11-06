@@ -3,9 +3,17 @@ import os, sys, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "pollers"))
 import opencode_export as oe
 import qoder_poll as qp
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bin"))
+import agent_hub_usage as ahu
 
 
 class Pollers(unittest.TestCase):
+    def test_usage_safe_prefixes_windows_device_names(self):
+        for n in ["CON", "con", "NUL.txt", "prn.a.b", "AUX", "COM1", "com9.x", "LPT3", "lpt1.log"]:
+            self.assertEqual(ahu.safe(n), "_" + n, n)
+        for n in ["CONSOLE", "com10", "lpt0", "nullable", "aux-1", "abc123", "COM", "a/b"]:
+            self.assertEqual(ahu.safe(n), n.replace("/", "_"), n)
+
     def test_opencode_empty_session_list_is_zero(self):
         self.assertEqual(oe.session_ids(""), [])
         self.assertEqual(oe.session_ids("  \n"), [])

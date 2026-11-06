@@ -13,6 +13,7 @@ test('readJsonStrict: BOM stripped, missing = default, unparsable throws and nam
   assert.deepEqual(readJsonStrict(f, { x: 1 }), { x: 1 });
   writeFileSync(f, BOM + '{"keep":1}'); assert.deepEqual(readJsonStrict(f, {}), { keep: 1 });
   for (const bad of ['{"keep":', '', 'not json', '[1,', BOM + '{oops']) { writeFileSync(f, bad); assert.throws(() => readJsonStrict(f, {}), /not valid JSON/); }
+  for (const bad of ['[]', 'null', '"x"', '1']) { writeFileSync(f, bad); assert.throws(() => readJsonStrict(f, {}), /not a JSON object/); }
 });
 test('writeJsonKeepEol keeps a BOM and CRLF the file had, adds neither to a new file', () => {
   const t = d(); const f = join(t, 'b.json');

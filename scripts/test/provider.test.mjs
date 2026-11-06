@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { add, remove, list, entries } from '../provider.mjs';
@@ -95,4 +96,15 @@ test('remove restores the exact bytes (CRLF, explicit defaults, empty keys) and 
   const r = JSON.parse(readFileSync(q.routes, 'utf8')); r.slots.codex = 5; writeFileSync(q.routes, crlf(r));
   remove('qwen-extra', q);
   const after = readFileSync(q.routes, 'utf8'); assert.ok(after.includes(CR) && !after.includes('qwen-extra'), 'CRLF kept, name gone'); assert.equal(JSON.parse(after).slots.codex, 5);
+});
+
+test('a config whose top level is not an object is refused and nothing is written (sha256 before/after)', async () => {
+  const sha = (f) => createHash('sha256').update(readFileSync(f)).digest('hex');
+  for (const bad of ['[]', 'null', '"x"', '1']) for (const key of ['local', 'paseo', 'routes']) {
+    const { p } = box(); writeFileSync(p[key], bad);
+    const files = Object.values(p).filter(existsSync); const before = files.map(sha);
+    await assert.rejects(add({ name: 'qwen-extra', url: URL1, model: 'm1' }, p, opts()), /not a JSON object/, `${key}=${bad}`);
+    assert.deepEqual(files.map(sha), before, `${key}=${bad}`);
+    assert.ok(existsSync(p.local) === (key === 'local'), 'no new file');
+  }
 });

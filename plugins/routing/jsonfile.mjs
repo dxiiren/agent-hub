@@ -7,7 +7,10 @@ const LF = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10), BOM = St
 export function readJsonStrict(p, d) {
   let t;
   try { t = readFileSync(p, "utf8"); } catch (e) { if (e?.code === "ENOENT") return d; throw new Error(`cannot read ${p}: ${e.message}. Nothing was written.`); }
-  try { return JSON.parse(t.startsWith(BOM) ? t.slice(1) : t); } catch (e) { throw new Error(`${p} is not valid JSON (${e.message}). Fix or remove it; nothing was written.`); }
+  let j;
+  try { j = JSON.parse(t.startsWith(BOM) ? t.slice(1) : t); } catch (e) { throw new Error(`${p} is not valid JSON (${e.message}). Fix or remove it; nothing was written.`); }
+  if (j === null || typeof j !== "object" || Array.isArray(j)) throw new Error(`${p} is not a JSON object (top level must be { ... }). Fix or remove it; nothing was written.`);
+  return j;
 }
 export function writeJsonKeepEol(p, o) {
   mkdirSync(dirname(p), { recursive: true });
