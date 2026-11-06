@@ -21,7 +21,7 @@ export const S = {
   accountHint: (v: string) => `A second login of this CLI, kept in its own folder (${v}). Name it, add the provider, then run the one-line sign-in command shown. Leave empty for the default login.`,
   noAccounts: "This kind cannot have separate accounts.",
   loginOnce: (c: string) => `Sign in once to this account: ${c}`,
-  readOnlyTwin: "Read-only twin (for summarise and review)",
+  readOnlyTwin: "Allow summarise and review on it (runs in its read-only mode)",
   routes: "Task types it serves",
   routesHint: "Choose the position in each task type's chain, or Off. Earlier positions are tried first.",
   off: "Off",
