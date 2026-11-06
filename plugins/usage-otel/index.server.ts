@@ -5,6 +5,8 @@ import { fillRecord, qoderCredits, qoderSession, qwenSession } from "./server/si
 import { join } from "node:path";
 import { z } from "zod";
 import { qoderSummary, toReport } from "./server/qoder-usage.mjs";
+import { paseoHome, selfHostedProviders, selfHostedReport } from "./server/selfhosted-usage.mjs";
+import { readFileSync } from "node:fs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
 
@@ -38,6 +40,18 @@ export default function contribute(server: PluginServerContext) {
     input: z.object({}),
     discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
     fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+  });
+  // One card per self-hosted OpenAI-compatible provider, read from the Paseo config on every discovery
+  server.registerUsageSource({
+    id: "selfhosted",
+    label: "Self-hosted",
+    input: z.object({ name: z.string() }),
+    discover: async () => {
+      let cfg = {};
+      try { cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { /* no config: no cards */ }
+      return selfHostedProviders(cfg).map((p) => ({ key: p.name, label: p.name, harness: p.name, input: { name: p.name } }));
+    },
+    fetch: async (input: { name: string }) => { try { return await selfHostedReport(input.name); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
   return () => {};
