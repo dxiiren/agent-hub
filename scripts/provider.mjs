@@ -8,11 +8,12 @@ import { KINDS, LOCAL_DEFAULTS, LOCAL_FIELD_IDS, RESERVED, KEY_ENV, kindOf, chai
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeId, safeUrl } from '../plugins/routing/office.mjs';
 import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
-import { writeJsonKeepEol, readJsonStrict, own } from '../plugins/routing/jsonfile.mjs';
+import { writeJsonKeepEol, writeAtomic, readJsonStrict, own } from '../plugins/routing/jsonfile.mjs';
+import { withLock, withLockSync } from '../plugins/routing/lock.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const NAME_RE = KINDS['qwen-code'].nameRe; // any lower-case id
@@ -48,11 +49,15 @@ const wr = writeJsonKeepEol; // keeps the file's own line endings
 const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
 const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
 const FILES = ['local', 'paseo', 'routes'];
+/** The one lock every read-modify-write of the three files takes (cross-process; re-entrant in a call chain). Next to hub.local.json, so it matches .gitignore *.local.*. */
+const lockOf = (p) => join(dirname(p.local), 'hub.local.lock');
 const basePath = (p) => join(dirname(p.local), 'hub.local.undo-base.json'); // the files as they were before the FIRST added provider
 const undoPath = (p, name) => join(dirname(p.local), `hub.local.undo-${name}.json`); // matches .gitignore *.local.*
 
 /** Where account config dirs live: AGENT_HUB_ACCOUNTS_DIR, else ~/.agent-hub/accounts/<kind>/<account>. */
-export const accountDirOf = (kind, account, env = process.env) => join(resolve(env.AGENT_HUB_ACCOUNTS_DIR || join(homedir(), '.agent-hub', 'accounts')), kind, account);
+export const accountsRoot = (env = process.env) => resolve(env.AGENT_HUB_ACCOUNTS_DIR || join(homedir(), '.agent-hub', 'accounts'));
+export const accountDirOf = (kind, account, env = process.env) => join(accountsRoot(env), kind, account);
+const ACCOUNT_MARK = '.agent-hub-account'; // written when the hub creates the dir; --purge deletes only a dir that carries it AND sits inside the accounts root
 const ACCOUNT_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
 /** Own Paseo provider (slots, modes, route token = its name): endpoint kinds, and CLI kinds added with an account. */
 const ownish = (k, spec) => k.own || !!spec.account;
@@ -105,7 +110,8 @@ async function verifyKind(k, { url, model, key, bin, modelFile }, { f = fetch, r
   if (!modelListed(model, models)) throw new Error(`model "${model}" is not offered by the ${k.base} CLI (offered: ${models.map((m) => m.id).join(', ')})`);
 }
 
-export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run, preOverride, skipVerify } = {}) {
+export const add = (a, p = paths(), o = {}) => withLock(lockOf(p), () => addLocked(a, p, o));
+async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverride, skipVerify } = {}) {
   if (!preOverride) reconcile(p);
   const k = kindOf(a.kind ?? a.type); const type = k.type; const { model } = a;
   const lc = k.local ? localSpec(a) : undefined; let url = k.local ? `http://127.0.0.1:${lc.port}/v1` : a.url;
@@ -113,7 +119,8 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
   if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
   const readOnly = !(a.readOnly === false || a.readOnly === 'false' || a.readOnly === 'off');
-  const slots = Number(a.slots ?? 2);
+  const slots = /^[0-9]{1,3}$/.test(String(a.slots ?? 2)) ? Number(a.slots ?? 2) : NaN; // plain decimal only: no 0x10, 1e1, -1
+  if (!Number.isInteger(slots) || slots < 1 || slots > 64) throw new Error('--slots must be a whole number from 1 to 64');
   const account = a.account ? String(a.account) : undefined;
   if (account) {
     if (!hasAccounts(k)) throw new Error(`kind ${type} cannot separate accounts through a login directory (${k.account?.by === 'endpoint' ? 'add another entry with its own --url/--key instead' : k.account?.none || 'not supported'})`);
@@ -125,6 +132,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   if (k.own) {
     if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');
   }
+  if (key !== undefined && !/^[!-~]{1,512}$/.test(String(key))) throw new Error('--key must be 1-512 printable characters without spaces');
   if (key && !k.fields.some((x) => x.id === 'key')) throw new Error(`kind ${type} takes no API key (an agent of that kind could read it)`);
   if (label && !/^[^\x00-\x1f"]{1,80}$/.test(label)) throw new Error('--label must be 1-80 printable characters without quotes');
   if (!safeId(model)) throw new Error('--model must be a plain model id');
@@ -137,6 +145,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   const bin = type === 'qwen-code' || k.local ? which('qwen') : null; if ((type === 'qwen-code' || k.local) && !bin) throw new Error('qwen CLI not found on PATH');
   const routes = rd(p.routes, null); if (!routes) throw new Error(`routes file unreadable: ${p.routes}`);
   const chains = parseRoutes(a.routes);
+  { const seen = new Set(); for (const { c } of chains) { if (seen.has(c)) throw new Error(`route ${c} is listed twice`); seen.add(c); } }
   const accountDir = account ? resolve(a.accountDir || accountDirOf(type, account)) : undefined;
   const spec = { type, ...(k.own ? { url } : {}), model, ...lc, ...(account ? { account, accountDir } : {}), ...(label && (k.own || account) ? { label } : {}), ...(key ? { key } : {}), ...(k.twin && !readOnly ? { readOnly: false } : {}) };
   const token = chainToken(name, spec);
@@ -161,7 +170,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   for (const { c, pos } of chains) { const l = routes.routes[c]; l.splice(pos ? Math.min(pos - 1, l.length) : l.length, 0, token); }
   if (type === 'opencode') { mkdirSync(join(hubDir, 'xdg'), { recursive: true }); writeJsonKeepEol(join(hubDir, `opencode-${name}.json`), opencodeFile(name, spec)); }
   if (first) writeFileSync(basePath(p), JSON.stringify(Object.fromEntries(FILES.map((x) => [x, (preOverride ?? pre)[x]?.toString('base64') ?? null]))));
-  if (accountDir) mkdirSync(accountDir, { recursive: true }); // an empty dir; the user signs in once (login below). remove() never deletes it unless --purge
+  if (accountDir) { const fresh = !existsSync(accountDir); mkdirSync(accountDir, { recursive: true }); if (fresh) writeFileSync(join(accountDir, ACCOUNT_MARK), 'created by agent-hub; provider remove --purge may delete this folder'); } // an empty dir; the user signs in once (login below). remove() never deletes it unless --purge
   wr(p.local, local); wr(p.routes, routes); wr(p.paseo, cfg);
   // remove() puts the exact pre-add bytes back while nothing else touched the files since
   const snap = Object.fromEntries(FILES.map((x) => [x, { pre: (preOverride ?? pre)[x]?.toString('base64') ?? null, post: sha(bytes(p[x])) }]));
@@ -194,6 +203,12 @@ function removeManual(name, p, local = rd(p.local, {})) {
   rmSync(undoPath(p, name), { force: true });
   if (!local.extraProviders) restoreBase(p);
 }
+/** Only a folder the hub created (marker file) that lies strictly inside the accounts root; never any other path, whatever --account-dir said at add. */
+function purgeable(dir, env = process.env) {
+  if (!dir) return false;
+  const d = resolve(dir), rel = relative(accountsRoot(env), d);
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel) && existsSync(join(d, ACCOUNT_MARK));
+}
 /** Last provider gone: put each file's ORIGINAL bytes back when its content is the same JSON (keeps hand formatting that a rewrite would lose). */
 function restoreBase(p) {
   let b; try { b = JSON.parse(readFileSync(basePath(p), 'utf8')); } catch { return; }
@@ -201,20 +216,22 @@ function restoreBase(p) {
   for (const x of FILES) {
     const pre = b[x] === null ? null : Buffer.from(b[x], 'base64'); const cur = bytes(p[x]);
     if (pre === null) { if (cur && canon(cur) === '{}') rmSync(p[x], { force: true }); }
-    else if (cur && canon(cur) !== null && canon(cur) === canon(pre)) writeFileSync(p[x], pre);
+    else if (cur && canon(cur) !== null && canon(cur) === canon(pre)) writeAtomic(p[x], pre);
   }
   rmSync(basePath(p), { force: true });
 }
-export function remove(name, p = paths(), { purge } = {}) {
+export const remove = (name, p = paths(), o = {}) => withLockSync(lockOf(p), () => removeLocked(name, p, o));
+function removeLocked(name, p, { purge } = {}) {
   const local = rd(p.local, {});
   if (!own(local.extraProviders, name)) throw new Error(`${name} is not an added provider (list: ${Object.keys(local.extraProviders || {}).join(', ') || 'none'})`);
   const spec = own(local.extraProviders, name);
-  if (purge && spec.accountDir && spec.accountDir.split(/[\\/]/).filter(Boolean).length >= 3) { try { rmSync(spec.accountDir, { recursive: true, force: true }); } catch { /* best effort */ } } // the account's login lives there; only with --purge
+  if (purge && purgeable(spec.accountDir)) { try { rmSync(spec.accountDir, { recursive: true, force: true }); } catch { /* best effort */ } } // the account's login lives there; only with --purge
   if (restoreSnapshot(name, p)) { if (spec.type === 'opencode') rmSync(join(hubDirOf(p.paseo), `opencode-${name}.json`), { force: true }); if (!Object.keys(rd(p.local, {}).extraProviders || {}).length) rmSync(basePath(p), { force: true }); return; } // untouched since add: byte-identical to before
   removeManual(name, p, local);
 }
 /** Change slots, model, url, key, routes (with positions) or the read-only twin of an added provider. Kind and name are fixed. Undo still returns to the state before the ORIGINAL add. */
-export async function edit(name, ch, p = paths(), o = {}) {
+export const edit = (name, ch, p = paths(), o = {}) => withLock(lockOf(p), () => editLocked(name, ch, p, o));
+async function editLocked(name, ch, p, o) {
   const local = rd(p.local, {}); const spec = own(local.extraProviders, name);
   if (!spec) throw new Error(`${name} is not an added provider`);
   const cur = list(p).find((x) => x.name === name); const token = chainToken(name, spec);
@@ -228,14 +245,14 @@ export async function edit(name, ch, p = paths(), o = {}) {
   const ocf = join(hubDirOf(p.paseo), `opencode-${name}.json`), ocBefore = bytes(ocf), undoBefore = bytes(undoPath(p, name)), baseBefore = bytes(basePath(p));
   // checks first and no network inside the write window: a crash between remove and add can no longer lose the provider
   await verifyKind(kindOf(spec.type), kindOf(spec.type).local ? { ...merged, ...localSpec(merged) } : merged, o);
-  try { removeManual(name, p); return await add(merged, p, { ...o, preOverride, skipVerify: true }); }
-  catch (e) { for (const x of FILES) { if (before[x] === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], before[x]); } if (ocBefore) writeFileSync(ocf, ocBefore); if (undoBefore) writeFileSync(undoPath(p, name), undoBefore); if (baseBefore) writeFileSync(basePath(p), baseBefore); throw e; }
+  try { removeManual(name, p); return await addLocked(merged, p, { ...o, preOverride, skipVerify: true }); }
+  catch (e) { for (const x of FILES) { if (before[x] === null) rmSync(p[x], { force: true }); else writeAtomic(p[x], before[x]); } if (ocBefore) writeFileSync(ocf, ocBefore); if (undoBefore) writeFileSync(undoPath(p, name), undoBefore); if (baseBefore) writeFileSync(basePath(p), baseBefore); throw e; }
 }
 /** Restore each file whose bytes still equal what add() left; true when every file was restored. */
 function restoreSnapshot(name, p) {
   let u; try { u = JSON.parse(readFileSync(undoPath(p, name), 'utf8')); } catch { return false; }
   const done = FILES.filter((x) => u[x] && sha(bytes(p[x])) === u[x].post);
-  for (const x of done) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], Buffer.from(u[x].pre, 'base64')); }
+  for (const x of done) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeAtomic(p[x], Buffer.from(u[x].pre, 'base64')); }
   if (done.length === FILES.length) { rmSync(undoPath(p, name), { force: true }); return true; }
   return false;
 }
@@ -244,7 +261,8 @@ function restoreSnapshot(name, p) {
  * Paseo's own "Remove provider" (Settings > Providers) deletes only the Paseo entry. Forget what the hub still records for such a provider
  * (extraProviders, slots, modes, read-only lists, route chain entries), so a removed provider leaves nothing behind and its name can be added again.
  */
-export function reconcile(p = paths()) {
+export const reconcile = (p = paths()) => withLockSync(lockOf(p), () => reconcileLocked(p));
+function reconcileLocked(p) {
   const prov = rd(p.paseo, null)?.agents?.providers; const local = rd(p.local, {});
   if (!prov || !local.extraProviders) return [];
   const gone = Object.entries(local.extraProviders).filter(([n, s]) => { try { return ownish(kindOf(s.type), s) && !prov[n]; } catch { return false; } }).map(([n]) => n);
@@ -258,13 +276,14 @@ export function reconcile(p = paths()) {
  * session mode "read-only" of the base id. Their Paseo entries are kept byte for byte. The three files' exact previous bytes are saved in
  * hub.local.undo-migrate-qwen.json; `migrate({ undo: true })` puts them back while nothing changed since.
  */
-function migrateQwen(p, { undo } = {}) {
+const migrateQwen = (p, o = {}) => withLockSync(lockOf(p), () => migrateQwenLocked(p, o));
+function migrateQwenLocked(p, { undo } = {}) {
   const mu = join(dirname(p.local), 'hub.local.undo-migrate-qwen.json');
   if (undo) {
     let u; try { u = JSON.parse(readFileSync(mu, 'utf8')); } catch { return { undone: false, reason: 'no migration record' }; }
     const stale = FILES.filter((x) => sha(bytes(p[x])) !== u[x].post);
     if (stale.length) return { undone: false, reason: `changed since the migration: ${stale.join(', ')}` };
-    for (const x of FILES) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], Buffer.from(u[x].pre, 'base64')); }
+    for (const x of FILES) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeAtomic(p[x], Buffer.from(u[x].pre, 'base64')); }
     rmSync(mu, { force: true }); return { undone: true };
   }
   const cfg = rd(p.paseo, null); const prov = cfg?.agents?.providers; if (!prov) return { changed: false };
@@ -304,13 +323,14 @@ function migrateQwen(p, { undo } = {}) {
  * in hub.local.json or LLAMA_SERVER_BIN + LAPTOP_MODEL_PATH in the environment) becomes a local-llama provider: same id, label, slots and routes, so the
  * hub starts llama-server on demand (GPU only, no mmap) and stops it when idle again. Idempotent; own exact-undo record hub.local.undo-migrate-locallama.json.
  */
-export function migrateLocalLlama(p = paths(), { undo, env = process.env } = {}) {
+export const migrateLocalLlama = (p = paths(), o = {}) => withLockSync(lockOf(p), () => migrateLocalLlamaLocked(p, o));
+function migrateLocalLlamaLocked(p, { undo, env = process.env } = {}) {
   const mu = join(dirname(p.local), 'hub.local.undo-migrate-locallama.json');
   if (undo) {
     let u; try { u = JSON.parse(readFileSync(mu, 'utf8')); } catch { return { undone: false, reason: 'no migration record' }; }
     const stale = FILES.filter((x) => sha(bytes(p[x])) !== u[x].post);
     if (stale.length) return { undone: false, reason: `changed since the local-llama migration: ${stale.join(', ')}` };
-    for (const x of FILES) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], Buffer.from(u[x].pre, 'base64')); }
+    for (const x of FILES) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeAtomic(p[x], Buffer.from(u[x].pre, 'base64')); }
     rmSync(mu, { force: true }); return { undone: true };
   }
   const local = rd(p.local, {}); const cfg = rd(p.paseo, null); const prov = cfg?.agents?.providers;
@@ -331,13 +351,24 @@ export function migrateLocalLlama(p = paths(), { undo, env = process.env } = {})
   return { changed: true, converted: hit.map(([n]) => n) };
 }
 /** Both one-time moves (older Qwen presets -> user-added providers; managed laptop model -> local-llama). `undo` reverses them newest first. */
+/** Fingerprint of everything a migration reads (the three files and the laptop-model env): when it equals the stored one, nothing can have changed since the last pass found/did its work. */
+const migrateKey = (p, env) => sha(Buffer.from([...FILES.map((x) => sha(bytes(p[x]))), env.LLAMA_SERVER_BIN, env.LAPTOP_MODEL_PATH, env.LAPTOP_PORT].join('|')));
+const markPath = (p) => join(dirname(p.local), 'hub.local.migrated');
+const markedDone = (p, env) => { try { return readFileSync(markPath(p), 'utf8') === migrateKey(p, env); } catch { return false; } };
 export function migrate(p = paths(), { undo, env } = {}) {
-  if (undo) {
-    const l = migrateLocalLlama(p, { undo, env }); if (l.undone === false && l.reason !== 'no migration record') return l;
-    const q = migrateQwen(p, { undo }); return q.undone || !l.undone ? q : { undone: true };
-  }
-  const q = migrateQwen(p); const l = migrateLocalLlama(p, { env });
-  return l.changed ? { ...q, changed: true, localLlama: l.converted } : q;
+  const e = env ?? process.env;
+  if (!undo && markedDone(p, e)) return { changed: false }; // the common case on every route call: three hashes, no lock, no write
+  return withLockSync(lockOf(p), () => {
+    if (undo) {
+      rmSync(markPath(p), { force: true });
+      const l = migrateLocalLlama(p, { undo, env }); if (l.undone === false && l.reason !== 'no migration record') return l;
+      const q = migrateQwen(p, { undo }); return q.undone || !l.undone ? q : { undone: true };
+    }
+    if (markedDone(p, e)) return { changed: false };
+    const q = migrateQwen(p); const l = migrateLocalLlama(p, { env });
+    try { writeAtomic(markPath(p), migrateKey(p, e)); } catch { /* a missing marker only costs one more pass */ }
+    return l.changed ? { ...q, changed: true, localLlama: l.converted } : q;
+  });
 }
 
 /** Added providers for display. The API key is never returned, only keySet. */

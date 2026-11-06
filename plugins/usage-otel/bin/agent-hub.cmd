@@ -29,5 +29,5 @@ node "%~dp0..\..\routing\route.mjs" %rest%
 exit /b %errorlevel%
 
 :cleanup
-node "%~dp0..\..outing\cleanup.mjs" %rest%
+node "%~dp0..\..\routing\cleanup.mjs" %rest%
 exit /b %errorlevel%

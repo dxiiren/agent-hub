@@ -4,7 +4,8 @@
 // Agent CLIs keep their own logins in their config dirs (~/.codex, ~/.claude, qodercli login ...), which need no environment variable.
 // Usage: node scripts/daemon-env.mjs <paseo-binary> <paseo args...>     Extras: AGENT_HUB_ENV_ALLOW (comma list) or "daemonEnvAllow" in config/hub.local.json.
 import { spawnSafe } from "./../plugins/routing/spawn-safe.mjs";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -48,6 +49,11 @@ export function buildDaemonEnv(env, extras = []) {
   return out;
 }
 
+/** Names (never values) of the environment the launcher gave the daemon, recorded at each start so `doctor` can audit what the daemon really received. */
+export const envNamesFile = (env = process.env) => join(env.AGENT_HUB_HOME || env.PASEO_HOME || join(homedir(), ".paseo"), "agent-hub-daemon-env.json");
+/** Names in a recorded list that the allow-list would NOT have passed (a credential-looking or unlisted name = the launcher was bypassed or is broken). */
+export const auditNames = (names, extras = []) => names.filter((n) => buildDaemonEnv({ [n]: "x" }, extras)[n] === undefined);
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 export function localExtras(env = process.env) {
   let cfg = [];
@@ -60,6 +66,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (!bin) { console.error("usage: daemon-env.mjs <paseo-binary> <args...>"); process.exit(2); }
   const env = buildDaemonEnv(process.env, localExtras());
   let child; try { child = spawnSafe(bin, args, { env, stdio: "inherit" }); } catch (e) { console.error(`[FAIL] ${e.message}`); process.exit(1); } // .cmd shims run as node <entry>, never through a shell
+  try { const f = envNamesFile(process.env); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, JSON.stringify({ at: Date.now(), launcherPid: process.pid, args: args.slice(0, 2), names: Object.keys(env).sort() })); } catch { /* diagnostics only */ }
   child.on("exit", (c, s) => process.exit(c ?? (s ? 1 : 0)));
   child.on("error", (e) => { console.error(`[FAIL] ${e.message}`); process.exit(1); });
 }

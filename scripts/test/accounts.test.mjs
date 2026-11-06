@@ -37,7 +37,8 @@ test('login command per kind (posix and windows spelling), never carries a secre
 for (const kind of ['claude', 'codex']) {
   test(`${kind}: --account makes its own provider whose env names the account dir; undo is byte-exact; dir kept unless --purge`, async () => {
     const { t, p, read } = box(); const before = ['local', 'paseo', 'routes'].map((f) => (existsSync(p[f]) ? sha(p[f]) : null));
-    const dir = join(t, 'accts', 'work');
+    const dir = join(t, 'accts', 'work'); const prevRoot = process.env.AGENT_HUB_ACCOUNTS_DIR; process.env.AGENT_HUB_ACCOUNTS_DIR = join(t, 'accts'); // --purge only deletes inside the accounts root
+    try {
     const r = await add({ name: `${kind}-work`, kind, account: 'work', accountDir: dir, model: 'm1', routes: 'code-edit', slots: '1' }, p, cli(['m1']));
     assert.equal(r.accountDir, dir); assert.match(r.login, kind === 'claude' ? /CLAUDE_CONFIG_DIR.*claude auth login/ : /CODEX_HOME.*codex login/); assert.ok(existsSync(dir));
     const e = read('paseo').agents.providers[`${kind}-work`];
@@ -49,6 +50,7 @@ for (const kind of ['claude', 'codex']) {
     assert.ok(existsSync(dir), 'account dir (its login) survives remove');
     await add({ name: `${kind}-work`, kind, account: 'work', accountDir: dir, model: 'm1' }, p, cli(['m1']));
     remove(`${kind}-work`, p, { purge: true }); assert.ok(!existsSync(dir), '--purge deletes it');
+    } finally { if (prevRoot === undefined) delete process.env.AGENT_HUB_ACCOUNTS_DIR; else process.env.AGENT_HUB_ACCOUNTS_DIR = prevRoot; }
   });
 }
 

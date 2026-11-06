@@ -1,7 +1,8 @@
 // `npm test`: runs EVERY suite, never stops at the first failure (a red node suite must not hide the python ones), and exits 1 if any failed.
 // Each suite gets a hermetic environment (scripts/test-env.mjs).
 import { spawnSync } from "node:child_process";
-import { hermeticEnv } from "./test-env.mjs";
+import { hermeticEnv, NEEDS_GITLEAKS } from "./test-env.mjs";
+import { checkScanner } from "../plugins/gate/server/gate.mjs";
 
 const py = process.env.AGENT_HUB_PYTHON ?? "python";
 const steps = [
@@ -17,5 +18,15 @@ for (const [name, cmd, args] of steps) {
   const r = spawnSync(cmd, args, { stdio: "inherit", env: hermeticEnv() });
   if (r.status !== 0) failed.push(`${name} (${r.error ? r.error.message : `exit ${r.status}`})`);
 }
-console.log(failed.length ? `\nFAILED: ${failed.join("; ")}` : "\nALL SUITES PASSED");
-process.exit(failed.length ? 1 : 0);
+// A clone without gitleaks skips the gate/secret suites. The exit code stays 0 (a fresh clone must be able to run `npm test`)
+// unless AGENT_HUB_REQUIRE_FULL=1 (CI), but the end of the output says so loudly: a skip is never read as a full pass.
+let skipped = "";
+try { checkScanner(); } catch { skipped = `${NEEDS_GITLEAKS.size} suites skipped: gitleaks not found`; }
+const strict = process.env.AGENT_HUB_REQUIRE_FULL === "1";
+const NL = "\n";
+if (skipped && !failed.length) {
+  const bar = "!".repeat(78);
+  console.log([NL + bar, `!!! NOT A FULL RUN: ${skipped}. Install gitleaks 8.30.1 or set AGENT_HUB_GITLEAKS.`, "!!! Set AGENT_HUB_REQUIRE_FULL=1 to make this a failure.", bar].join(NL));
+}
+console.log(NL + (failed.length ? `FAILED: ${failed.join("; ")}` : skipped ? `PASSED WITH SKIPS (${skipped})` : "ALL SUITES PASSED"));
+process.exit(failed.length || (skipped && strict) ? 1 : 0);

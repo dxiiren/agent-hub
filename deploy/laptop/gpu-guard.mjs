@@ -69,11 +69,59 @@ export function startRefusal({ pnp, smiOk, usedMiB = 0 }, busyMiB = 600) {
   if (usedMiB > busyMiB) return `GPU busy (${usedMiB} MiB used by another process)`;
   return '';
 }
-/** One reaper tick: 'gone' = nothing of ours left (stop watching), 'stop' = idle past the limit (stop `pid`), 'keep' otherwise. */
-export function reapStep({ own, listener, inflight, now, idleMs }) {
-  const pid = ownedStopTarget(own, listener);
-  if (!pid) return { act: 'gone' };
-  return !inflight && idleExpired(own, now, idleMs) ? { act: 'stop', pid } : { act: 'keep' };
+/** One reaper tick. `ownAlive` = the recorded pid is really running (process check, never the port lookup). 'gone' = the recorded server is dead or nothing is recorded (stop watching);
+ *  'stop' = idle past the limit (stop `pid`); 'keep' otherwise. An unknown listener (model still loading, lookup timed out) or another process on the port is NEVER a reason to stop watching:
+ *  while the recorded pid lives the reaper keeps going, and it stops the pid only when it is idle and the listener is that pid or unknown. */
+export function reapStep({ own, listener, ownAlive, inflight, now, idleMs }) {
+  if (!own?.pid) return { act: 'gone' };
+  if (ownAlive === false) return { act: 'gone' };
+  const mine = listener == null || listener === own.pid; // a different listener = the port was taken by someone else: never stop it, never give up on ours
+  return mine && !inflight && idleExpired(own, now, idleMs) ? { act: 'stop', pid: own.pid } : { act: 'keep' };
+}
+
+export const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
+/** Command line of a pid, or null when it cannot be read. */
+export function cmdLine(pid) {
+  if (win) { const r = sh('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}" -ErrorAction SilentlyContinue).CommandLine`]); return (r.stdout || '').trim() || null; }
+  return (sh('ps', ['-o', 'command=', '-p', String(pid)]).stdout || '').trim() || null;
+}
+/** Is the recorded pid still our llama-server? false = dead or reused by another program; an unreadable command line counts as alive so a probe failure never orphans it. */
+export function ownedAlive(own, { alive = pidAlive, cmd = cmdLine } = {}) {
+  if (!own?.pid || !alive(own.pid)) return false;
+  const c = cmd(own.pid);
+  return c === null || /llama-server/i.test(c);
+}
+/** Stop a recorded server only when its command line is positively a llama-server (never a reused pid). */
+export function stopVerified(own, { cmd = cmdLine, stop = stopPid } = {}) {
+  const c = own?.pid ? cmd(own.pid) : null;
+  if (!c || !/llama-server/i.test(c)) return false;
+  stop(own.pid); return true;
+}
+
+// ---- reaper registration: the reaper writes its pid, so a later launcher (and hub doctor/cleanup) can tell that a server runs without one
+const reaperFile = (port) => join(tmpdir(), `agent-hub-laptop-${port}.reaper`);
+export const writeReaper = (port, pid = process.pid) => writeFileSync(reaperFile(port), String(pid));
+export const readReaper = (port) => { try { return parseInt(readFileSync(reaperFile(port), 'utf8'), 10) || null; } catch { return null; } };
+export const clearReaper = (port, pid = process.pid) => { try { if (readReaper(port) === pid) unlinkSync(reaperFile(port)); } catch { /* gone */ } };
+/** A registered reaper pid that is really a running laptop-reaper (a reused pid is not). */
+export const reaperRunning = (pid, { alive = pidAlive, cmd = cmdLine } = {}) => Boolean(pid) && alive(pid) && /laptop-reaper/.test(cmd(pid) ?? 'laptop-reaper');
+/** True when an owned, running server has no live reaper. */
+export const needsReaper = ({ own, ownAlive, reaperPid, reaperAlive }) => Boolean(own?.pid) && ownAlive === true && !(reaperPid && reaperAlive);
+/** Re-arm the reaper for the server on `port` if it runs without one; true when one was started. Every probe is injectable for tests. */
+export function ensureReaper(port, reaperScript, { spawn = spawnOrphan, own = readOwn(port), reaperPid = readReaper(port), alive = ownedAlive, pAlive = reaperRunning } = {}) {
+  if (!needsReaper({ own, ownAlive: alive(own), reaperPid, reaperAlive: reaperPid ? pAlive(reaperPid) : false })) return false;
+  return Boolean(spawn(process.execPath, [reaperScript, String(port)]));
+}
+/** Hub down / doctor / cleanup: stop every hub-owned llama-server nobody is using (no prompt in flight and idle past `idleMs`; 0 = stop at once, for `down`). Returns what it stopped. */
+export function reapOrphans({ idleMs, now = Date.now(), dir = tmpdir(), stop = stopVerified, alive = ownedAlive, inflightOf = (port) => anyInflight(port, now, dir) } = {}) {
+  const out = [];
+  let files = []; try { files = readdirSync(dir).filter((f) => /^agent-hub-laptop-[0-9]+[.]json$/.test(f)); } catch { return out; }
+  for (const f of files) {
+    const port = f.match(/[0-9]+/)[0]; let own; try { own = JSON.parse(readFileSync(join(dir, f), 'utf8')); } catch { continue; }
+    if (!own?.pid || !alive(own) || inflightOf(port) || (idleMs > 0 && !idleExpired(own, now, idleMs))) continue;
+    if (stop(own)) { out.push({ port, pid: own.pid }); try { unlinkSync(join(dir, f)); } catch { /* gone */ } }
+  }
+  return out;
 }
 
 // ---- ownership: the hub only ever stops a llama-server it started itself (a benchmark's or a teammate's server on the same port is left alone)

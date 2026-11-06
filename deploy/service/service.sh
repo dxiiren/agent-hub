@@ -12,7 +12,7 @@ if [ "$ACTION" = start ] && [ -z "${AGENT_HUB_NO_WEB_PATCH:-}" ] && [ -z "${AGEN
 if ! have systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
   case "$ACTION" in
     start) node "$LAUNCH" "$(command -v paseo)" daemon start --home "$HOME_DIR"; exit $? ;;
-    stop) paseo daemon stop --home "$HOME_DIR"; exit $? ;;
+    stop) paseo daemon stop --home "$HOME_DIR"; rc=$?; [ -z "${AGENT_HUB_PASEO:-}" ] && node "$(dirname "$LAUNCH")/hub.mjs" reap-laptop --now; exit $rc ;;
     status) paseo daemon status --home "$HOME_DIR"; exit $? ;;
     *) echo "[SKIP] no systemd user session here (container or non-systemd host): the daemon runs via 'just up'"; exit 0 ;;
   esac
@@ -38,7 +38,7 @@ UNITEOF
     have loginctl && loginctl enable-linger "$(id -un)" 2>/dev/null && echo "[OK] linger on: starts at boot without a login" ;;
   uninstall) systemctl --user disable --now "$UNIT" 2>/dev/null; paseo daemon stop --home "$HOME_DIR" 2>/dev/null; rm -f "$DIR/$UNIT.service"; systemctl --user daemon-reload; echo "[OK] unit removed" ;;
   start) systemctl --user start "$UNIT" && echo "[OK] started" ;;
-  stop) systemctl --user stop "$UNIT" && echo "[OK] stopped" ;;
+  stop) systemctl --user stop "$UNIT" && echo "[OK] stopped"; [ -z "${AGENT_HUB_PASEO:-}" ] && node "$(dirname "$LAUNCH")/hub.mjs" reap-laptop --now; : ;;
   status) systemctl --user status "$UNIT" --no-pager ;;
   *) echo "usage: service.sh install|uninstall|start|stop|status"; exit 2 ;;
 esac

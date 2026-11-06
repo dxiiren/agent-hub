@@ -63,16 +63,17 @@ test('start is refused when the GPU is missing or busy, allowed when free', () =
 
 test('reaper step: stops only an idle server it started, keeps a busy one, leaves a foreign one', () => {
   const own = { pid: 7, lastUsed: 1000 };
-  assert.deepEqual(reapStep({ own, listener: 7, inflight: false, now: 1000 + 60_001, idleMs: 60_000 }), { act: 'stop', pid: 7 });
-  assert.deepEqual(reapStep({ own, listener: 7, inflight: false, now: 1000 + 59_000, idleMs: 60_000 }), { act: 'keep' });
-  assert.deepEqual(reapStep({ own, listener: 7, inflight: true, now: 1e9, idleMs: 60_000 }), { act: 'keep' });
-  assert.deepEqual(reapStep({ own, listener: 99, inflight: false, now: 1e9, idleMs: 60_000 }), { act: 'gone' });
-  assert.deepEqual(reapStep({ own: null, listener: 7, inflight: false, now: 1e9, idleMs: 1 }), { act: 'gone' });
+  assert.deepEqual(reapStep({ own, listener: 7, ownAlive: true, inflight: false, now: 1000 + 60_001, idleMs: 60_000 }), { act: 'stop', pid: 7 });
+  assert.deepEqual(reapStep({ own, listener: 7, ownAlive: true, inflight: false, now: 1000 + 59_000, idleMs: 60_000 }), { act: 'keep' });
+  assert.deepEqual(reapStep({ own, listener: 7, ownAlive: true, inflight: true, now: 1e9, idleMs: 60_000 }), { act: 'keep' });
+  assert.deepEqual(reapStep({ own, listener: 99, ownAlive: true, inflight: false, now: 1e9, idleMs: 60_000 }), { act: 'keep' }); // someone else's server on the port: not stopped, not abandoned
+  assert.deepEqual(reapStep({ own, listener: 7, ownAlive: false, inflight: false, now: 1e9, idleMs: 60_000 }), { act: 'gone' });
+  assert.deepEqual(reapStep({ own: null, listener: 7, ownAlive: true, inflight: false, now: 1e9, idleMs: 1 }), { act: 'gone' });
 });
 
 test('the reaper process stops a server it started once it has been idle (real process, short idle)', async () => {
   const free = await new Promise((r) => { const s = createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => r(port)); }); });
-  const srv = spawn(process.execPath, ['-e', `require('net').createServer().listen(${free}, '127.0.0.1');`], { stdio: 'ignore', windowsHide: true });
+  const srv = spawn(process.execPath, ['-e', `require('net').createServer().listen(${free}, '127.0.0.1');/*llama-server*/`], { stdio: 'ignore', windowsHide: true });
   const exited = new Promise((r) => srv.on('exit', r));
   try {
     for (let i = 0; i < 50 && listenerPid(free) !== srv.pid; i++) await new Promise((r) => setTimeout(r, 200));

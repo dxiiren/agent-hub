@@ -8,3 +8,5 @@ export function hermeticEnv(base = process.env) {
   return { ...base, HOME: h, USERPROFILE: h, APPDATA: join(h, "AppData", "Roaming"), LOCALAPPDATA: join(h, "AppData", "Local"), XDG_CONFIG_HOME: join(h, ".config"), XDG_DATA_HOME: join(h, ".local", "share"), XDG_CACHE_HOME: join(h, ".cache"),
     PASEO_HOME: join(h, ".paseo"), AGENT_HUB_HOME: join(h, ".paseo"), AGENT_HUB_NO_LOCAL: "1" };
 }
+// Test files that need the gitleaks binary; `npm test` skips them (loudly) when none is found.
+export const NEEDS_GITLEAKS = new Set(["gate.test.mjs", "secrets-table.test.mjs", "secrets-table-0.test.mjs", "secrets-table-1.test.mjs", "secrets-table-2.test.mjs", "argv.test.mjs", "talkback.test.mjs"]);

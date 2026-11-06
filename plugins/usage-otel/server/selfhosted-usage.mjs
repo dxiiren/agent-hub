@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 // import.meta.url is not set when Paseo bundles the plugin, so resolve the repo config lazily and tolerate its absence
 const localConfigPath = (env) => { if (env.AGENT_HUB_LOCAL) return env.AGENT_HUB_LOCAL; if (env.AGENT_HUB_REPO) return join(env.AGENT_HUB_REPO, "config", "hub.local.json"); try { return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json"); } catch { return ""; } };
 const readJson = (f) => { try { if (!f) return {}; return JSON.parse(readFileSync(f, "utf8").replace(/^﻿/, "")); } catch { return {}; } };
+/** o[k] only for an OWN key: provider names are user-chosen ("constructor" must not hit Object.prototype). */
+const own = (o, k) => (o != null && typeof o === "object" && Object.hasOwn(o, k) ? o[k] : undefined);
 const nonRo = (s) => s.replace(/-ro$/, "");
 export const paseoHome = (env = process.env) => env.PASEO_HOME ?? join(homedir(), ".paseo");
 
@@ -21,7 +23,7 @@ export function selfHostedProviders(cfg, local = {}) {
     if (!base && p?.env?.LAPTOP_PORT) base = `http://127.0.0.1:${p.env.LAPTOP_PORT}/v1`; // the hub's laptop llama.cpp launcher serves on a local port
     if (!base) continue;
     const label = String(p?.label || name);
-    out.push({ name, label, kind: kindOfProvider(name, label, base, local), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: local.metricsUrls?.[name] });
+    out.push({ name, label, kind: kindOfProvider(name, label, base, local), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: own(local.metricsUrls, name) });
   }
   return out;
 }
@@ -32,8 +34,8 @@ const hostOfUrl = (u) => { try { return new URL(u).hostname; } catch { return ""
 const LOOPBACK = ["127.0.0.1", "localhost", "::1", "[::1]"];
 /** Provider kind label: local config `kinds[name]` wins; else the display label minus its trailing "where it runs" word (the endpoint host, an IP/hostname, or any last word for a loopback endpoint). */
 export function kindOfProvider(name, label, base, local = {}) {
-  if (local.kinds?.[name]) return String(local.kinds[name]);
-  const t = local.extraProviders?.[name]?.type; // the provider record's own kind (written by `provider add`): wins over guessing from the label
+  if (own(local.kinds, name)) return String(own(local.kinds, name));
+  const t = own(local.extraProviders, name)?.type; // the provider record's own kind (written by `provider add`): wins over guessing from the label
   if (t) return KIND_LABEL[t] ?? t;
   const words = label.trim().split(/\s+/);
   const host = hostOfUrl(base), last = words[words.length - 1];

@@ -175,7 +175,15 @@ async function latestChecks(conf) {
   for (const r of rows) if (r.verdict === 'UPDATE') console.log(`NOTE  ${r.name} is behind: \`just update${r.pinned ? ' --paseo' : ''}\``);
 }
 const retire = (id) => { paseo(['stop', id]); paseo(['archive', id]); };
+/** Stop hub-owned laptop llama-servers nobody uses (orphans of a dead reaper or launcher). `now` = stop at once (hub down); else only after the idle time. */
+async function reapLaptop(now) {
+  try {
+    const { reapOrphans } = await import('../deploy/laptop/gpu-guard.mjs');
+    return reapOrphans({ idleMs: now ? 0 : Number(process.env.LAPTOP_IDLE_MIN || 15) * 60_000 });
+  } catch { return []; }
+}
 async function doctor(deep) {
+  for (const x of await reapLaptop(false)) ok(`stopped an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`);
   try { // the secret scanner: the gate and the reply scan fail closed without it
     const g = await import('../plugins/gate/server/gate.mjs');
     row(true, 'secret scanner gitleaks', g.checkScanner() + ' (pinned ' + g.GITLEAKS_VERSION + ')');
@@ -184,6 +192,11 @@ async function doctor(deep) {
   const { probeDaemon, daemonAdvice } = await import('./daemon-health.mjs');
   const dp = await probeDaemon(PORT);
   row(dp.state === 'up', 'daemon health', `127.0.0.1:${PORT}`);
+  try { // what the launcher gave the daemon: names only, audited against the allow-list (a daemon started without daemon-env.mjs leaves no record)
+    const { envNamesFile, auditNames, localExtras } = await import('./daemon-env.mjs');
+    const rec = JSON.parse(readFileSync(envNamesFile(), 'utf8')); const off = auditNames(rec.names ?? [], localExtras());
+    row(off.length === 0, 'daemon environment is allow-listed', off.length ? `NOT allow-listed: ${off.join(', ')} (restart with just down && just up)` : `${rec.names.length} variable names, none credential-like`);
+  } catch { row(false, 'daemon environment is allow-listed', 'no launch record: start the daemon with `just up` (it goes through scripts/daemon-env.mjs)'); }
   if (dp.state !== 'up') { console.log(daemonAdvice(dp)); process.exit(1); }
   if (process.env.AGENT_HUB_NO_USAGE_STACK !== '1') { // the one usage UI: collector + Prometheus + Grafana must answer
     const { probeStack, usageModeFromFiles } = await import('./usage-stack.mjs');
@@ -280,4 +293,5 @@ else if (cmd === 'plugins') plugins();
 else if (cmd === 'provider') process.exit(await (await import('./provider.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'update') (await import('./tools.mjs')).update(process.argv.includes('--paseo'));
 else if (cmd === 'doctor') await doctor(process.argv.includes('--deep'));
+else if (cmd === 'reap-laptop') { const r = await reapLaptop(process.argv.includes('--now')); console.log(r.length ? `stopped ${r.map((x) => `pid ${x.pid} (port ${x.port})`).join(', ')}` : 'no idle orphaned laptop llama-server'); }
 else { console.log('usage: hub.mjs configure | unconfigure | provider add|list|remove | plugins | mcp add|remove | doctor [--deep] | update [--paseo]'); process.exit(2); }

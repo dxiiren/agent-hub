@@ -35,3 +35,10 @@ test('extras: a URL with user:pass@ is always dropped, credential-looking extras
   assert.deepEqual(Object.keys(buildDaemonEnv(env, 'PWD,DATABASE_URL,HTTP_PROXY,MY_TOKEN')).sort(), ['HTTP_PROXY', 'MY_TOKEN', 'PWD']);
   assert.deepEqual(Object.keys(buildDaemonEnv({ MY_TOKEN: 't', MY_OTHER: 'o', MY_THING_PASS: 'p' }, 'MY_*')), ['MY_OTHER']);
 });
+
+test('auditNames flags names the allow-list would drop, passes the ones it keeps', async () => {
+  const { auditNames } = await import('../daemon-env.mjs');
+  assert.deepEqual(auditNames(['PATH', 'HOME', 'PASEO_HOME', 'LC_ALL']), []);
+  assert.deepEqual(auditNames(['PATH', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'RANDOM_THING']), ['GITHUB_TOKEN', 'OPENAI_API_KEY', 'RANDOM_THING']);
+  assert.deepEqual(auditNames(['MY_VAR'], ['MY_VAR']), [], 'an extra the owner named is allowed');
+});

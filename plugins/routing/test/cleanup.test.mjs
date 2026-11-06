@@ -24,3 +24,10 @@ test("--older-than keeps young agents; --all includes other users' finished agen
   assert.equal(cleanup({ paseo: p, all: true, dry: true }).archived.length, 2);
   assert.ok(!calls.some((c) => c[0] === "archive"));
 });
+
+test("cleanup with an age limit leaves an agent whose age is unreadable; without a limit it is archived", () => {
+  const rows = [{ id: "aaaa1111", status: "idle", created: "???" }];
+  const mk = () => { const calls = []; return { calls, paseo: (a) => { calls.push(a.join(" ")); return a[0] === "ls" ? rows : {}; } }; };
+  const a = mk(); assert.deepEqual(cleanup({ paseo: a.paseo, olderThan: 1800, all: true }).archived, []);
+  const b = mk(); assert.deepEqual(cleanup({ paseo: b.paseo, olderThan: 0, all: true }).archived, ["aaaa1111"]);
+});

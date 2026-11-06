@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
-import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan } from './gpu-guard.mjs';
+import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan, ensureReaper } from './gpu-guard.mjs';
 
 const READ_ONLY = takeReadOnlyFlag(process.argv); // legacy "-ro" twin entry: read-only from the start
 const E = process.env;
@@ -26,6 +26,7 @@ const up = async () => { try { return (await fetch(`http://127.0.0.1:${PORT}/hea
 // any HTTP answer (503 while the model loads) means a server already owns the port: never start a second one
 const listening = async () => { try { await fetch(`http://127.0.0.1:${PORT}/health`, { signal: AbortSignal.timeout(2000) }); return true; } catch { return false; } };
 const touch = () => { const o = readOwn(PORT); if (o) writeOwn(PORT, { ...o, lastUsed: Date.now() }); if (inflight > 0) markInflight(PORT); else clearInflight(PORT); };
+const REAPER = join(dirname(fileURLToPath(import.meta.url)), 'laptop-reaper.mjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const pnp = NV ? pnpStatus() : 'OK';
@@ -54,7 +55,7 @@ async function checkServed() {
   return id;
 }
 async function ensureServer() {
-  if (await up()) { await checkServed(); return; }
+  if (await up()) { await checkServed(); ensureReaper(PORT, REAPER); return; } // a server we own that runs without a reaper (its reaper died) gets a new one
   // one starter at a time: three parallel callers once started six servers without this lock
   if (existsSync(LOCK) && Date.now() - statSync(LOCK).mtimeMs > 180000) unlinkSync(LOCK);
   let owner = true;
@@ -68,9 +69,9 @@ async function ensureServer() {
       const pid = spawnOrphan(E.LLAMA_SERVER_BIN, llamaArgs({ model: E.LAPTOP_MODEL_PATH, ctx: E.LAPTOP_CTX, port: PORT, alias: ALIAS, device: DEVICE }));
       if (!pid) throw new Error('llama-server did not start');
       writeOwn(PORT, { pid, startedAt: Date.now(), lastUsed: Date.now() }); // only this pid is ever stopped by the hub
-      spawnOrphan(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'laptop-reaper.mjs'), PORT]);
+      spawnOrphan(process.execPath, [REAPER, PORT]);
     }
-    for (let i = 0; i < 90; i++) { if (await up()) return; await sleep(2000); }
+    for (let i = 0; i < 90; i++) { if (await up()) { ensureReaper(PORT, REAPER); return; } await sleep(2000); }
     throw new Error('llama-server did not start');
   } finally { if (owner && existsSync(LOCK)) unlinkSync(LOCK); }
 }

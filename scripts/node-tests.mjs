@@ -3,10 +3,9 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { hermeticEnv } from "./test-env.mjs";
+import { hermeticEnv, NEEDS_GITLEAKS } from "./test-env.mjs";
 import { checkScanner } from "../plugins/gate/server/gate.mjs";
 
-const NEEDS_GITLEAKS = new Set(["gate.test.mjs", "secrets-table.test.mjs", "secrets-table-0.test.mjs", "secrets-table-1.test.mjs", "secrets-table-2.test.mjs", "argv.test.mjs", "talkback.test.mjs"]);
 const dirs = ["plugins/gate/test", "plugins/routing/test", "plugins/usage-otel/test", "scripts/test"];
 let scanner = true;
 try { checkScanner(); } catch (e) { scanner = false; console.log(`SKIP: ${[...NEEDS_GITLEAKS].join(", ")} need gitleaks 8.30.1 (${e.message}). Install it: see README, Prerequisites (set AGENT_HUB_GITLEAKS, or unzip into tools/gitleaks/, or put it on PATH).`); }
