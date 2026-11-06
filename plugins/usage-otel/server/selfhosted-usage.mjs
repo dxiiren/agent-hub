@@ -27,7 +27,7 @@ export function selfHostedProviders(cfg, local = {}) {
 }
 
 /** Display name of the endpoint kinds (the provider record stores the kind id; a custom kind shows its id). */
-const KIND_LABEL = { "qwen-code": "Qwen Code", opencode: "OpenCode" };
+const KIND_LABEL = { "qwen-code": "Qwen Code", opencode: "OpenCode", "local-llama": "Local model" };
 const hostOfUrl = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
 const LOOPBACK = ["127.0.0.1", "localhost", "::1", "[::1]"];
 /** Provider kind label: local config `kinds[name]` wins; else the display label minus its trailing "where it runs" word (the endpoint host, an IP/hostname, or any last word for a loopback endpoint). */

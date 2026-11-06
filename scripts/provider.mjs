@@ -4,7 +4,7 @@
 // Writes config/hub.local.json (extraProviders), the routes file (slots, modes, route chains) and the Paseo config.json entries (<name>).
 // Restart the daemon afterwards (`just down && just up`) so Paseo reloads its providers.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { KINDS, RESERVED, KEY_ENV, kindOf, chainToken, discover, modelListed, hubDirOf, displayName, hasAccounts, loginCommand } from './provider-kinds.mjs';
+import { KINDS, LOCAL_DEFAULTS, LOCAL_FIELD_IDS, RESERVED, KEY_ENV, kindOf, chainToken, discover, modelListed, hubDirOf, displayName, hasAccounts, loginCommand } from './provider-kinds.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -23,6 +23,19 @@ export const TYPES = {
   'qwen-code': { command: (repo, s, bin) => [process.execPath, join(repo, 'deploy', 'office', 'office-agent.mjs'), bin, s.url, s.model] },
 };
 const launchCommand = (k, repo, s) => k.launch.map((t) => String(t).replace(/\{(node|repo|url|model)\}/g, (_, x) => ({ node: process.execPath, repo, url: s.url ?? '', model: s.model ?? '' })[x]));
+
+/** The local-llama fields of a spec/args with defaults filled in ('' and undefined fall back), validated. Throws a plain message. */
+export function localSpec(a) {
+  const v = Object.fromEntries(LOCAL_FIELD_IDS.map((id) => [id, String(a[id] ?? '').trim() || LOCAL_DEFAULTS[id] || undefined]));
+  const bad = (m) => { throw new Error(m); };
+  for (const id of ['bin', 'modelFile']) if (!v[id]) bad(`--${id} is required for the local-llama kind`);
+  for (const id of ['bin', 'modelFile', 'heavyLock']) if (v[id] && /["\u0000-\u001f]/.test(v[id])) bad(`--${id} must be a plain path (no quotes or control characters)`);
+  if (!/^\d+$/.test(v.port) || +v.port < 1 || +v.port > 65535) bad('--port must be a number from 1 to 65535');
+  if (!/^\d+$/.test(v.ctx) || +v.ctx < 256) bad('--ctx must be a whole number of tokens (at least 256)');
+  if (!/^[A-Za-z0-9_.:-]+$/.test(v.device)) bad('--device must be a llama-server device name such as CUDA0');
+  if (!/^\d+(\.\d+)?$/.test(v.idleMin) || +v.idleMin <= 0) bad('--idleMin must be a positive number of minutes');
+  return Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined));
+}
 
 export function paths(env = process.env) {
   const home = resolve(env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
@@ -62,6 +75,11 @@ export function entries(name, spec, qwenBin, repo = REPO, hubDir, baseCommand) {
     return { [name]: { extends: 'acp', label, command: cmd } };
   }
   if (!k.own) return {};
+  if (k.local) { // hub-managed llama-server: the launcher reads these (deploy/laptop/laptop-agent.mjs); nothing is started until the first prompt
+    const label = spec.label || displayName(k.label.split(' (')[0], spec.url);
+    return { [name]: { extends: 'acp', label, command: [process.execPath, join(repo, 'deploy', 'laptop', 'laptop-agent.mjs')],
+      env: { LLAMA_SERVER_BIN: spec.bin, LAPTOP_MODEL_PATH: spec.modelFile, QWEN_BIN: qwenBin, LAPTOP_PORT: spec.port, LAPTOP_ALIAS: spec.model, LAPTOP_CTX: spec.ctx, LAPTOP_DEVICE: spec.device, LAPTOP_IDLE_MIN: spec.idleMin, ...(spec.heavyLock ? { HEAVY_LOCK_GLOB: spec.heavyLock } : {}) } } };
+  }
   const env = spec.key ? { [KEY_ENV]: spec.key } : undefined;
   const label = spec.label || displayName(k.label.split(' (')[0], spec.url);
   if (k.type === 'opencode') return { [name]: { extends: 'opencode', label, env: { OPENCODE_CONFIG: join(hubDir, `opencode-${name}.json`), OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_TELEMETRY: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', XDG_CONFIG_HOME: join(hubDir, 'xdg') }, models: [{ id: `${name}/${spec.model}`, label: spec.model, isDefault: true }] } };
@@ -80,7 +98,8 @@ export function parseRoutes(s) {
 }
 
 /** Network / CLI checks of an add or edit: the endpoint answers and lists the model, or the CLI offers it. Done BEFORE any file is touched. */
-async function verifyKind(k, { url, model, key }, { f = fetch, run } = {}) {
+async function verifyKind(k, { url, model, key, bin, modelFile }, { f = fetch, run } = {}) {
+  if (k.local) { for (const [what, x] of [['llama-server program', bin], ['model file', modelFile]]) if (!x || !existsSync(x)) throw new Error(`${what} not found: ${x || '(not set)'}`); return; }
   if (k.own) return checkEndpoint(url, model, f, key);
   const models = await discover(k.type, {}, run ? { run } : {});
   if (!modelListed(model, models)) throw new Error(`model "${model}" is not offered by the ${k.base} CLI (offered: ${models.map((m) => m.id).join(', ')})`);
@@ -88,7 +107,8 @@ async function verifyKind(k, { url, model, key }, { f = fetch, run } = {}) {
 
 export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run, preOverride, skipVerify } = {}) {
   if (!preOverride) reconcile(p);
-  const k = kindOf(a.kind ?? a.type); const type = k.type; const { model, url } = a;
+  const k = kindOf(a.kind ?? a.type); const type = k.type; const { model } = a;
+  const lc = k.local ? localSpec(a) : undefined; const url = k.local ? `http://127.0.0.1:${lc.port}/v1` : a.url;
   let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
   if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
   const readOnly = !(a.readOnly === false || a.readOnly === 'false' || a.readOnly === 'off');
@@ -113,12 +133,12 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   if (local.extraProviders?.[name]) throw new Error(`${name} already exists (remove it first, or use edit)`);
   const cfg = rd(p.paseo, { version: 1 });
   if ((k.own || account) && cfg.agents?.providers?.[name]) throw new Error(`${name} is already a provider in the Paseo config (not added by this tool)`);
-  if (!skipVerify) await verifyKind(k, { url, model, key }, { f, run });
-  const bin = type === 'qwen-code' ? which('qwen') : null; if (type === 'qwen-code' && !bin) throw new Error('qwen CLI not found on PATH');
+  if (!skipVerify) await verifyKind(k, { url, model, key, ...lc }, { f, run });
+  const bin = type === 'qwen-code' || k.local ? which('qwen') : null; if ((type === 'qwen-code' || k.local) && !bin) throw new Error('qwen CLI not found on PATH');
   const routes = rd(p.routes, null); if (!routes) throw new Error(`routes file unreadable: ${p.routes}`);
   const chains = parseRoutes(a.routes);
   const accountDir = account ? resolve(a.accountDir || accountDirOf(type, account)) : undefined;
-  const spec = { type, ...(k.own ? { url } : {}), model, ...(account ? { account, accountDir } : {}), ...(label && (k.own || account) ? { label } : {}), ...(key ? { key } : {}), ...(k.twin && !readOnly ? { readOnly: false } : {}) };
+  const spec = { type, ...(k.own ? { url } : {}), model, ...lc, ...(account ? { account, accountDir } : {}), ...(label && (k.own || account) ? { label } : {}), ...(key ? { key } : {}), ...(k.twin && !readOnly ? { readOnly: false } : {}) };
   const token = chainToken(name, spec);
   for (const { c } of chains) {
     if (!Array.isArray(routes.routes?.[c])) throw new Error(`unknown route type ${c} (known: ${Object.keys(routes.routes || {})})`);
@@ -199,10 +219,10 @@ export async function edit(name, ch, p = paths(), o = {}) {
   const before = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
   const untouched = u && FILES.every((x) => !u[x] || sha(before[x]) === u[x].post);
   const preOverride = untouched ? Object.fromEntries(FILES.map((x) => [x, u[x].pre === null ? null : Buffer.from(u[x].pre, 'base64')])) : undefined;
-  const merged = { name, kind: spec.type, account: spec.account, accountDir: spec.accountDir, url: spec.url, model: spec.model, key: spec.key, label: spec.label, readOnly: spec.readOnly, slots: cur.slots, routes: curRoutes, ...Object.fromEntries(Object.entries(ch).filter(([k, v]) => v !== undefined && v !== '' && !['name', 'kind', 'type'].includes(k))) };
+  const merged = { name, kind: spec.type, account: spec.account, accountDir: spec.accountDir, url: spec.url, model: spec.model, key: spec.key, ...Object.fromEntries(LOCAL_FIELD_IDS.filter((i) => spec[i] !== undefined).map((i) => [i, spec[i]])), label: spec.label, readOnly: spec.readOnly, slots: cur.slots, routes: curRoutes, ...Object.fromEntries(Object.entries(ch).filter(([k, v]) => v !== undefined && v !== '' && !['name', 'kind', 'type'].includes(k))) };
   const ocf = join(hubDirOf(p.paseo), `opencode-${name}.json`), ocBefore = bytes(ocf), undoBefore = bytes(undoPath(p, name)), baseBefore = bytes(basePath(p));
   // checks first and no network inside the write window: a crash between remove and add can no longer lose the provider
-  await verifyKind(kindOf(spec.type), merged, o);
+  await verifyKind(kindOf(spec.type), kindOf(spec.type).local ? { ...merged, ...localSpec(merged) } : merged, o);
   try { removeManual(name, p); return await add(merged, p, { ...o, preOverride, skipVerify: true }); }
   catch (e) { for (const x of FILES) { if (before[x] === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], before[x]); } if (ocBefore) writeFileSync(ocf, ocBefore); if (undoBefore) writeFileSync(undoPath(p, name), undoBefore); if (baseBefore) writeFileSync(basePath(p), baseBefore); throw e; }
 }
@@ -233,7 +253,7 @@ export function reconcile(p = paths()) {
  * session mode "read-only" of the base id. Their Paseo entries are kept byte for byte. The three files' exact previous bytes are saved in
  * hub.local.undo-migrate-qwen.json; `migrate({ undo: true })` puts them back while nothing changed since.
  */
-export function migrate(p = paths(), { undo } = {}) {
+function migrateQwen(p, { undo } = {}) {
   const mu = join(dirname(p.local), 'hub.local.undo-migrate-qwen.json');
   if (undo) {
     let u; try { u = JSON.parse(readFileSync(mu, 'utf8')); } catch { return { undone: false, reason: 'no migration record' }; }
@@ -272,6 +292,47 @@ export function migrate(p = paths(), { undo } = {}) {
   const snap = Object.fromEntries(FILES.map((x) => [x, { pre: pre[x]?.toString('base64') ?? null, post: sha(bytes(p[x])) }]));
   if (!existsSync(mu)) writeFileSync(mu, JSON.stringify(snap));
   return { changed: true, adopted: adopt.map(([id]) => id), removedTwins: twins };
+}
+
+/**
+ * A qwen-code provider that points at this machine's hub-managed laptop model (loopback URL on the legacy `laptopPort`, with `llamaServer` + `laptopModel`
+ * in hub.local.json or LLAMA_SERVER_BIN + LAPTOP_MODEL_PATH in the environment) becomes a local-llama provider: same id, label, slots and routes, so the
+ * hub starts llama-server on demand (GPU only, no mmap) and stops it when idle again. Idempotent; own exact-undo record hub.local.undo-migrate-locallama.json.
+ */
+export function migrateLocalLlama(p = paths(), { undo, env = process.env } = {}) {
+  const mu = join(dirname(p.local), 'hub.local.undo-migrate-locallama.json');
+  if (undo) {
+    let u; try { u = JSON.parse(readFileSync(mu, 'utf8')); } catch { return { undone: false, reason: 'no migration record' }; }
+    const stale = FILES.filter((x) => sha(bytes(p[x])) !== u[x].post);
+    if (stale.length) return { undone: false, reason: `changed since the local-llama migration: ${stale.join(', ')}` };
+    for (const x of FILES) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], Buffer.from(u[x].pre, 'base64')); }
+    rmSync(mu, { force: true }); return { undone: true };
+  }
+  const local = rd(p.local, {}); const cfg = rd(p.paseo, null); const prov = cfg?.agents?.providers;
+  const bin = env.LLAMA_SERVER_BIN || local.llamaServer, modelFile = env.LAPTOP_MODEL_PATH || local.laptopModel, port = String(env.LAPTOP_PORT || local.laptopPort || '');
+  if (!prov || !bin || !modelFile || !port) return { changed: false };
+  const hit = Object.entries(local.extraProviders ?? {}).filter(([n, sp]) => {
+    const c = prov[n]?.command ?? []; let u; try { u = new URL(sp.url); } catch { return false; }
+    return sp.type === 'qwen-code' && ['127.0.0.1', 'localhost'].includes(u.hostname) && u.port === port && /office-agent[.]mjs$/.test(String(c[1])) && c[2];
+  });
+  if (!hit.length) return { changed: false };
+  const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
+  for (const [n, sp] of hit) {
+    const spec = { type: 'local-llama', url: sp.url, model: sp.model, ...localSpec({ bin, modelFile, port, heavyLock: local.heavyLockGlob }), ...(sp.label ? { label: sp.label } : {}) };
+    local.extraProviders[n] = spec; prov[n] = entries(n, spec, prov[n].command[2], REPO)[n];
+  }
+  wr(p.local, local); wr(p.paseo, cfg);
+  writeFileSync(mu, JSON.stringify(Object.fromEntries(FILES.map((x) => [x, { pre: pre[x]?.toString('base64') ?? null, post: sha(bytes(p[x])) }]))));
+  return { changed: true, converted: hit.map(([n]) => n) };
+}
+/** Both one-time moves (older Qwen presets -> user-added providers; managed laptop model -> local-llama). `undo` reverses them newest first. */
+export function migrate(p = paths(), { undo, env } = {}) {
+  if (undo) {
+    const l = migrateLocalLlama(p, { undo, env }); if (l.undone === false && l.reason !== 'no migration record') return l;
+    const q = migrateQwen(p, { undo }); return q.undone || !l.undone ? q : { undone: true };
+  }
+  const q = migrateQwen(p); const l = migrateLocalLlama(p, { env });
+  return l.changed ? { ...q, changed: true, localLlama: l.converted } : q;
 }
 
 /** Added providers for display. The API key is never returned, only keySet. */

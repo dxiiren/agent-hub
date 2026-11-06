@@ -31,18 +31,39 @@ export function judge({ pnp, smiOk, usedMiB = 0, apps = [], serverPid = null, cp
   return '';
 }
 
+const win = process.platform === 'win32';
 export function listenerPid(port) {
+  if (!win) return parseInt(sh('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']).stdout, 10) || null;
   const r = sh('powershell', ['-NoProfile', '-Command', `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`]);
   return parseInt(r.stdout, 10) || null;
 }
 
 export function cpuSeconds(pid) {
+  if (!win) { const t = (sh('ps', ['-o', 'time=', '-p', String(pid)]).stdout || '').trim().split(/[-:]/).map(Number).reverse(); return t.length >= 2 && !t.some(Number.isNaN) ? t[0] + 60 * t[1] + 3600 * (t[2] || 0) + 86400 * (t[3] || 0) : null; }
   const r = sh('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).CPU`]);
   const v = parseFloat(r.stdout);
   return Number.isNaN(v) ? null : v;
 }
 
-export const stopPid = (pid) => sh('powershell', ['-NoProfile', '-Command', `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`]);
+export const stopPid = (pid) => { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } };
+
+/** The llama-server command line: GPU only (every layer offloaded, one device) and NO mmap (`--load-mode none`), so the weights are not kept in system RAM. */
+export function llamaArgs({ model, ctx = '65536', port, alias, device = 'CUDA0' }) {
+  return ['-m', model, '--jinja', '-ngl', '99', '-c', String(ctx), '-np', '1', '-fa', 'on', '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--reasoning', 'off',
+    '--temp', '0.7', '--top-p', '0.8', '--top-k', '20', '--device', device, '--load-mode', 'none', '--host', '127.0.0.1', '--port', String(port), '--alias', alias, '--metrics', '--cache-ram', '0'];
+}
+/** Start verdict: a reason string when the server must NOT be started (GPU missing, nvidia-smi failing, GPU already used by something else), else ''. */
+export function startRefusal({ pnp, smiOk, usedMiB = 0 }, busyMiB = 600) {
+  if (pnp !== 'OK' || !smiOk) return 'GPU missing -> provider disabled';
+  if (usedMiB > busyMiB) return `GPU busy (${usedMiB} MiB used by another process)`;
+  return '';
+}
+/** One reaper tick: 'gone' = nothing of ours left (stop watching), 'stop' = idle past the limit (stop `pid`), 'keep' otherwise. */
+export function reapStep({ own, listener, inflight, now, idleMs }) {
+  const pid = ownedStopTarget(own, listener);
+  if (!pid) return { act: 'gone' };
+  return !inflight && idleExpired(own, now, idleMs) ? { act: 'stop', pid } : { act: 'keep' };
+}
 
 // ---- ownership: the hub only ever stops a llama-server it started itself (a benchmark's or a teammate's server on the same port is left alone)
 const stateFile = (port) => join(tmpdir(), `agent-hub-laptop-${port}.json`);

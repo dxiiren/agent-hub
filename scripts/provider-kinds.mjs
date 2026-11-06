@@ -13,6 +13,20 @@ const ENDPOINT_FIELDS = [
   { id: 'key', label: 'API key (optional)', type: 'secret', help: 'Sent as a Bearer token; stored in the local hub config only' },
 ];
 
+/** Field defaults of the local-llama kind (also the edit/add fallbacks). Paths have none: they come from the user. */
+export const LOCAL_DEFAULTS = { port: '8089', ctx: '65536', device: 'CUDA0', idleMin: '15' };
+const LOCAL_FIELDS = [
+  { id: 'bin', label: 'llama-server program', type: 'path', required: true, help: 'Full path of llama-server (any llama.cpp build that supports --device and --load-mode)' },
+  { id: 'modelFile', label: 'Model file (.gguf)', type: 'path', required: true, help: 'Full path of the GGUF file' },
+  { id: 'model', label: 'Model name', type: 'model', required: true, help: 'The name the server announces (its --alias); you choose it' },
+  { id: 'port', label: `Port (default ${LOCAL_DEFAULTS.port})`, type: 'number', help: 'Local port of the server' },
+  { id: 'ctx', label: `Context size (default ${LOCAL_DEFAULTS.ctx})`, type: 'number', help: 'Tokens; must fit the GPU memory with the model' },
+  { id: 'device', label: `GPU device (default ${LOCAL_DEFAULTS.device})`, type: 'text', help: 'llama-server --device name; CUDA* devices are checked with nvidia-smi before start' },
+  { id: 'idleMin', label: `Stop after idle minutes (default ${LOCAL_DEFAULTS.idleMin})`, type: 'number', help: 'The server is stopped, freeing GPU memory and RAM, after this long without a task' },
+  { id: 'heavyLock', label: 'Do not start while this file pattern exists (optional)', type: 'path', help: 'e.g. /tmp/heavy-run-*.lock; one * wildcard in the file name' },
+];
+export const LOCAL_FIELD_IDS = LOCAL_FIELDS.map((f) => f.id).filter((x) => x !== 'model');
+
 /** How a kind separates ACCOUNTS (one schema entry per kind, read by the CLI, the Settings form and the Usage panel):
  *  by 'config-dir' = the CLI keeps its login in a directory; env (variable) or arg (flag) points it at one directory per account.
  *  by 'endpoint'   = no login: another account is another provider entry with its own Base URL and/or API key.
@@ -23,6 +37,10 @@ const ACCOUNT_ENDPOINT = { by: 'endpoint', usage: 'feed', help: 'Another account
 /** type -> definition. `base` = an installed CLI provider reached as <base>/<model> in route chains (no new Paseo provider is created). */
 export const KINDS = {
   'qwen-code': { aliases: ['qwen'], label: 'Qwen Code (OpenAI-compatible endpoint)', fields: ENDPOINT_FIELDS, modelsFrom: 'endpoint', own: true, twin: true, slots: true, account: ACCOUNT_ENDPOINT,
+    nameRe: /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/, nameHelp: 'lower-case letters, digits, dashes; leave empty to make it from the display name' },
+  // A model server the hub starts itself, once per need, and stops when idle (llama.cpp-compatible llama-server on Windows, macOS or Linux). Launcher: deploy/laptop/laptop-agent.mjs.
+  // GPU only: every layer offloaded to ONE device and NO mmap (`--load-mode none`), so the weights are not kept in system RAM. It refuses to start when the NVIDIA GPU is missing or busy.
+  'local-llama': { label: 'Local model (llama.cpp server, started on demand)', fields: LOCAL_FIELDS, modelsFrom: 'none', own: true, twin: true, slots: true, local: true, account: { none: 'a local model server has no login' },
     nameRe: /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/, nameHelp: 'lower-case letters, digits, dashes; leave empty to make it from the display name' },
   // opencode has no key field: it runs without a hub launcher, so its agent could read a stored key
   opencode: { label: 'OpenCode (OpenAI-compatible endpoint)', fields: ENDPOINT_FIELDS.filter((f) => f.id !== 'key'), modelsFrom: 'endpoint', own: true, twin: false, slots: true, account: ACCOUNT_ENDPOINT,
@@ -64,6 +82,7 @@ export const chainToken = (name, spec) => { const k = kindOf(spec.type); return 
 /** Models the kind offers. Endpoint kinds: GET <url>/v1/models. CLI kinds: `paseo provider models <base> --json` (what the CLI itself lists). */
 export async function discover(type, { url, key, provider } = {}, { f = fetch, run = defaultRun } = {}) {
   const k = kindOf(type);
+  if (k.modelsFrom === 'none') return []; // the user names the model (local-llama)
   if (k.modelsFrom === 'endpoint') {
     if (!/^https?:\/\/[^\s"]+$/.test(url || '')) throw new Error('url must be an http(s) base URL');
     let body;

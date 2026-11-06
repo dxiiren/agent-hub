@@ -3,7 +3,8 @@
 // Refuses with exit 3 and the reason on stderr so the router falls back to the office model.
 //   node laptop-agent.mjs --check        pre-flight only (used by `just doctor`)
 // Env: LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH, QWEN_BIN (required); HEAVY_LOCK_GLOB, LAPTOP_PORT (8089), LAPTOP_CTX (65536: Qwen Code passed 4/10 hard edits at 64k against 1/10 at 32k; 7.5 GB of the 8 GB card),
-//      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b).
+//      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b), LAPTOP_DEVICE (CUDA0; a non-CUDA device skips the NVIDIA guard), LAPTOP_IDLE_MIN (15, read by the reaper).
+// Normally started by a provider of kind `local-llama` (scripts/provider-kinds.mjs), which sets this env.
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { freemem, tmpdir } from 'node:os';
@@ -11,12 +12,14 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
-import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable } from './gpu-guard.mjs';
+import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal } from './gpu-guard.mjs';
 
 const READ_ONLY = takeReadOnlyFlag(process.argv); // legacy "-ro" twin entry: read-only from the start
 const E = process.env;
 const PORT = E.LAPTOP_PORT || '8089';
 const ALIAS = E.LAPTOP_ALIAS || 'qwen35-9b';
+const DEVICE = E.LAPTOP_DEVICE || 'CUDA0';
+const NV = /^cuda/i.test(DEVICE); // the pnp/nvidia-smi guard only applies to an NVIDIA device
 const LOCK = join(tmpdir(), `agent-hub-laptop-${PORT}.lock`);
 const refuse = (m) => { process.stderr.write(`LAPTOP-REFUSED: ${m}\n`); process.exit(3); };
 const up = async () => { try { return (await fetch(`http://127.0.0.1:${PORT}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } };
@@ -25,9 +28,9 @@ const listening = async () => { try { await fetch(`http://127.0.0.1:${PORT}/heal
 const touch = () => { const o = readOwn(PORT); if (o) writeOwn(PORT, { ...o, lastUsed: Date.now() }); if (inflight > 0) markInflight(PORT); else clearInflight(PORT); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const pnp = pnpStatus();
+const pnp = NV ? pnpStatus() : 'OK';
 if (pnp !== 'OK') refuse(`GPU missing -> provider disabled (NVIDIA PnP status ${pnp})`);
-const gpu = smi();
+const gpu = NV ? smi() : { ok: true, usedMiB: 0, apps: [] };
 const used = gpu.usedMiB;
 if (!gpu.ok) refuse('GPU missing -> provider disabled (nvidia-smi fails)');
 
@@ -58,13 +61,10 @@ async function ensureServer() {
   try { closeSync(openSync(LOCK, 'wx')); } catch { owner = false; }
   try {
     if (owner && !(await listening())) {
-      const g = smi();
-      if (pnpStatus() !== 'OK' || !g.ok) throw new Error('GPU missing -> provider disabled');
-      const u = g.usedMiB;
-      if (u > Number(process.env.LAPTOP_BUSY_MIB || 600)) throw new Error(`GPU busy (${u} MiB used by another process)`);
-      const srv = spawn(E.LLAMA_SERVER_BIN, ['-m', E.LAPTOP_MODEL_PATH, '--jinja', '-ngl', '99', '-c', E.LAPTOP_CTX || '65536', '-np', '1', '-fa', 'on',
-        '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--reasoning', 'off', '--temp', '0.7', '--top-p', '0.8', '--top-k', '20',
-        '--device', 'CUDA0', '--load-mode', 'none', '--host', '127.0.0.1', '--port', PORT, '--alias', ALIAS, '--metrics', '--cache-ram', '0'],
+      const g = NV ? smi() : null;
+      const why = g ? startRefusal({ pnp: pnpStatus(), smiOk: g.ok, usedMiB: g.usedMiB }, Number(E.LAPTOP_BUSY_MIB || 600)) : '';
+      if (why) throw new Error(why);
+      const srv = spawn(E.LLAMA_SERVER_BIN, llamaArgs({ model: E.LAPTOP_MODEL_PATH, ctx: E.LAPTOP_CTX, port: PORT, alias: ALIAS, device: DEVICE }),
       { detached: true, stdio: 'ignore', windowsHide: true });
       srv.unref();
       writeOwn(PORT, { pid: srv.pid, startedAt: Date.now(), lastUsed: Date.now() }); // only this pid is ever stopped by the hub
@@ -93,6 +93,7 @@ setInterval(() => { if (inflight > 0) touch(); }, 30000).unref();
 // Runtime watchdog: the card can vanish after sleep while llama-server keeps running on the CPU.
 let strikes = 0; let lastCpu = null; let healthSeen = false;
 setInterval(() => {
+  if (!NV) return;
   const listener = listenerPid(PORT);
   const own = readOwn(PORT);
   const pid = ownedStopTarget(own, listener); // a server this hub did not start is never judged or stopped
