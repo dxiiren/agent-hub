@@ -91,6 +91,7 @@ test("qoder panel report: credits window and balance from the poller summary", (
   assert.equal(r.status, "available");
   assert.equal(r.windows[0].usedPct, 92.2); assert.equal(r.windows[0].tone, "danger"); assert.equal(r.balances[0].limit, 6707);
   assert.equal(r.windows[0].resetsAt, "2026-11-28T16:00:00+00:00"); assert.equal(r.details[0].value, "12.5 credits");
+  assert.notEqual(r.windows[0].label, r.balances[0].label); // the Usage panel showed two "Credits" rows
 });
 test("qoder panel report: unreadable poller summary is an error, not zeros", () => {
   assert.equal(toReport({}).status, "error"); assert.equal(toReport(null).status, "error");

@@ -13,7 +13,7 @@ export function toReport(s) {
   return {
     status: "available",
     planLabel: s.userType ? String(s.userType) : undefined,
-    windows: [{ id: "credits", label: "Credits", shortLabel: "cr", summary: true, usedPct: pct, remainingPct: pct == null ? null : Math.max(0, 100 - pct), resetsAt: s.reset_time ?? null, tone: t }],
+    windows: [{ id: "quota", label: "Monthly quota", shortLabel: "quota", summary: true, usedPct: pct, remainingPct: pct == null ? null : Math.max(0, 100 - pct), resetsAt: s.reset_time ?? null, tone: t }],
     balances: [{ id: "credits", label: "Credits", used, remaining: left, limit, unit: "credits", resetsAt: s.reset_time ?? null, tone: t }],
     ...(typeof s.credits_used_today === "number" ? { details: [{ id: "today", label: "Used today", value: `${s.credits_used_today} credits` }] } : {}),
   };
