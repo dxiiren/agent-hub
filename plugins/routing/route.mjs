@@ -305,8 +305,13 @@ export function inputError(o) {
  * Run a task through the chain. `paseo(args)` is injected (tests use a fake).
  * Returns { used, agentId, status, trace }; used is null when every entry failed.
  */
+/** Session-mode ids a caller may pass with --mode: the ones the routes file names, the read-only tables, and the common ACP ones (routes.knownModes adds more). */
+export const knownModes = (routes = {}) => new Set([routes.mode, ...Object.values(routes.modes ?? {}), ...Object.values(routes.readOnlyModes ?? {}), ...Object.values(READ_ONLY_MODES), ...Object.values(SAFE_MODES).flat(), ...(routes.knownModes ?? []),
+  "default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto", "auto-edit", "auto-review", "yolo", "full-access", "read-only"].filter(Boolean));
+/** An unknown --mode is refused loudly (it used to be dropped silently on read-only types); null when fine or absent. */
+export const modeError = (mode, routes = {}) => (mode === undefined || mode === null || knownModes(routes).has(mode) ? null : `unknown --mode "${mode}": use one of ${[...knownModes(routes)].filter((m) => !m.startsWith("http")).sort().join(", ")} (read-only task types always run read-only whatever --mode says)`);
 export function runRoute(o, paseo, routes, gate = runGate) {
-  const bad = inputError(o); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
+  const bad = inputError(o) ?? modeError(o.mode, routes); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
   const chain = o.provider ? [o.provider] : own(routes.routes, o.type);
   if (!chain) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   if (!chain.length) return { used: null, trace: [{ error: `no provider configured for ${o.type}: add one in Settings > Providers` }] };
@@ -466,6 +471,7 @@ function main(argv) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed
   const routes = loadRoutes();
+  { const me = modeError(opt("--mode"), routes); if (me) { console.error("route: " + me); return 2; } }
   const unmark = markActive(routes, opt("--provider"));
   let res;
   try { res = runRoute({

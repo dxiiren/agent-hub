@@ -4,13 +4,24 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-// import.meta.url is not set when Paseo bundles the plugin, so resolve the repo config lazily and tolerate its absence
-const localConfigPath = (env) => { if (env.AGENT_HUB_LOCAL) return env.AGENT_HUB_LOCAL; if (env.AGENT_HUB_REPO) return join(env.AGENT_HUB_REPO, "config", "hub.local.json"); try { return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json"); } catch { return ""; } };
-const readJson = (f) => { try { if (!f) return {}; return JSON.parse(readFileSync(f, "utf8").replace(/^﻿/, "")); } catch { return {}; } };
+// import.meta.url is not set when Paseo bundles the plugin, so the repo config is searched in every place it can live and its absence is tolerated
+export const paseoHome = (env = process.env) => env.PASEO_HOME ?? join(homedir(), ".paseo");
+export const readJson = (f) => { try { if (!f) return {}; return JSON.parse(readFileSync(f, "utf8").replace(/^﻿/, "")); } catch { return {}; } };
+/** Every place hub.local.json can be, best first: explicit env, the repo env, next to this file, then beside each plugin the Paseo config loads. */
+export function localConfigPaths(env = process.env) {
+  const out = [env.AGENT_HUB_LOCAL, env.AGENT_HUB_REPO && join(env.AGENT_HUB_REPO, "config", "hub.local.json")];
+  try { out.push(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json")); } catch { /* bundled */ }
+  for (const p of Object.values(readJson(join(paseoHome(env), "config.json")).plugins ?? {})) if (p?.path) out.push(join(p.path, "..", "..", "config", "hub.local.json"));
+  return out.filter(Boolean);
+}
+/** THE reader of hub.local.json, used at plugin load AND at every report, so both always see the same provider kinds. */
+export function readLocal(env = process.env) {
+  for (const f of localConfigPaths(env)) { const j = readJson(f); if (Object.keys(j).length) return j; }
+  return {};
+}
 /** o[k] only for an OWN key: provider names are user-chosen ("constructor" must not hit Object.prototype). */
 const own = (o, k) => (o != null && typeof o === "object" && Object.hasOwn(o, k) ? o[k] : undefined);
 const nonRo = (s) => s.replace(/-ro$/, "");
-export const paseoHome = (env = process.env) => env.PASEO_HOME ?? join(homedir(), ".paseo");
 
 /** Providers with an HTTP endpoint, read from the Paseo config (never hard-coded): [{name, label, kind, base, key?, metricsUrl?}]. Read-only twins (-ro) are folded into their base. */
 export function selfHostedProviders(cfg, local = {}) {
@@ -23,9 +34,20 @@ export function selfHostedProviders(cfg, local = {}) {
     if (!base && p?.env?.LAPTOP_PORT) base = `http://127.0.0.1:${p.env.LAPTOP_PORT}/v1`; // the hub's laptop llama.cpp launcher serves on a local port
     if (!base) continue;
     const label = String(p?.label || name);
-    out.push({ name, label, kind: kindOfProvider(name, label, base, local), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: own(local.metricsUrls, name) });
+    out.push({ name, label, kind: kindOfProvider(name, label, base, local, p), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: own(local.metricsUrls, name) });
   }
   return out;
+}
+
+/** Does this provider run the Qwen Code CLI (so its tokens are in a Qwen chat file)? By KIND, never by name: a user-named provider ("lab-box") counts as soon as its record says so.
+ *  True for the built-in qwen-* ids, a hub.local.json record of type qwen-code / local-llama, and any Paseo record launched by the hub's office or laptop launcher. */
+export function usesQwenCli(name, cfg = {}, local = {}) {
+  const n = nonRo(String(name));
+  if (/^qwen/.test(n)) return true;
+  const t = own(local.extraProviders, n)?.type;
+  if (t) return t === "qwen-code" || t === "local-llama";
+  const rec = own(cfg?.agents?.providers, n) ?? own(cfg?.agents?.providers, String(name));
+  return (Array.isArray(rec?.command) ? rec.command : []).some((a) => /(office|laptop)-agent[.]mjs$/.test(String(a)));
 }
 
 /** Display name of the endpoint kinds (the provider record stores the kind id; a custom kind shows its id). */
@@ -33,9 +55,9 @@ const KIND_LABEL = { "qwen-code": "Qwen Code", opencode: "OpenCode", "local-llam
 const hostOfUrl = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
 const LOOPBACK = ["127.0.0.1", "localhost", "::1", "[::1]"];
 /** Provider kind label: local config `kinds[name]` wins; else the display label minus its trailing "where it runs" word (the endpoint host, an IP/hostname, or any last word for a loopback endpoint). */
-export function kindOfProvider(name, label, base, local = {}) {
+export function kindOfProvider(name, label, base, local = {}, rec = {}) {
   if (own(local.kinds, name)) return String(own(local.kinds, name));
-  const t = own(local.extraProviders, name)?.type; // the provider record's own kind (written by `provider add`): wins over guessing from the label
+  const t = own(local.extraProviders, name)?.type ?? (rec?.env?.LAPTOP_PORT ? "local-llama" : undefined); // the record itself says it is the hub's laptop launcher when hub.local.json is not found; the provider record's own kind (written by `provider add`): wins over guessing from the label
   if (t) return KIND_LABEL[t] ?? t;
   const words = label.trim().split(/\s+/);
   const host = hostOfUrl(base), last = words[words.length - 1];
@@ -107,7 +129,7 @@ export async function selfHostedReport(id, { env = process.env, ttlMs = 60_000, 
   const hit = cache.get(id);
   if (hit && now() - hit.at < ttlMs) return hit.r;
   const home = paseoHome(env);
-  const local = readJson(localConfigPath(env));
+  const local = readLocal(env);
   const members = selfHostedProviders(readJson(join(home, "config.json")), local).filter((x) => kindId(x.kind) === id);
   if (!members.length) return { status: "error", error: `provider kind ${id} not configured` };
   const feed = (readFeed ?? (() => { try { return readFileSync(join(env.AGENT_HUB_USAGE_DIR ?? join(home, "usage"), "usage.jsonl"), "utf8"); } catch { return ""; } }))();

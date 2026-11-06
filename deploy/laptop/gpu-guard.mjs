@@ -1,9 +1,9 @@
 // GPU-only guard for the laptop model (owner rule: the model must load 100% on the GPU, never on the CPU).
 // Pure decision logic (judge) plus the Windows/NVIDIA probes. Used by laptop-agent.mjs (start + watchdog).
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { runDir, readState, readStateJson, writeState, tryWriteState, listState, procStart } from '../../plugins/routing/runstate.mjs';
 
 const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 15000, windowsHide: true });
 
@@ -91,17 +91,23 @@ export function ownedAlive(own, { alive = pidAlive, cmd = cmdLine } = {}) {
   const c = cmd(own.pid);
   return c === null || /llama-server/i.test(c);
 }
-/** Stop a recorded server only when its command line is positively a llama-server (never a reused pid). */
-export function stopVerified(own, { cmd = cmdLine, stop = stopPid } = {}) {
-  const c = own?.pid ? cmd(own.pid) : null;
-  if (!c || !/llama-server/i.test(c)) return false;
+const norm = (x) => String(x ?? '').replace(/\\/g, '/').toLowerCase();
+/** Is `pid` still the process we spawned? Its command line holds the exact llama-server binary recorded at spawn AND its start time equals the recorded one (a reused pid has neither). A record without both is never trusted. */
+export function identityOk(own, { cmd = cmdLine, start = procStart } = {}) {
+  if (!own?.pid || !own.bin || !own.procStart) return false;
+  const c = cmd(own.pid); if (!c || !norm(c).includes(norm(own.bin))) return false;
+  return start(own.pid) === own.procStart;
+}
+/** Stop a recorded server only after identityOk (exact binary + start time recorded at spawn). */
+export function stopVerified(own, { cmd = cmdLine, stop = stopPid, start = procStart } = {}) {
+  if (!identityOk(own, { cmd, start })) return false;
   stop(own.pid); return true;
 }
 
 // ---- reaper registration: the reaper writes its pid, so a later launcher (and hub doctor/cleanup) can tell that a server runs without one
-const reaperFile = (port) => join(tmpdir(), `agent-hub-laptop-${port}.reaper`);
-export const writeReaper = (port, pid = process.pid) => writeFileSync(reaperFile(port), String(pid));
-export const readReaper = (port) => { try { return parseInt(readFileSync(reaperFile(port), 'utf8'), 10) || null; } catch { return null; } };
+const reaperFile = (port) => join(runDir(), `agent-hub-laptop-${port}.reaper`);
+export const writeReaper = (port, pid = process.pid) => writeState(reaperFile(port), String(pid));
+export const readReaper = (port) => parseInt(readState(reaperFile(port)) ?? '', 10) || null;
 export const clearReaper = (port, pid = process.pid) => { try { if (readReaper(port) === pid) unlinkSync(reaperFile(port)); } catch { /* gone */ } };
 /** A registered reaper pid that is really a running laptop-reaper (a reused pid is not). */
 export const reaperRunning = (pid, { alive = pidAlive, cmd = cmdLine } = {}) => Boolean(pid) && alive(pid) && /laptop-reaper/.test(cmd(pid) ?? 'laptop-reaper');
@@ -113,11 +119,10 @@ export function ensureReaper(port, reaperScript, { spawn = spawnOrphan, own = re
   return Boolean(spawn(process.execPath, [reaperScript, String(port)]));
 }
 /** Hub down / doctor / cleanup: stop every hub-owned llama-server nobody is using (no prompt in flight and idle past `idleMs`; 0 = stop at once, for `down`). Returns what it stopped. */
-export function reapOrphans({ idleMs, now = Date.now(), dir = tmpdir(), stop = stopVerified, alive = ownedAlive, inflightOf = (port) => anyInflight(port, now, dir) } = {}) {
+export function reapOrphans({ idleMs, now = Date.now(), dir = runDir(), stop = stopVerified, alive = ownedAlive, inflightOf = (port) => anyInflight(port, now, dir) } = {}) {
   const out = [];
-  let files = []; try { files = readdirSync(dir).filter((f) => /^agent-hub-laptop-[0-9]+[.]json$/.test(f)); } catch { return out; }
-  for (const f of files) {
-    const port = f.match(/[0-9]+/)[0]; let own; try { own = JSON.parse(readFileSync(join(dir, f), 'utf8')); } catch { continue; }
+  for (const f of listState(dir, /^agent-hub-laptop-[0-9]+[.]json$/)) { // only regular files we own: a planted or foreign record is never read
+    const port = f.match(/[0-9]+/)[0]; const own = readStateJson(join(dir, f)); if (!own) continue;
     if (!own?.pid || !alive(own) || inflightOf(port) || (idleMs > 0 && !idleExpired(own, now, idleMs))) continue;
     if (stop(own)) { out.push({ port, pid: own.pid }); try { unlinkSync(join(dir, f)); } catch { /* gone */ } }
   }
@@ -125,9 +130,11 @@ export function reapOrphans({ idleMs, now = Date.now(), dir = tmpdir(), stop = s
 }
 
 // ---- ownership: the hub only ever stops a llama-server it started itself (a benchmark's or a teammate's server on the same port is left alone)
-const stateFile = (port) => join(tmpdir(), `agent-hub-laptop-${port}.json`);
-export function readOwn(port) { try { return JSON.parse(readFileSync(stateFile(port), 'utf8')); } catch { return null; } }
-export function writeOwn(port, own) { writeFileSync(stateFile(port), JSON.stringify(own)); }
+const stateFile = (port) => join(runDir(), `agent-hub-laptop-${port}.json`);
+export const readOwn = (port) => readStateJson(stateFile(port));
+export function writeOwn(port, own) { writeState(stateFile(port), own); }
+/** The record of a server just spawned: pid + the exact binary + its start time, so a later stop can prove the pid is still that process. */
+export const ownRecord = (pid, bin, now = Date.now()) => ({ pid, bin, procStart: procStart(pid), startedAt: now, lastUsed: now });
 /** Stop target: the recorded pid, and only while it is still the listener on the port. Else null (foreign server or none). */
 export function ownedStopTarget(own, listener) { return own?.pid && listener === own.pid ? own.pid : null; }
 /** Keep-warm: an owned server is stopped only after idleMs without a prompt. */
@@ -143,10 +150,10 @@ export function modelMatches(id, alias, modelPath) {
 // Every process (other agents, the reaper, the watchdog) reads the same files, so none judges "idle" from its own memory.
 const MARK_TTL = 150_000; // a marker not refreshed for this long belongs to a dead process
 const markPrefix = (port) => `agent-hub-laptop-${port}.inflight.`;
-export const markInflight = (port, pid = process.pid) => writeFileSync(join(tmpdir(), markPrefix(port) + pid), String(Date.now()));
-export const clearInflight = (port, pid = process.pid) => { try { unlinkSync(join(tmpdir(), markPrefix(port) + pid)); } catch { /* already gone */ } };
-export function anyInflight(port, now = Date.now(), dir = tmpdir()) {
-  try { return readdirSync(dir).some((f) => f.startsWith(markPrefix(port)) && now - statSync(join(dir, f)).mtimeMs < MARK_TTL); } catch { return false; }
+export const markInflight = (port, pid = process.pid) => tryWriteState(join(runDir(), markPrefix(port) + pid), String(Date.now()));
+export const clearInflight = (port, pid = process.pid) => { try { unlinkSync(join(runDir(), markPrefix(port) + pid)); } catch { /* already gone */ } };
+export function anyInflight(port, now = Date.now(), dir = runDir()) {
+  try { return listState(dir, new RegExp('^' + markPrefix(port).replace(/[.]/g, '[.]') + '[0-9]+$')).some((f) => now - statSync(join(dir, f)).mtimeMs < MARK_TTL); } catch { return false; }
 }
 /** Truly idle = nobody has a prompt in flight and the shared lastUsed is older than idleMs. */
 export const sharedIdle = (own, inflight, now, idleMs) => !inflight && now - (own?.lastUsed ?? 0) > idleMs;

@@ -131,9 +131,14 @@ test('ownedAlive / stopVerified: a dead pid or a reused pid (not llama-server) i
   assert.equal(ownedAlive({ pid: 7 }, { alive: () => true, cmd: () => 'notepad.exe' }), false, 'pid reused');
   assert.equal(ownedAlive({ pid: 7 }, { alive: () => true, cmd: () => null }), true, 'unreadable command line: assume ours');
   const stopped = [];
-  assert.equal(stopVerified({ pid: 7 }, { cmd: () => 'notepad.exe', stop: (x) => stopped.push(x) }), false);
-  assert.equal(stopVerified({ pid: 7 }, { cmd: () => null, stop: (x) => stopped.push(x) }), false, 'not positively ours: not stopped');
-  assert.equal(stopVerified({ pid: 7 }, { cmd: () => 'llama-server -m x', stop: (x) => stopped.push(x) }), true);
+  const rec = { pid: 7, bin: 'C:/x/llama-server.exe', procStart: 'T1' }, st = (x) => stopped.push(x);
+  assert.equal(stopVerified(rec, { cmd: () => 'notepad.exe', start: () => 'T1', stop: st }), false);
+  assert.equal(stopVerified(rec, { cmd: () => null, start: () => 'T1', stop: st }), false, 'not positively ours: not stopped');
+  assert.equal(stopVerified(rec, { cmd: () => '"C:/other/llama-server.exe" -m x', start: () => 'T1', stop: st }), false, 'another llama-server binary');
+  assert.equal(stopVerified(rec, { cmd: () => '"C:/x/llama-server.exe" -m x', start: () => 'T2', stop: st }), false, 'start time differs = reused pid');
+  assert.equal(stopVerified({ pid: 7 }, { cmd: () => 'llama-server -m x', start: () => 'T1', stop: st }), false, 'record without binary + start time is never trusted');
+  assert.deepEqual(stopped, []);
+  assert.equal(stopVerified(rec, { cmd: () => '"C:/x/llama-server.exe" -m x', start: () => 'T1', stop: st }), true);
   assert.deepEqual(stopped, [7]);
 });
 test('a launcher re-arms a reaper when an owned server runs without one (dead or missing reaper), not otherwise', () => {

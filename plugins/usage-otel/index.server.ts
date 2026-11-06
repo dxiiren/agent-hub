@@ -5,7 +5,7 @@ import { fillRecord, qoderCredits, qoderSession, qwenSession } from "./server/si
 import { join } from "node:path";
 import { z } from "zod";
 import { qoderSummary, toReport } from "./server/qoder-usage.mjs";
-import { paseoHome, selfHostedProviders, selfHostedReport, kindId } from "./server/selfhosted-usage.mjs";
+import { paseoHome, selfHostedProviders, selfHostedReport, kindId, readLocal, readJson, usesQwenCli } from "./server/selfhosted-usage.mjs";
 import { readFileSync } from "node:fs";
 import { accountGroups, groupReport } from "./server/accounts-usage.mjs";
 
@@ -24,7 +24,7 @@ export default function contribute(server: PluginServerContext) {
       const st: any = await mcpCall(MCP, hubPassword(), "get_agent_status", { agentId: event.agent.id });
       const rec = toRecord({ ...st?.snapshot, id: event.agent.id, provider: st?.snapshot?.provider ?? event.agent.provider });
       const sid = st?.snapshot?.runtimeInfo?.sessionId;
-      if (rec.provider.startsWith("qwen")) fillRecord(rec, join(usageDir(), "cursor.json"), { tokens: qwenSession(sid) });
+      if (usesQwenCli(rec.provider, readJson(join(paseoHome(), "config.json")), readLocal())) fillRecord(rec, join(usageDir(), "cursor.json"), { tokens: qwenSession(sid) });
       else if (rec.provider.startsWith("qoder")) {
         const sc = qoderSession(sid), b = await preCredits.get(event.agent.id), a = sc == null ? await qoderCredits() : null; // account poll only when the session transcript has no credits
         fillRecord(rec, join(usageDir(), "cursor.json"), { sessionCredits: sc, credits: a != null && b != null ? a - b : null });
@@ -42,10 +42,7 @@ export default function contribute(server: PluginServerContext) {
     discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
     fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
-  const localPaths = [process.env.AGENT_HUB_LOCAL, process.env.AGENT_HUB_REPO && join(process.env.AGENT_HUB_REPO, "config", "hub.local.json")];
-  try { const cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); for (const p of Object.values<any>(cfg.plugins ?? {})) if (p?.path) localPaths.push(join(p.path, "..", "..", "config", "hub.local.json")); } catch { /* no config */ }
-  let local: any = {};
-  for (const lp of localPaths) { if (!lp) continue; try { local = JSON.parse(readFileSync(lp, "utf8").replace(/^﻿/, "")); break; } catch { /* next */ } }
+  const local: any = readLocal();
   // One usage source (one card) per self-hosted provider KIND, e.g. "Qwen Code": totals first, then a row per endpoint.
   // Read from the Paseo config at plugin load: a provider added later shows up after the plugin is reloaded.
   let cfg: any = {};
@@ -57,7 +54,7 @@ export default function contribute(server: PluginServerContext) {
       id: `selfhosted-${id}`,
       label: kind,
       input: z.object({ id: z.string() }),
-      discover: async () => [{ key: id, label: kind, harness: "Self-hosted", input: { id } }],
+      discover: async () => (selfHostedProviders(readJson(join(paseoHome(), "config.json")), readLocal()).some((x) => kindId(x.kind) === id) ? [{ key: id, label: kind, harness: "Self-hosted", input: { id } }] : []), // no providers of this kind now = no card
       fetch: async (input: { id: string }) => { try { return await selfHostedReport(input.id); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
     });
   }

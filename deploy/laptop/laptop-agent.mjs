@@ -6,13 +6,14 @@
 //      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b), LAPTOP_DEVICE (CUDA0; a non-CUDA device skips the NVIDIA guard), LAPTOP_IDLE_MIN (15, read by the reaper).
 // Normally started by a provider of kind `local-llama` (scripts/provider-kinds.mjs), which sets this env.
 import { spawnSafe } from '../../plugins/routing/spawn-safe.mjs';
-import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
-import { freemem, tmpdir } from 'node:os';
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { freemem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
-import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan, ensureReaper } from './gpu-guard.mjs';
+import { runDir } from '../../plugins/routing/runstate.mjs';
+import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan, ensureReaper, ownRecord } from './gpu-guard.mjs';
 
 const READ_ONLY = takeReadOnlyFlag(process.argv); // legacy "-ro" twin entry: read-only from the start
 const E = process.env;
@@ -20,7 +21,7 @@ const PORT = E.LAPTOP_PORT || '8089';
 const ALIAS = E.LAPTOP_ALIAS || 'qwen35-9b';
 const DEVICE = E.LAPTOP_DEVICE || 'CUDA0';
 const NV = /^cuda/i.test(DEVICE); // the pnp/nvidia-smi guard only applies to an NVIDIA device
-const LOCK = join(tmpdir(), `agent-hub-laptop-${PORT}.lock`);
+const LOCK = join(runDir(), `agent-hub-laptop-${PORT}.lock`);
 const refuse = (m) => { process.stderr.write(`LAPTOP-REFUSED: ${m}\n`); process.exit(3); };
 const up = async () => { try { return (await fetch(`http://127.0.0.1:${PORT}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } };
 // any HTTP answer (503 while the model loads) means a server already owns the port: never start a second one
@@ -59,7 +60,7 @@ async function ensureServer() {
   // one starter at a time: three parallel callers once started six servers without this lock
   if (existsSync(LOCK) && Date.now() - statSync(LOCK).mtimeMs > 180000) unlinkSync(LOCK);
   let owner = true;
-  try { closeSync(openSync(LOCK, 'wx')); } catch { owner = false; }
+  try { if (existsSync(LOCK) && lstatSync(LOCK).isSymbolicLink()) unlinkSync(LOCK); closeSync(openSync(LOCK, 'wx', 0o600)); } catch { owner = false; }
   try {
     if (owner && !(await listening())) {
       const g = NV ? smi() : null;
@@ -68,7 +69,7 @@ async function ensureServer() {
       // outside the launcher's process tree: Paseo's tree kill of an archived/timed-out agent must not take the model server (or its reaper) with it
       const pid = spawnOrphan(E.LLAMA_SERVER_BIN, llamaArgs({ model: E.LAPTOP_MODEL_PATH, ctx: E.LAPTOP_CTX, port: PORT, alias: ALIAS, device: DEVICE }));
       if (!pid) throw new Error('llama-server did not start');
-      writeOwn(PORT, { pid, startedAt: Date.now(), lastUsed: Date.now() }); // only this pid is ever stopped by the hub
+      writeOwn(PORT, ownRecord(pid, E.LLAMA_SERVER_BIN)); // only this pid is ever stopped by the hub
       spawnOrphan(process.execPath, [REAPER, PORT]);
     }
     for (let i = 0; i < 90; i++) { if (await up()) { ensureReaper(PORT, REAPER); return; } await sleep(2000); }

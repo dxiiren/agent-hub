@@ -5,6 +5,7 @@
 // Usage: node scripts/daemon-env.mjs <paseo-binary> <paseo args...>     Extras: AGENT_HUB_ENV_ALLOW (comma list) or "daemonEnvAllow" in config/hub.local.json.
 import { spawnSafe } from "./../plugins/routing/spawn-safe.mjs";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -53,6 +54,25 @@ export function buildDaemonEnv(env, extras = []) {
 export const envNamesFile = (env = process.env) => join(env.AGENT_HUB_HOME || env.PASEO_HOME || join(homedir(), ".paseo"), "agent-hub-daemon-env.json");
 /** Names in a recorded list that the allow-list would NOT have passed (a credential-looking or unlisted name = the launcher was bypassed or is broken). */
 export const auditNames = (names, extras = []) => names.filter((n) => buildDaemonEnv({ [n]: "x" }, extras)[n] === undefined);
+
+/** Credential-looking names among `names` (the SECRETISH rule; PWD alone is the cwd). */
+export const credentialNames = (names) => names.filter((n) => n.toUpperCase() !== "PWD" && SECRETISH.test(n));
+/** Names (never values) of the environment of the RUNNING process `pid`, read from the process itself: Windows via scripts/live-env.ps1 (its PEB), Linux /proc/<pid>/environ, macOS `ps eww`.
+ *  Returns { names } or { error }. Only same-user processes can be read. */
+export function liveEnvNames(pid, { run = spawnSync } = {}) {
+  const n = Number(pid); if (!Number.isInteger(n) || n <= 0) return { error: "no pid" };
+  try {
+    if (process.platform === "win32") {
+      const r = run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(dirname(fileURLToPath(import.meta.url)), "live-env.ps1"), "-ProcessId", String(n)], { encoding: "utf8", timeout: 30000, windowsHide: true });
+      if (r.status !== 0) return { error: String(r.stderr || "powershell failed").trim().split(/\r?\n/)[0].slice(0, 160) };
+      return { names: String(r.stdout).split(/\r?\n/).map((s) => s.trim()).filter(Boolean) };
+    }
+    try { return { names: readFileSync(`/proc/${n}/environ`, "utf8").split(String.fromCharCode(0)).map((kv) => kv.split("=")[0]).filter(Boolean) }; } catch { /* not Linux */ }
+    const r = run("ps", ["eww", "-o", "command=", "-p", String(n)], { encoding: "utf8", timeout: 8000 });
+    const names = [...String(r.stdout).matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=/g)].map((m) => m[1]);
+    return names.length ? { names: [...new Set(names)] } : { error: "environment not readable" };
+  } catch (e) { return { error: String(e.message ?? e).slice(0, 160) }; }
+}
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 export function localExtras(env = process.env) {

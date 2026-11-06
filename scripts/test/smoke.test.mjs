@@ -2,6 +2,7 @@
 // a5acf73 shipped a ReferenceError in laptop-agent.mjs that made every laptop route fail while `npm test` stayed green,
 // because no test loaded the file.
 import test from 'node:test';
+import { runDir } from '../../plugins/routing/runstate.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -49,7 +50,7 @@ test('laptop-agent: a session/prompt runs the whole runtime path (in-flight mark
   let out = ''; let err = '';
   p.stdout.on('data', (d) => { out += d; }); p.stderr.on('data', (d) => { err += d; });
   const exited = new Promise((r) => p.on('exit', (c) => r(c)));
-  const marker = join(tmpdir(), `agent-hub-laptop-${m.port}.inflight.${p.pid}`);
+  const marker = join(runDir(), `agent-hub-laptop-${m.port}.inflight.${p.pid}`);
   try {
     p.stdin.write('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n');
     p.stdin.write('{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{}}\n');

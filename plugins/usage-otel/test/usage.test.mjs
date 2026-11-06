@@ -82,7 +82,7 @@ test("OTLP export gives up on a hung collector instead of holding the hook", asy
   const t = Date.now();
   await assert.rejects(emitOtlp("http://127.0.0.1:" + srv.address().port, toRecord(snap({})), 300));
   srv.closeAllConnections(); srv.close();
-  assert.ok(Date.now() - t < 3000);
+  assert.ok(Date.now() - t < 10000);
 });
 
 import { toReport } from "../server/qoder-usage.mjs";

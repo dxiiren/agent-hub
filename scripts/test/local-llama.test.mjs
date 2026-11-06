@@ -8,7 +8,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { add, edit, remove, migrate, describe } from '../provider.mjs';
 import { kindOf, discover, LOCAL_FIELD_IDS } from '../provider-kinds.mjs';
-import { llamaArgs, startRefusal, reapStep, writeOwn, listenerPid, spawnOrphan } from '../../deploy/laptop/gpu-guard.mjs';
+import { llamaArgs, startRefusal, reapStep, writeOwn, listenerPid, spawnOrphan, ownRecord } from '../../deploy/laptop/gpu-guard.mjs';
 
 const DEPLOY = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'laptop');
 const files = (t) => { const bin = join(t, 'llama-server'), gguf = join(t, 'm.gguf'); writeFileSync(bin, ''); writeFileSync(gguf, ''); return { bin, modelFile: gguf }; };
@@ -78,7 +78,7 @@ test('the reaper process stops a server it started once it has been idle (real p
   try {
     for (let i = 0; i < 50 && listenerPid(free) !== srv.pid; i++) await new Promise((r) => setTimeout(r, 200));
     assert.equal(listenerPid(free), srv.pid, 'test server listens');
-    writeOwn(String(free), { pid: srv.pid, startedAt: Date.now(), lastUsed: Date.now() - 60_000 });
+    writeOwn(String(free), { ...ownRecord(srv.pid, process.execPath), lastUsed: Date.now() - 60_000 });
     const reaper = spawn(process.execPath, [join(DEPLOY, 'laptop-reaper.mjs'), String(free)], { stdio: 'ignore', windowsHide: true, env: { ...process.env, LAPTOP_IDLE_MIN: '0.01', LAPTOP_REAPER_MS: '300' } });
     const r = await Promise.race([exited.then(() => 'stopped'), new Promise((x) => setTimeout(() => x('timeout'), 20_000))]);
     assert.equal(r, 'stopped');

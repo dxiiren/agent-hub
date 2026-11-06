@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeId, safeUrl } from '../plugins/routing/office.mjs';
-import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
+import { READ_ONLY_ENFORCED, RESERVED_NAME_RE } from '../plugins/routing/route.mjs';
 import { writeJsonKeepEol, writeAtomic, readJsonStrict, own } from '../plugins/routing/jsonfile.mjs';
 import { withLock, withLockSync } from '../plugins/routing/lock.mjs';
 
@@ -128,6 +128,7 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
     if (!String(name).startsWith(`${k.base}-`)) throw new Error(`an account provider must be named "${k.base}-<something>" (e.g. ${k.base}-${account})`);
     if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');
   } else if (a.accountDir) throw new Error('--account-dir needs --account');
+  for (const [what, v] of [['name', name], ['account', account]]) if (v && RESERVED_NAME_RE.test(v)) throw new Error(`${what} "${v}" is a Windows device name (con, nul, com1, ...): choose another`);
   if (!k.nameRe.test(name || '') || name.endsWith('-ro') || RESERVED.has(name)) throw new Error(`name must match ${k.nameRe} (${k.nameHelp}; not ending -ro, not one of ${[...RESERVED]})`);
   if (k.own) {
     if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');

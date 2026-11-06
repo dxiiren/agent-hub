@@ -32,6 +32,7 @@ export function cleanup({ paseo, olderThan = 0, all = false, routes = {}, dry = 
 }
 
 const guard = await import("../../deploy/laptop/gpu-guard.mjs").catch(() => null); // optional in a trimmed install
+import { reapAgentOrphans } from "./orphans.mjs";
 
 export function main(argv, env = process.env) {
   const opt = (n) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
@@ -42,6 +43,7 @@ export function main(argv, env = process.env) {
   const r = cleanup({ paseo: withRetry(cliPaseo(home, env)), olderThan, all: argv.includes("--all"), routes: loadRoutes(env), dry: argv.includes("--dry-run") });
   console.log(`${argv.includes("--dry-run") ? "would archive" : "archived"} ${r.archived.length} agent(s), ${r.skipped} left (running, too new or not finished)${r.archived.length ? ": " + r.archived.map((i) => i.slice(0, 8)).join(" ") : ""}`);
   if (!argv.includes("--dry-run") && guard) { try { for (const x of guard.reapOrphans({ idleMs: Number(env.LAPTOP_IDLE_MIN || 15) * 60_000 })) console.log(`stopped an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`); } catch { /* best effort */ } }
+  if (!argv.includes("--dry-run")) { const o = reapAgentOrphans(); if (o.length) console.log(`stopped ${o.length} orphaned agent shell snapshot process(es)`); }
   return 0;
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(main(process.argv.slice(2)));

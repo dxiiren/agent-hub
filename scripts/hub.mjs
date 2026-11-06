@@ -183,6 +183,7 @@ async function reapLaptop(now) {
   } catch { return []; }
 }
 async function doctor(deep) {
+  { const o = (await import('../plugins/routing/orphans.mjs')).reapAgentOrphans(); if (o.length) ok(`stopped ${o.length} orphaned agent shell snapshot process(es)`); }
   for (const x of await reapLaptop(false)) ok(`stopped an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`);
   try { // the secret scanner: the gate and the reply scan fail closed without it
     const g = await import('../plugins/gate/server/gate.mjs');
@@ -197,6 +198,12 @@ async function doctor(deep) {
     const rec = JSON.parse(readFileSync(envNamesFile(), 'utf8')); const off = auditNames(rec.names ?? [], localExtras());
     row(off.length === 0, 'daemon environment is allow-listed', off.length ? `NOT allow-listed: ${off.join(', ')} (restart with just down && just up)` : `${rec.names.length} variable names, none credential-like`);
   } catch { row(false, 'daemon environment is allow-listed', 'no launch record: start the daemon with `just up` (it goes through scripts/daemon-env.mjs)'); }
+  if (dp.state === 'up') try { // the RUNNING daemon process itself (names only), not just what the launcher recorded
+    const { liveEnvNames, credentialNames } = await import('./daemon-env.mjs'); const { listenerPid } = await import('../deploy/laptop/gpu-guard.mjs');
+    const pid = listenerPid(PORT), live = pid ? liveEnvNames(pid) : { error: 'no listener on the daemon port' };
+    if (live.names) { const bad = credentialNames(live.names); row(bad.length === 0, 'running daemon process environment has no credential names', bad.length ? `credential-like names in pid ${pid}: ${bad.join(', ')} (restart with just down && just up)` : `pid ${pid}: ${live.names.length} variable names, none credential-like`); }
+    else console.log(`WARN  running daemon environment not read (${live.error}); the launcher record above still applies`);
+  } catch (e) { console.log(`WARN  running daemon environment check failed: ${String(e.message).slice(0, 120)}`); }
   if (dp.state !== 'up') { console.log(daemonAdvice(dp)); process.exit(1); }
   if (process.env.AGENT_HUB_NO_USAGE_STACK !== '1') { // the one usage UI: collector + Prometheus + Grafana must answer
     const { probeStack, usageModeFromFiles } = await import('./usage-stack.mjs');
@@ -293,5 +300,5 @@ else if (cmd === 'plugins') plugins();
 else if (cmd === 'provider') process.exit(await (await import('./provider.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'update') (await import('./tools.mjs')).update(process.argv.includes('--paseo'));
 else if (cmd === 'doctor') await doctor(process.argv.includes('--deep'));
-else if (cmd === 'reap-laptop') { const r = await reapLaptop(process.argv.includes('--now')); console.log(r.length ? `stopped ${r.map((x) => `pid ${x.pid} (port ${x.port})`).join(', ')}` : 'no idle orphaned laptop llama-server'); }
+else if (cmd === 'reap-laptop') { const r = await reapLaptop(process.argv.includes('--now')); console.log(r.length ? `stopped ${r.map((x) => `pid ${x.pid} (port ${x.port})`).join(', ')}` : 'no idle orphaned laptop llama-server'); const o = (await import('../plugins/routing/orphans.mjs')).reapAgentOrphans(); if (o.length) console.log(`stopped ${o.length} orphaned agent shell snapshot process(es): ${o.join(', ')}`); }
 else { console.log('usage: hub.mjs configure | unconfigure | provider add|list|remove | plugins | mcp add|remove | doctor [--deep] | update [--paseo]'); process.exit(2); }

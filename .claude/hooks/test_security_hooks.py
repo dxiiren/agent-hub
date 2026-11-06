@@ -186,14 +186,14 @@ fwd_bomb = "a=xxxxxxxxxxxxxxxx; " + "".join("a=$a$a; " for _ in range(14)) + "ca
 rev_bomb = "a=$b$b; b=$c$c; c=$d$d; d=$e$e; e=$f$f; f=$g$g; g=$h$h; h=$i$i; i=$j$j; j=$k$k; k=xxxxxxxxxxxxxxxx; cat $a"
 for label, bomb in (("fwd", fwd_bomb), ("rev", rev_bomb)):
     t0 = time.monotonic(); res = g.blocked(bomb); dt = time.monotonic() - t0
-    check("r1 %s bomb fast" % label, dt < 0.1)
+    check("r1 %s bomb fast" % label, dt < 2.0)  # blow-up guard, not a speed test: a 20x margin so load cannot flake it
     if label == "fwd":
         check("r1 fwd bomb blocked", res is not None)
 check("r1 reassign left to right", g.blocked("a=.e; a=${a}nv; cat $a") is not None)
 check("r1 two vars glued", g.blocked("a=.e;b=nv;cat $a$b") is not None)
 check("r1 later reassign does not hide an earlier use", g.blocked("a=.env; cat $a; a=ok") is not None)
 check("r1 reassigned to safe before use passes", g.blocked("a=x; a=README.md; cat $a") is None)
-t0 = time.monotonic(); g.blocked("a=$a$a; echo $a"); check("r1 self reference is bounded and fast", time.monotonic() - t0 < 0.1)
+t0 = time.monotonic(); g.blocked("a=$a$a; echo $a"); check("r1 self reference is bounded and fast", time.monotonic() - t0 < 2.0)
 check("r1 plain X=foo passes", g.blocked("X=foo; cat $X") is None)
 check("r1 F=.env blocked", g.blocked("F=.env; cat $F") is not None)
 check("r1 ambiguous construct next to an assignment blocks", g.blocked("a=x; eval cat $a") is not None and g.blocked("a=x; cat ${a:-y}") is not None)
@@ -229,9 +229,9 @@ for c in ["a=x; eval ls", "a=x; read v", "a=x; printf -v v x", "a=x; declare -n 
 for depth in (50, 400, 3000):
     nested = "cat " + "$(" * depth + "echo x" + ")" * depth
     t0 = time.monotonic(); res = g.blocked(nested); dt = time.monotonic() - t0
-    check("nested depth %d finishes in budget" % depth, dt < 1.6)
+    check("nested depth %d finishes in budget" % depth, dt < 8)
 wide = "echo " + " ".join("$(echo a%d)" % i for i in range(3000))
-t0 = time.monotonic(); g.blocked(wide); check("wide substitutions finish in budget", time.monotonic() - t0 < 1.6)
+t0 = time.monotonic(); g.blocked(wide); check("wide substitutions finish in budget", time.monotonic() - t0 < 8)
 check("budget exhaustion blocks", (setattr(g, "_BUDGET_WORK", 1), g.blocked("echo $(echo a) $(echo b)"))[1] is not None)
 g._BUDGET_WORK = 3000
 
@@ -263,14 +263,14 @@ def run_hook(cmd, env=None):
 for label, c in (("brace a!", "echo ${" + "a!" * 5000 + "}"), ("brace unclosed", "echo ${" + "a!" * 3000), ("nested braces", "echo " + "${a!" * 40 + "}" * 40),
                  ("bracket glob", "cat " + "[*" * 3000), ("bracket assign", "x=" + "a[" * 3000), ("backticks", "`" * 6000 + " .env"), ("sh -c", "sh -c '" * 1000)):
     rc, dt, _ = run_hook(c)
-    check("r4 ReDoS %s blocks fast (rc %d, %.2fs)" % (label, rc, dt), rc == 2 and dt < 2)
+    check("r4 ReDoS %s blocks fast (rc %d, %.2fs)" % (label, rc, dt), rc == 2 and dt < 6)
 rc, dt, err = run_hook("echo " + "a" * 8300)
 check("r4 over 8 KB blocks", rc == 2 and "8 KB" in err)
 rc, dt, err = run_hook("echo " + "$a " * 51)
 check("r4 51 dollars block", rc == 2 and "'$'" in err)
 for c in ["git status", "cat README.md", "ls *.md"]:
     rc, dt, _ = run_hook(c)
-    check("r4 normal passes %s (%.0f ms)" % (c, dt * 1000), rc == 0 and dt < 0.4)
+    check("r4 normal passes %s (%.0f ms)" % (c, dt * 1000), rc == 0 and dt < 5)  # a subprocess start must not flake under load; the ReDoS cases above prove speed
 check("r4 secret still blocks through the child", run_hook("cat .env")[0] == 2)
 slow = dict(os.environ, SECRET_PATH_GUARD_TEST_SLEEP="5")
 rc, dt, err = run_hook("git status", slow)

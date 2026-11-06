@@ -2,7 +2,8 @@
 // (newest version within a family, e.g. latest-qwen-max), opencode/office@latest (served office model).
 // Resolved at dispatch to the highest version the provider lists; results are cached 10 min in a temp file (route.mjs is a new process per task).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
+import { runDir, readStateJson, tryWriteState } from "./runstate.mjs";
 import { join } from "node:path";
 import { servedModelSync, syncOpencode } from "./office.mjs";
 
@@ -79,12 +80,12 @@ const localCfg = () => { if (process.env.AGENT_HUB_NO_LOCAL === "1") return {}; 
 /** Cached resolve: a failure (provider list down) falls back to the last cached value, else the alias fails the entry. */
 export function resolveCached(entry, paseo, env = process.env, now = Date.now()) {
   if (!isAlias(entry)) return entry;
-  const file = env.AGENT_HUB_RESOLVE_CACHE ?? join(tmpdir(), "agent-hub-resolve-cache.json");
-  let c = {}; try { c = JSON.parse(readFileSync(file, "utf8")); } catch { /* none */ }
+  const file = env.AGENT_HUB_RESOLVE_CACHE ?? join(runDir(env), "agent-hub-resolve-cache.json");
+  const c = readStateJson(file) ?? {};
   if (c[entry] && now - c[entry].at < TTL) return c[entry].v;
   try {
     const v = resolveEntry(entry, paseo, env);
-    c[entry] = { v, at: now }; try { writeFileSync(file, JSON.stringify(c)); } catch { /* cache is optional */ }
+    c[entry] = { v, at: now }; tryWriteState(file, c);
     return v;
   } catch (e) { if (c[entry]) return c[entry].v; throw e; }
 }
