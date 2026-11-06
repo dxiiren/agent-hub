@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,4 +52,26 @@ test('deploy/shared/entrypoint.sh passes bash -n', () => {
   if (!bash) return;
   const r = spawnSync(bash, ['-n', join(ROOT, 'deploy', 'shared', 'entrypoint.sh').replaceAll(String.fromCharCode(92), '/')], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
+});
+
+test('agent-hub CLI: doctor is a subcommand that points at scripts/hub.mjs, and the usage line lists it', () => {
+  const bin = join(ROOT, 'plugins', 'usage-otel', 'bin');
+  for (const f of ['agent-hub', 'agent-hub.cmd']) {
+    const src = readFileSync(join(bin, f), 'utf8');
+    assert.match(src, /doctor/);
+    assert.ok(existsSync(resolve(bin, '..', '..', '..', 'scripts', 'hub.mjs')));
+  }
+  if (!WIN) {
+    const r = spawnSync('sh', [join(bin, 'agent-hub'), 'bogus'], { encoding: 'utf8' });
+    assert.equal(r.status, 2); assert.match(r.stderr, /agent-hub doctor/);
+  }
+});
+
+test('agent-hub.cmd: the subcommand word is cut off the arguments (SHIFT does not change %*) and the exit code is the child\'s', { skip: !WIN }, () => {
+  const cmd = join(ROOT, 'plugins', 'usage-otel', 'bin', 'agent-hub.cmd');
+  const run = (...a) => spawnSync(cmd, a, { encoding: 'utf8', shell: true });
+  const bad = run('route', 'sometype', '"two words"', '--cwd', 'C:\agent-hub-no-such-dir');
+  assert.equal(bad.status, 2, 'route.mjs exits 2 for a missing --cwd; the .cmd must not turn it into 0');
+  assert.match(bad.stderr, /--cwd C:\agent-hub-no-such-dir is not an existing folder/, 'route.mjs must see type/prompt/options, not a leading "route"');
+  assert.equal(run('bogus').status, 2);
 });

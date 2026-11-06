@@ -118,7 +118,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p class="lead">Agent Hub lets any AI client hand a task to any agent provider and get a verdict plus a diff back. It is configuration and plugins on top of the <a href="https://github.com/getpaseo/paseo">Paseo</a> agent daemon, with no change to Paseo's own code. This guide is read from the code and config in the repository: what runs, in what order, and why.</p>
 <a class="btn p" href="#life">Follow one task</a><a class="btn" href="https://github.com/dxiiren/agent-hub">Source on GitHub</a>
 <div class="cards">
-<div class="card"><b>Plugins, 0 core diff</b><span>A gate plugin, a usage plugin and a routing wrapper on Paseo 0.15.0 (pinned by the installer).</span></div>
+<div class="card"><b>Plugins, 0 core diff</b><span>A gate plugin, a usage plugin and a routing wrapper on Paseo 0.15.2 (pinned by the installer).</span></div>
 <div class="card"><b>Two doors</b><span>MCP at <code>/mcp/agents</code>, or the <code>paseo</code> CLI. Five clients tested as callers.</span></div>
 <div class="card"><b>Counts only</b><span>Tokens and credits are recorded. Prompts and session ids never leave the machine in metrics.</span></div>
 </div>
@@ -154,7 +154,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <h3>The pieces and where they live</h3>
 <div class="tbl"><table>
 <tr><th>Piece</th><th>Where</th><th>Job</th></tr>
-<tr><td>Paseo daemon</td><td>installed by <code>npm i -g @getpaseo/cli@0.15.0</code></td><td>Runs agents, makes worktrees, hosts plugins, serves MCP and the web UI</td></tr>
+<tr><td>Paseo daemon</td><td>installed by <code>npm i -g @getpaseo/cli@0.15.2</code></td><td>Runs agents, makes worktrees, hosts plugins, serves MCP and the web UI</td></tr>
 <tr><td>Config writer</td><td><code>scripts/hub.mjs</code></td><td><code>configure</code>, <code>mcp add|remove</code>, <code>plugins</code>, <code>doctor</code>, <code>unconfigure</code></td></tr>
 <tr><td>Routing wrapper</td><td><code>plugins/routing/route.mjs</code></td><td>Task type to ordered provider chain, slot check, fallback, gate request</td></tr>
 <tr><td>Gate plugin</td><td><code>plugins/gate/</code></td><td>Hook on <code>agent.turn.after</code>; checks the diff, re-prompts once</td></tr>
@@ -390,7 +390,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Both are idempotent. <code>setup.sh --check</code> (or <code>--dry-run</code>) reports without changing anything.</p>
 <ol>
 <li>Install or check Git, Node 20+, Claude Code, uv, just, gh.</li>
-<li>Install Paseo at the pinned version (<code>0.15.0</code>) with npm. The plugins declare <code>"paseo": "&gt;=0.15.0"</code>.</li>
+<li>Install Paseo at the pinned version (<code>0.15.2</code>) with npm. The plugins declare <code>"paseo": "&gt;=0.15.0"</code>.</li>
 <li>Note which agent CLIs exist (<code>codex</code>, <code>claude</code>, <code>qodercli</code>, <code>qwen</code>, <code>opencode</code>). A provider is registered only for a CLI that is present; each developer logs in to their own.</li>
 <li><code>hub.mjs configure</code>: write the daemon config (loopback, MCP on, <code>injectIntoAgents</code> on, bcrypt hash), the providers and wrappers. Host-specific values come from environment variables or <code>config/hub.local.json</code> (git-ignored); a provider whose input is missing is skipped with a line saying why.</li>
 <li><code>hub.mjs mcp add</code>: register <code>agent-hub</code> in each installed client (<code>-NoMcp</code> / <code>--no-mcp</code> skips).</li>
@@ -407,7 +407,7 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <tr><td><code>just down</code></td><td><em>Disable</em> the task and stop it, then <code>paseo daemon stop</code>. Disabling matters: otherwise the every-minute trigger would revive the daemon</td></tr>
 <tr><td><code>just status</code></td><td>Task last-run info plus <code>paseo daemon status</code></td></tr>
 <tr><td><code>just plugins</code></td><td>Set <code>pluginsEnabled</code> in the daemon config and install the gate and usage plugins (daemon must be running)</td></tr>
-<tr><td><code>just doctor [--deep]</code></td><td>PASS/FAIL per check and per provider; <code>--deep</code> also runs one tiny task ("reply OK") on each provider and checks the agent's own line</td></tr>
+<tr><td><code>just doctor [--deep]</code></td><td>PASS/FAIL per check and per provider; <code>just doctor --deep</code> (also <code>agent-hub doctor --deep</code>) also runs one tiny task ("reply OK") on each provider and checks the agent's own line</td></tr>
 <tr><td><code>just mcp-add</code> / <code>mcp-remove</code></td><td>Register or remove the <code>agent-hub</code> client entries</td></tr>
 <tr><td><code>just uninstall</code></td><td>Service, MCP entries, providers, password hash and secret. Paseo and your agent CLIs stay</td></tr>
 <tr><td><code>just test</code> / <code>just scan</code></td><td><code>just test</code> runs the full suite (config-template check, node and python tests, hook tests); <code>just scan</code> scans for private hosts and secrets</td></tr>

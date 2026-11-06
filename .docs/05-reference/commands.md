@@ -17,7 +17,7 @@ dependency install is `deps`.
 | `lint` | `npm run lint`: the same config check | Before every commit |
 | `build` | `npm run build`: the same config check | Before a PR |
 | `scan` | `npm run scan`: `scripts/scan.mjs` finds internal hosts, paths and secrets in tracked files | Before every push |
-| `doctor` | PASS/FAIL per check and provider, resolved `latest` aliases, served office model ids, the laptop GGUF and its date, and every CLI's installed vs latest published version (read only); `--deep` runs one tiny task per provider | After any change, weekly |
+| `doctor` | PASS/FAIL per check and provider, resolved `latest` aliases, served office model ids, the laptop GGUF and its date, and every CLI's installed vs latest published version (read only); `just doctor --deep` (or `agent-hub doctor --deep`) runs one tiny task per provider | After any change, weekly |
 | `update` | Update each CLI that is behind (Codex, Claude Code, Qwen Code, OpenCode, qodercli). Paseo stays pinned unless `just update --paseo` (decision 38: the fork is rebased per release). Manual only, never in the background | When `doctor` says UPDATE |
 | `claudex` | Claude Code, all permissions, Sonnet | AI-assisted dev |
 | `claudeo` | Same on Opus | Deep design work |

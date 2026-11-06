@@ -45,7 +45,7 @@ elif [ -f .mcp.json.stub ]; then
 fi
 
 # ---- Paseo daemon (pinned)
-PASEO_VERSION=0.15.0
+PASEO_VERSION=0.15.2
 HAVE_PASEO="$(paseo --version 2>/dev/null | head -n 1)"
 if [ "$HAVE_PASEO" = "$PASEO_VERSION" ]; then ok "paseo $HAVE_PASEO present"
 elif [ "$DRY" -eq 1 ]; then inst "paseo $PASEO_VERSION would be installed via npm (found: '${HAVE_PASEO}')"

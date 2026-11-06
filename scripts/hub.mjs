@@ -83,7 +83,7 @@ function bcrypt() {
   for (const p of [g && join(g, '@getpaseo', 'cli', 'node_modules', 'bcryptjs'), g && join(g, 'bcryptjs'), 'bcryptjs']) {
     try { return createRequire(import.meta.url)(p); } catch { /* try next */ }
   }
-  throw new Error('bcryptjs not found; install Paseo first (npm i -g @getpaseo/cli@0.15.0)');
+  throw new Error('bcryptjs not found; install Paseo first (npm i -g @getpaseo/cli@0.15.2)');
 }
 
 // ---------- GPU fit (decision 35): the 9B model needs about 6.3 GB, so the card must have >= 7.5 GiB total

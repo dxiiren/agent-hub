@@ -1,6 +1,6 @@
 # One image for every developer container: Paseo daemon + the agent CLIs + tea. Versions are pinned (ARG).
 FROM node:22-bookworm-slim
-ARG PASEO_VERSION=0.15.0
+ARG PASEO_VERSION=0.15.2
 ARG CODEX_VERSION=0.166.0
 ARG CLAUDE_VERSION=2.1.318
 ARG OPENCODE_VERSION=1.19.5

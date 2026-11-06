@@ -2,7 +2,7 @@
 
 `just install` (Windows: `setup.ps1`, Linux/macOS: `setup.sh`) is safe to re-run. It does, in order:
 
-1. Checks Git, Node, Claude Code, uv, just, gh; installs Paseo 0.15.0 (pinned) with npm.
+1. Checks Git, Node, Claude Code, uv, just, gh; installs Paseo 0.15.2 (pinned) with npm.
 2. Checks which agent CLIs exist (codex, claude, qodercli, qwen, opencode). A provider is registered only for a CLI that is installed.
 3. `scripts/hub.mjs configure`: writes the Paseo `config.json` (bind 127.0.0.1, `injectIntoAgents=true`, a generated daemon password stored as a bcrypt hash; the plain secret stays in `<paseo home>/agent-hub-secret`, never in the repo) and the providers:
    - `codex` (gpt-6.1-terra and gpt-6.1-sol only), `claude-clean` (Claude with an empty MCP set), `qoder` (`qodercli --acp`), `qwen-code` (office model, needs `OFFICE_QWEN_URL`), `opencode` (`OPENCODE_DISABLE_MODELS_FETCH=1`), `qwen-laptop` (only when a GPU with 7.5 GiB or more is present and `LLAMA_SERVER_BIN` / `LAPTOP_MODEL_PATH` are set).
@@ -12,7 +12,7 @@
 
 6. Plugins (daemon running): `just plugins` sets `pluginsEnabled` and installs the gate and usage plugins. The service task runs `deploy/service/daemon-run.ps1`, which gives the daemon its plugin environment (`AGENT_HUB_MCP`, `AGENT_HUB_ROUTES` = `config/routes/routes.local.json`, `AGENT_HUB_OTLP`, `AGENT_HUB_POLLER_DIR`) and puts Git Bash first on `PATH` so gates that run hooks do not pick the WSL `bash.exe`.
 
-Daily commands: `just up`, `just down`, `just status`, `just plugins`, `just doctor` (PASS/FAIL per check and provider; `--deep` also runs one tiny task on each provider), `just uninstall`.
+Daily commands: `just up`, `just down`, `just status`, `just plugins`, `just doctor` (PASS/FAIL per check and provider; `just doctor --deep` also runs one tiny task on each provider; the same thing is `agent-hub doctor --deep`), `just uninstall`.
 
 Test overrides (never touch your real configs): `AGENT_HUB_HOME` (Paseo home), `AGENT_HUB_PORT`, `AGENT_HUB_CLIENT_ROOT` (every client config goes under that folder), `AGENT_HUB_TASK` (task name).
 

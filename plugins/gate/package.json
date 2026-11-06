@@ -4,5 +4,5 @@
   "version": "0.1.0",
   "type": "module",
   "files": ["paseo-plugin.json", "OVERVIEW.md", "index.server.ts", "server/"],
-  "devDependencies": { "@getpaseo/plugin": "0.15.0", "typescript": "^5.9.3" }
+  "devDependencies": { "@getpaseo/plugin": "0.15.2", "typescript": "^5.9.3" }
 }

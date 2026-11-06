@@ -213,7 +213,7 @@ if (Test-Path $mcpJson) {
 }
 
 # ---------- 9. Paseo daemon (pinned) ----------
-$PaseoVersion = '0.15.0'
+$PaseoVersion = '0.15.2'
 Refresh-Path
 $have = if (Test-Command "paseo") { ((& paseo --version 2>&1) | Select-Object -First 1).ToString().Trim() } else { '' }
 if ($have -eq $PaseoVersion) {

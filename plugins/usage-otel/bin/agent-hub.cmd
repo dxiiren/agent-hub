@@ -1,5 +1,20 @@
 @echo off
-if /i "%~1"=="usage" (python -S -E "%~dp0agent_hub_usage.py" %* & exit /b %errorlevel%)
-if /i "%~1"=="route" (shift & node "%~dp0..\..\routing\route.mjs" %* & exit /b %errorlevel%)
-echo usage: agent-hub usage --session ID [--json] ^| agent-hub route TYPE "prompt" [opts] 1>&2
+setlocal
+set "sub=%~1"
+set "rest="
+rem SHIFT does not change %%*: cut the subcommand word off the raw argument string (quotes inside it stay intact)
+for /f "tokens=1,* delims= " %%a in ("%*") do set "rest=%%b"
+if /i "%sub%"=="usage" goto usage
+if /i "%sub%"=="doctor" goto doctor
+if /i "%sub%"=="route" goto route
+echo usage: agent-hub usage --session ID [--json] ^| agent-hub doctor [--deep] ^| agent-hub route TYPE "prompt" [opts] 1>&2
 exit /b 2
+:usage
+python -S -E "%~dp0agent_hub_usage.py" %*
+exit /b %errorlevel%
+:doctor
+node "%~dp0..\..\..\scripts\hub.mjs" doctor %rest%
+exit /b %errorlevel%
+:route
+node "%~dp0..\..\routing\route.mjs" %rest%
+exit /b %errorlevel%

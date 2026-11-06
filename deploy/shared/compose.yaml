@@ -4,7 +4,7 @@ name: agenthub-shared
 services:
   dev1:
     build: .
-    image: agenthub-paseo:0.15.0
+    image: agenthub-paseo:0.15.2
     container_name: agenthub-shared-dev1
     restart: unless-stopped
     env_file: [env/dev1.env]
@@ -12,7 +12,7 @@ services:
     volumes: ["dev1_home:/home/paseo"]
     networks: [net_dev1]
   dev2:
-    image: agenthub-paseo:0.15.0
+    image: agenthub-paseo:0.15.2
     container_name: agenthub-shared-dev2
     restart: unless-stopped
     env_file: [env/dev2.env]

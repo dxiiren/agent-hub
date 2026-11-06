@@ -20,7 +20,7 @@ const compose = [
   ...devs.flatMap((d, i) => [
     `  ${d}:`,
     ...(i === 0 ? ['    build: .'] : []),
-    '    image: agenthub-paseo:0.15.0',
+    '    image: agenthub-paseo:0.15.2',
     `    container_name: agenthub-shared-${d}`,
     '    restart: unless-stopped',
     `    env_file: [env/${d}.env]`,
