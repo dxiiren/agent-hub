@@ -18,7 +18,7 @@ test("allowed: public keys, certificates, normal code and prose, also over line 
     "a risk-based approach to the deployment of the task-force", "The bearer of the message described the secret recipe at length" + LF + "and the token economy",
     "ask-the-team-about-their-schedule-for-the-release", "see eyJ-prefixed values in the docs", "a.b.c version 1.2.3", "const secret = getSecretFromTheEnvironment();",
     "function parse(a) {" + LF + "  return a.map((x) => x + 1);" + LF + "}", "# api_key is read from the environment" + LF + "x = 1234567890",
-    "password:" + LF + "  see the vault", "token" + LF + "= parse_the_user_token",
+    "tok" + "en = <token>", "author = \"Alexander the Great\"", "password:" + LF + "  see the vault", "token" + LF + "= parse_the_user_token",
     "\"passwordEnv\": \"AGENT_HUB_" + "PASSWORD\"", "\"Authorization\": \"Bear" + "er REPLACE_WITH_YOUR_GITHUB_PAT\"",
   ];
   for (const t of ok) assert.ok(!hasSecret(t), JSON.stringify(t).slice(0, 80));
@@ -102,4 +102,13 @@ test("review fixes: leading binary bytes cannot hide a key; a skipped scan (no c
   assert.throws(() => hasSecret(key, undefined, noCanary), /canary not reported/);
   for (const t of ["YOUR" + key, "REPLACE_ME_" + SECRETS.skAnt, "tok" + "en=YOUR" + key, "pass" + "word=REPLACE_ME_" + "Zx9kLm2pQrStUv" + "!" + LF + "x", "Bear" + "er YOUR" + "Zx9kLm2pQrStUvWxYz0123456789abcd"]) assert.ok(hasSecret(t), JSON.stringify(t).slice(0, 60));
   for (const t of ["\"Author" + "ization\": \"Bear" + "er REPLACE_WITH_YOUR_GITHUB_PAT\"", "tok" + "en = <your-token-here-please>", "pass" + "word=\"<REDACTED_VALUE>\""]) assert.ok(!hasSecret(t), t);
+});
+
+test("canary: text holding a canary-shaped string is a finding (blocked); it cannot stand in for the real canary when the scan skips the tail", () => {
+  const fake = "AGENTHUBCANARY" + "0123456789abcdef".repeat(2);
+  assert.equal(hasSecret("note " + fake + LF + "more"), true);
+  const noCanary = join(tmpdir(), "gl-no-canary.toml");
+  writeFileSync(noCanary, "[extend]" + LF + "useDefault = true" + LF);
+  assert.throws(() => hasSecret("note " + fake, undefined, noCanary), /canary not reported/);
+  assert.equal(hasSecret("a perfectly normal sentence" + LF + "and another line"), false);
 });

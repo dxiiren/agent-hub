@@ -48,9 +48,12 @@ export function hasSecret(text, bin = gitleaksBin(), config = GITLEAKS_CONFIG) {
   let found = null;
   try { found = JSON.parse(readFileSync(rep, "utf8")); } catch { /* missing or unreadable report: treated as unavailable below */ }
   rmSync(dirname(rep), { recursive: true, force: true });
-  if (Array.isArray(found) && found.some((f) => f.RuleID !== "agent-hub-canary")) return true; // a real finding blocks even when the canary was dropped (gitleaks drops the tail of some huge repeated-pattern inputs)
-  if (!Array.isArray(found) || !found.some((f) => f.RuleID === "agent-hub-canary")) throw new Error("secret scanner unavailable: canary not reported (input skipped or scan incomplete)");
-  return found.some((f) => f.RuleID !== "agent-hub-canary");
+  // the one accepted canary finding: this call's random value, on the last line. Any other finding, a canary-shaped string in the scanned text included, is a real one.
+  const lastLine = input.split(NL).length - 1;
+  const isCanary = (f) => f.RuleID === "agent-hub-canary" && f.Secret === canary && (f.StartLine === undefined || f.StartLine === lastLine);
+  if (Array.isArray(found) && found.some((f) => !isCanary(f))) return true; // blocks even when the canary was dropped (gitleaks drops the tail of some huge repeated-pattern inputs)
+  if (!Array.isArray(found) || !found.some(isCanary)) throw new Error("secret scanner unavailable: canary not reported (input skipped or scan incomplete)");
+  return false;
 }
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.
