@@ -1,0 +1,64 @@
+# agent-hub secret scanner config (gitleaks v8). Extends the default rules; adds only what they lack.
+title = "agent-hub"
+
+[extend]
+useDefault = true
+
+# Credential-looking assignments the default generic rule misses (it needs high entropy): password=..., token: "...", secret_key='...'.
+[[rules]]
+id = "agent-hub-assigned-secret"
+description = "assigned password, secret, token, api or private key"
+regex = '''(?i)(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*['"]? ?[:=] ?['"]?([^\s'"\[\]()<>{},;=][^\s'"\[\]()<>{},;]{7,})'''
+secretGroup = 1
+keywords = ["secret", "passw", "pwd", "token", "key", "credential"]
+[[rules.allowlists]]
+condition = "OR"
+regexTarget = "secret"
+regexes = [
+  '''^[A-Za-z0-9_-]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)[A-Za-z0-9_]*$''',
+  '''(?i)^(?:REPLACE|CHANGE|YOUR|EXAMPLE|PLACEHOLDER|REDACTED|XXXX|<)[A-Za-z0-9_\-]*''',
+]
+# an unquoted letters-only value is code naming something (token = parseToken), a quoted one is a secret
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''(?i)[:=] ?[a-z][a-z_.]*$''']
+
+[[rules]]
+id = "agent-hub-sk-key"
+description = "sk- style API key (OpenAI, Anthropic, OpenRouter, project keys)"
+regex = '''(?i)\bsk-[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-"]
+
+[[rules]]
+id = "agent-hub-bearer"
+description = "Bearer token"
+regex = '''(?i)\bbearer ?([A-Za-z0-9\-._~+/]{20,})'''
+secretGroup = 1
+keywords = ["bearer"]
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^(?:REPLACE|CHANGE|YOUR|EXAMPLE|PLACEHOLDER)[A-Za-z0-9_\-]*''']
+
+[[rules]]
+id = "agent-hub-private-key-header"
+description = "PEM or PGP private key header"
+regex = '''(?i)-----BEGIN[A-Z ]*PRIVATE ?KEY(?: ?BLOCK)?-----'''
+keywords = ["begin"]
+
+[[rules]]
+id = "agent-hub-aws-akia"
+description = "AWS access key id, any case"
+regex = '''(?i)\bAKIA[0-9A-Z]{16}\b'''
+keywords = ["akia"]
+
+[[rules]]
+id = "agent-hub-github-token"
+description = "GitHub token, any length at least 30"
+regex = '''(?i)\bgh[pousr]_[A-Za-z0-9]{30,}'''
+keywords = ["gh"]
+
+[[rules]]
+id = "agent-hub-jwt"
+description = "JWT in any case, also glued to other text (default rule is case-sensitive and word-bounded)"
+regex = '''(?i)eyj[a-z0-9_-]{8,}\.eyj[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}'''
+keywords = ["eyj"]

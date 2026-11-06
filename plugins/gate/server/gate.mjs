@@ -5,32 +5,45 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Linear without quantifier caps (a cap is a bypass). hasSecret first NORMALIZES (every whitespace run becomes one space, lines trimmed; the wrapped form is the trimmed lines joined with nothing), so the patterns need only ` ?`.
-// Every run is over a class the next element cannot re-enter. The key rule is anchored on the ':' or '=' and looks BACK for the key (lookbehind): one backward scan per delimiter, never one forward scan per key word. Texts are scanned in overlapping WINDOW-char windows.
-// Key names holding a secret, with any prefix/suffix: DB_PASSWORD, aws_secret_access_key, my_service_api_key_for_billing.
-const SECRET_KEY = String.raw`(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*['"]? ?`;
-// value: quoted 8+ non-space chars holding a digit or punctuation (the closing quote is not required: a long or unterminated value still matches on its first 8) or 16+ plain chars | unquoted 8+ with a digit/punctuation and no brackets/parens/'=', so `token = tokens[i]`, `password_field = input` and `token = parse_the_user_token` stay clean.
-const PUNCT = String.raw`[\d!@#$%^&*+]`;
-const VAL = String.raw`[^ '"\[\]()<>{},;=]`; // first value char: not '=' (keeps `token = tokens[i]` out)
-const VAL_REST = String.raw`[^ '"\[\]()<>{},;]`; // later chars may be '=' (base64 padding, `a1=bc...` passwords); the lookahead stays on VAL (no '=') so `k=k=k=...` stays linear
-/**
- * THE secret list (gate diff, file bytes, reply scan all use hasSecret below).
- * Case-insensitive: AKIA, PEM headers, a secret/password key, Bearer, sk- all match in any case.
- * The JWT is anchored on its first dot with a positive lookbehind for the header (a JWT glued to preceding word characters after line-joining still matches, and no start is tried inside a long run).
- */
-export const SECRET_RE = new RegExp(
-  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN[A-Z ]*PRIVATE ?KEY(?: ?BLOCK)?-----|(?<=eyJ[A-Za-z0-9_-]{8,})\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer ?[A-Za-z0-9\-._~+/]{20,}|(?<=` + SECRET_KEY + String.raw`)[:=] ?(?:(?<=secret\w*['"]? ?[:=] ?)['"]?(?=[A-Za-z0-9/+=]{0,39}[\d/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=(])|['"](?=[^'" ]*` + PUNCT + String.raw`)[^'" ]{8,}|['"][A-Za-z0-9_\-\/+]{16,}|['"]?(?=` + VAL + String.raw`*` + PUNCT + String.raw`)` + VAL + VAL_REST + String.raw`{7,}))`, "i");
-const LINES = /\r\n|\n|\r/;
-const norm = (l) => l.replace(/\s+/g, " ").trim();
-const WINDOW = 16384, STEP = 8192; // shortcut: a secret longer than STEP (8 KB) split across windows could be missed; none of the listed forms is that long
-const anyWindow = (t) => { if (t.length <= WINDOW) return SECRET_RE.test(t); for (let i = 0; i < t.length; i += STEP) if (SECRET_RE.test(t.slice(i, i + WINDOW))) return true; return false; };
-/** True when `text` holds a secret: on any single (normalized) line, or on the lines joined with nothing (a wrapped secret). */
-export function hasSecret(text) {
-  const lines = String(text).split(LINES).map(norm);
-  return lines.some(anyWindow) || anyWindow(lines.join(""));
+// Secret scanning is delegated to gitleaks (pinned version, rules = config/gitleaks.toml: the default rules plus a few of ours). No hand-written regexes here.
+export const GITLEAKS_VERSION = "8.30.1";
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+export const GITLEAKS_CONFIG = join(ROOT, "config", "gitleaks.toml");
+/** Binary: AGENT_HUB_GITLEAKS, else <repo>/tools/gitleaks/ (installed by the README steps), else `gitleaks` on PATH. */
+export function gitleaksBin(env = process.env) {
+  if (env.AGENT_HUB_GITLEAKS) return env.AGENT_HUB_GITLEAKS;
+  const local = join(ROOT, "tools", "gitleaks", process.platform === "win32" ? "gitleaks.exe" : "gitleaks");
+  return existsSync(local) ? local : "gitleaks";
 }
-export const wrappedSecret = hasSecret;
-export const wrappedJwt = hasSecret;
+const SCAN_CWD = mkdtempSync(join(tmpdir(), "agent-hub-gitleaks-")); // empty: no .gitleaks.toml or .gitleaksignore is ever picked up from the caller's folder
+let verified = null;
+/** Throws "secret scanner unavailable: ..." when the binary is missing, not the pinned version, times out or errors: callers FAIL CLOSED. */
+function gl(args, input, bin, timeout) {
+  const r = spawnSync(bin, args, { input, cwd: SCAN_CWD, encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 1 << 20, windowsHide: true });
+  if (r.error) throw new Error("secret scanner unavailable: " + (r.error.code === "ETIMEDOUT" ? "timed out" : r.error.message));
+  return r;
+}
+export function checkScanner(bin = gitleaksBin()) {
+  const r = gl(["version"], "", bin, 15000);
+  const v = String(r.stdout).trim();
+  if (r.status !== 0 || v !== GITLEAKS_VERSION) throw new Error(`secret scanner unavailable: gitleaks ${GITLEAKS_VERSION} required, found ${v || "none"}`);
+  return v;
+}
+const norm = (l) => l.replace(/\s+/g, " ").trim();
+/** True when `text` holds a secret as is OR with the lines joined (a wrapped secret). Throws when the scanner cannot run. */
+export function hasSecret(text, bin = gitleaksBin()) {
+  const t = String(text);
+  if (!t.trim()) return false;
+  if (verified !== bin) { checkScanner(bin); verified = bin; }
+  const NL = String.fromCharCode(10);
+  const joined = t.replaceAll(String.fromCharCode(13), NL).split(NL).map(norm).join("");
+  const input = t + NL + joined + NL;
+  // --ignore-gitleaks-allow: a `gitleaks:allow` comment in the scanned text must not switch the scan off
+  const r = gl(["stdin", "--no-banner", "--no-color", "--log-level", "error", "--ignore-gitleaks-allow", "--exit-code", "7", "-c", GITLEAKS_CONFIG], input, bin, 30000 + 10000 * (input.length >> 20));
+  if (r.status === 7) return true;
+  if (r.status === 0) return false;
+  throw new Error("secret scanner unavailable: gitleaks exited " + r.status);
+}
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.
 const EMPTY_DIR = mkdtempSync(join(tmpdir(), "agent-hub-nohooks-"));
@@ -71,13 +84,12 @@ const MAX_FILE = 16 << 20, MAX_TOTAL = 128 << 20, MAX_DEPTH = 16;
 
 /** True when the bytes hold a secret as UTF-8/latin1 text (binary files too) or as UTF-16 text, little or big endian, at either byte alignment (odd-length buffers included). */
 export function bufHasSecret(buf) {
-  const t = buf.toString("latin1");
-  if (hasSecret(t)) return true;
-  for (const b of [buf, buf.subarray(1)]) {
+  const parts = [buf.toString("latin1")];
+  if (buf.includes(0)) for (const b of [buf, buf.subarray(1)]) {
     const even = b.subarray(0, b.length & ~1);
-    for (const u of [even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le")]) if (hasSecret(u)) return true;
+    parts.push(even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le"));
   }
-  return false;
+  return hasSecret(parts.join(String.fromCharCode(10)));
 }
 
 /** Scan one file into `out`; the budget is shared so a repo of many files cannot pass unscanned. */
@@ -87,7 +99,8 @@ function scanFile(f, label, budget, out, deleted = new Set()) {
     if (st.size > MAX_FILE || st.size > budget.left) { out.push("scan incomplete: " + label + " is too large to scan (" + st.size + " bytes)"); return; }
     budget.left -= st.size;
     if (bufHasSecret(readFileSync(f))) out.push("secret pattern in " + label);
-  } catch (e) { if (!(e?.code === "ENOENT" && deleted.has(label))) out.push("scan incomplete: cannot read " + label); /* only a file git lists as deleted has nothing to scan */ }
+  } catch (e) {
+    if (/secret scanner unavailable/.test(e?.message)) { out.push(e.message); return; } if (!(e?.code === "ENOENT" && deleted.has(label))) out.push("scan incomplete: cannot read " + label); /* only a file git lists as deleted has nothing to scan */ }
 }
 
 /** Secret scan of a plain folder: every file (binary and UTF-16 included) up to depth 16, 16 MB per file, 128 MB total; scans .git and node_modules too (the shared budget makes a huge one fail closed); reports what it could not cover. */
@@ -179,7 +192,9 @@ export function runGate(cwd, opts = {}) {
   const added = lines.filter((l) => l.startsWith("+") && !l.startsWith("+++"));
   const removed = lines.filter((l) => l.startsWith("-") && !l.startsWith("---"));
   const histAdded = hist.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++"));
-  if (hasSecret(added.map((l) => l.slice(1)).join(String.fromCharCode(10))) || hasSecret(histAdded.map((l) => l.slice(1)).join(String.fromCharCode(10)))) reasons.push("secret pattern in diff");
+  try {
+    if (hasSecret(added.map((l) => l.slice(1)).join(String.fromCharCode(10))) || hasSecret(histAdded.map((l) => l.slice(1)).join(String.fromCharCode(10)))) reasons.push("secret pattern in diff");
+  } catch (e) { reasons.push(e.message); }
   if (added.length + removed.length > maxLines) reasons.push(`diff larger than ${maxLines} lines`);
   // binary and UTF-16 files show no text in a diff: scan every changed file's bytes, and ignored files too (an agent can hide a file with .gitignore)
   if (inRepo) {

@@ -250,7 +250,9 @@ export function reapParked(paseo, agentId, parkedAt, dir = parkDir()) {
  */
 export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, dir = parkDir(), answerRetryMs, reaper = true, waitTimeout } = {}) {
   if (!parkFile(dir, agentId)) return { used: null, status: "error", error: `invalid agent id: only ${AGENT_ID_RE} is accepted` };
-  if (hasSecret(text)) return { used: null, status: "rejected", error: "reply rejected: it looks like a credential, token or key. Reply without it." };
+  try {
+    if (hasSecret(text)) return { used: null, status: "rejected", error: "reply rejected: it looks like a credential, token or key. Reply without it." };
+  } catch (e) { return { used: null, status: "rejected", error: "reply rejected: " + e.message }; }
   const rec = loadPark(agentId, dir);
   if (!rec) return { used: null, status: "error", error: `no parked agent ${agentId}: it never asked, already finished, or was stopped after ${PARK_SECONDS / 60} min without a reply` };
   dropPark(agentId, dir); // the reaper must not stop it while this reply runs

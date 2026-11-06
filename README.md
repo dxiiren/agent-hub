@@ -38,6 +38,7 @@ Screenshots are real captures from a throwaway demo daemon and demo data (the Pa
 | Node.js | >= 20 | `setup.ps1` / `setup.sh` |
 | Git | any recent | `setup.ps1` / `setup.sh` |
 | just | any recent | `setup.ps1` |
+| gitleaks | exactly 8.30.1 (pinned) | you: the gate and the reply scan use it for every secret check and refuse to pass without it. `winget install Gitleaks.Gitleaks --version 8.30.1`, `brew install gitleaks` (then check `gitleaks version`), or unzip the release from https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1 into `tools/gitleaks/` (or point `AGENT_HUB_GITLEAKS` at the binary). `just doctor` checks it. Rules: `config/gitleaks.toml` (the default rules plus a few of ours) |
 | Claude Code CLI | latest | `setup.ps1` (optional, for AI-assisted dev) |
 
 ## Quick start

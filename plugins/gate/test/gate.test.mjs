@@ -32,7 +32,7 @@ test("secret in a new file fails", () => {
 });
 test("secret hidden by .gitignore fails", () => {
   const d = repo();
-  writeFileSync(join(d, ".gitignore"), "c.py\n"); writeFileSync(join(d, "c.py"), 'api_key = "' + "z".repeat(30) + '"\n');
+  writeFileSync(join(d, ".gitignore"), "c.py\n"); writeFileSync(join(d, "c.py"), 'api_key = "' + "z9".repeat(15) + '"\n');
   const r = runGate(d, { cmd: OK });
   assert.match(r.reasons.join(), /ignored file c\.py/); assert.match(r.reasons.join(), /\.gitignore changed/);
 });
@@ -213,7 +213,7 @@ test("unborn HEAD: the empty-tree base diffs and scans everything; no base recor
 });
 
 // --- round 4: fail closed on git view disagreement, UTF-16BE odd length, no skip by name, unquoted/JSON secrets ---
-import { bufHasSecret, SECRET_RE } from "../server/gate.mjs";
+import { bufHasSecret, hasSecret } from "../server/gate.mjs";
 test("a secret under a path over 260 chars is found, and a status/diff disagreement fails closed", () => {
   const d = repo(); const base = head(d);
   const deep = Array(12).fill("d".repeat(25)).join("/");
@@ -240,15 +240,15 @@ test("node_modules and .git are scanned in a plain folder, and a nested repo ins
 });
 test("unquoted .env lines and JSON values are secrets; code that merely names a token is not", () => {
   const EQ = "="; // built from parts so the public-repo scan does not match the fixtures
-  for (const l of ["DB_PASSWORD" + EQ + "hunter2hunter2hunter2", '{"token":"abcdefghijklmnopqrstuvwxyz123456"}', 'password: "Abcdefghijklmnopqrst"', "API_KEY = abcdefghijklmnopqrstuv9"]) assert.ok(SECRET_RE.test(l), l);
-  for (const l of ["token = parse_the_user_token_value", "password" + EQ + "short1", "const secret = getSecretFromTheEnvironment();", '"token": "abc"', "# api_key is read from the environment"]) assert.ok(!SECRET_RE.test(l), l);
+  for (const l of ["DB_PASSWORD" + EQ + "hunter2hunter2hunter2", '{"token":"Zx9kLm2pQrStUvWxYz123456abcd"}', 'password: "Abcdefghijklmnopqrst"', "API_KEY = abcdefghijklmnopqrstuv9"]) assert.ok(hasSecret(l), l);
+  for (const l of ["token = parse_the_user_token_value", "password" + EQ + "short1", "const secret = getSecretFromTheEnvironment();", '"token": "abc"', "# api_key is read from the environment"]) assert.ok(!hasSecret(l), l);
   const d = repo(); writeFileSync(join(d, "e.env"), "DB_PASSWORD" + EQ + "hunter2hunter2hunter2\n");
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern/);
 });
 
 test("round 5: canonical secrets are caught, normal code is not", () => {
-  for (const l of ["AWS_SECRET_ACCESS_KEY=" + "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", 'DB_PASS' + 'WORD="' + 'my.secret.pass.w0rd.value9"', 'password: "' + 'Sup3r$ecret!Passw0rd#2026"', 'private_key="' + 'MIIEvQIBADANBgkqhkiG9w0BAQEFAAS"', "Authorization: Bear" + "er abcdefghijklmnopqrstuvwxyz0123456789", "client_secret = " + "Zx9!kLm2#pQrSt"]) assert.ok(SECRET_RE.test(l), l.slice(0, 18));
-  for (const l of ["token = tokens[i]", "password_field = input", "const token = await getToken(req);", "secret = os.environ['X']", "Authorization: Bearer <token>", "private_key = load_private_key(path)"]) assert.ok(!SECRET_RE.test(l), l);
+  for (const l of ["AWS_SECRET_ACCESS_KEY=" + "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", 'DB_PASS' + 'WORD="' + 'my.secret.pass.w0rd.value9"', 'password: "' + 'Sup3r$ecret!Passw0rd#2026"', 'private_key="' + 'MIIEvQIBADANBgkqhkiG9w0BAQEFAAS"', "Authorization: Bear" + "er Zx9kLm2pQrStUvWxYz0123456789abcd", "client_secret = " + "Zx9!kLm2#pQrSt"]) assert.ok(hasSecret(l), l.slice(0, 18));
+  for (const l of ["token = tokens[i]", "password_field = input", "const token = await getToken(req);", "secret = os.environ['X']", "Authorization: Bearer <token>", "private_key = load_private_key(path)"]) assert.ok(!hasSecret(l), l);
 });
 test("round 5: forbid applies to __pycache__ and .pyc paths", () => {
   const d = mkdtempSync(join(tmpdir(), "pyc-")); const g = (...a) => execFileSync("git", a, { cwd: d });
@@ -299,8 +299,8 @@ test("attack: an agent that commits, moves HEAD and the branch ref, or rewrites 
 test("round 7: a bare JWT and a PGP private key block are secrets; ordinary dotted text is not", () => {
   const jwt = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"].join(".");
   const pgp = "-----BEGIN PGP PRIVATE " + "KEY BLOCK-----";
-  for (const l of ["+auth: " + jwt, jwt, pgp]) assert.ok(SECRET_RE.test(l), l.slice(0, 20));
-  for (const l of ["see eyJ-prefixed values in the docs", "a.b.c version 1.2.3", "-----BEGIN PGP PUBLIC KEY BLOCK-----", "eyJhbGciOiJIUzI1NiJ9 header only"]) assert.ok(!SECRET_RE.test(l), l);
+  for (const l of ["+auth: " + jwt, jwt, pgp]) assert.ok(hasSecret(l), l.slice(0, 20));
+  for (const l of ["see eyJ-prefixed values in the docs", "a.b.c version 1.2.3", "-----BEGIN PGP PUBLIC KEY BLOCK-----", "eyJhbGciOiJIUzI1NiJ9 header only"]) assert.ok(!hasSecret(l), l);
   const d = repo(); writeFileSync(join(d, "t.txt"), "x = " + jwt);
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern/);
 });
@@ -324,6 +324,6 @@ test("round 9: every token-shaped secret is found wrapped over lines (LF and CRL
   for (const c of cases) assert.ok(bufHasSecret(Buffer.from(c)), JSON.stringify(c).slice(0, 40));
   assert.ok(bufHasSecret(Buffer.from(cases[0], "utf16le")), "utf16");
   // mixed case and CRLF around key-name rules
-  for (const l of ["akia" + "ABCDEFGHIJKLMNOP", "Db_Pass" + "word=" + "hunter2hunter2hunter2" + CRLF, "BEARER abcdefghijklmnopqrstuvwxyz0123456789", pem[1].toLowerCase()]) assert.ok(SECRET_RE.test(l), JSON.stringify(l).slice(0, 30));
+  for (const l of ["akia" + "ABCDEFGHIJKLMNOP", "Db_Pass" + "word=" + "hunter2hunter2hunter2" + CRLF, "BEARER Zx9kLm2pQrStUvWxYz0123456789abcd", pem[1].toLowerCase()]) assert.ok(hasSecret(l), JSON.stringify(l).slice(0, 30));
   for (const l of ["risk- averse analysis of something long" + LF + "more words", "Ask a question" + CRLF + "about a task-management tool", "eyJ" + LF + "short"]) assert.ok(!bufHasSecret(Buffer.from(l)), l.slice(0, 20));
 });

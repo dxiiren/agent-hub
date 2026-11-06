@@ -265,6 +265,10 @@ async function latestChecks(conf) {
   for (const r of rows) if (r.verdict === 'UPDATE') console.log(`NOTE  ${r.name} is behind: \`just update${r.pinned ? ' --paseo' : ''}\``);
 }
 async function doctor(deep) {
+  try { // the secret scanner: the gate and the reply scan fail closed without it
+    const g = await import('../plugins/gate/server/gate.mjs');
+    row(true, 'secret scanner gitleaks', g.checkScanner() + ' (pinned ' + g.GITLEAKS_VERSION + ')');
+  } catch (e) { row(false, 'secret scanner gitleaks', e.message + ' (install: see README, Prerequisites)'); }
   const s = secret();
   const { probeDaemon, daemonAdvice } = await import('./daemon-health.mjs');
   const dp = await probeDaemon(PORT);
