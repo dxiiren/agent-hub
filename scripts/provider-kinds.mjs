@@ -85,10 +85,21 @@ export async function discover(type, { url, key, provider } = {}, { f = fetch, r
   const k = kindOf(type);
   if (k.modelsFrom === 'none') return []; // the user names the model (local-llama)
   if (k.modelsFrom === 'endpoint') {
-    url = safeUrl(url); if (!url) throw new Error('url must be a plain http(s) base URL (no credentials, query or special characters)');
+    const typed = url;
+    url = safeUrl(url); if (!url) throw new Error(`"${String(typed ?? '').slice(0, 80)}" is not a usable link. Use a plain http(s) base URL like http://host:8000/v1 (host, optional port and path; no credentials, query or special characters).`);
+    // a link with no port is the usual slip: say so, with the same host and the typical port
+    const portHint = new URL(url).port ? '' : ` Did you mean a port, e.g. ${url.replace(/^(https?:\/\/[^/]+)/, '$1:8000')}?`;
     let body;
-    try { const r = await f(modelsUrl(url), { signal: AbortSignal.timeout(8000), headers: key ? { Authorization: `Bearer ${key}` } : {} }); if (!r.ok) throw new Error(`HTTP ${r.status}`); body = await r.json(); }
-    catch (e) { throw new Error(`endpoint check failed: GET ${modelsUrl(url)} -> ${e.message}`); }
+    try {
+      const r = await f(modelsUrl(url), { signal: AbortSignal.timeout(8000), headers: key ? { Authorization: `Bearer ${key}` } : {} });
+      if (!r.ok) throw new Error(`the server answered HTTP ${r.status}, so this is not an OpenAI-compatible /v1/models`);
+      body = await r.json();
+    } catch (e) {
+      const code = e?.cause?.code ?? (/^E[A-Z]+$/.test(e?.message ?? '') ? e.message : '');
+      const why = { ECONNREFUSED: 'connection refused', ENOTFOUND: 'host name not found', EHOSTUNREACH: 'host unreachable', ETIMEDOUT: 'timed out', UND_ERR_CONNECT_TIMEOUT: 'timed out' }[code];
+      const text = e?.name === 'TimeoutError' ? 'no answer within 8 s' : why ? `${why} (${code})` : (e.cause?.message ?? e.message);
+      throw new Error(`endpoint check failed: Couldn't reach ${modelsUrl(url)}: ${text}.${portHint}`);
+    }
     return (Array.isArray(body?.data) ? body.data : []).map((m) => m?.id).filter(Boolean).map((id) => ({ id, label: id }));
   }
   // an added account lists ITS provider's models (its own login); before the daemon knows it, the base provider's list stands in

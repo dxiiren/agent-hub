@@ -115,7 +115,7 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
   if (!preOverride) reconcile(p);
   const k = kindOf(a.kind ?? a.type); const type = k.type; const { model } = a;
   const lc = k.local ? localSpec(a) : undefined; let url = k.local ? `http://127.0.0.1:${lc.port}/v1` : a.url;
-  if (k.own) { url = safeUrl(url); if (!url) throw new Error('--url must be a plain http(s) base URL (host, optional port and path; no credentials, query or special characters)'); }
+  if (k.own) { url = safeUrl(url); if (!url) throw new Error('url must be a plain http(s) base URL like http://host:8000/v1 (host, optional port and path; no credentials, query or special characters)'); }
   let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
   if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
   const readOnly = !(a.readOnly === false || a.readOnly === 'false' || a.readOnly === 'off');

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
 import { SettingsAction, SettingsCard, SettingsInput, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
@@ -15,7 +15,14 @@ const OFF = "off";
 function Screen() {
   const rpc = useRpc(providersRpc);
   // an RPC that times out or fails must not leave the screen stuck on "Loading...": turn it into the same {error} shape as a tool refusal
-  const call = useCallback(async (input: Parameters<typeof rpc>[0]) => { try { return await rpc(input); } catch (e: any) { return { error: String(e?.message ?? e) } as any; } }, [rpc]);
+  // rpc sits in a ref so `call` keeps one identity: a new identity per render re-ran the model-list effect and threw away its answer (the picker stayed empty). Also no call may stay pending forever.
+  const rpcRef = useRef(rpc); rpcRef.current = rpc;
+  const call = useCallback(async (input: Parameters<typeof rpc>[0]) => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([rpcRef.current(input), new Promise<never>((_, no) => { t = setTimeout(() => no(new Error(S.timedOut)), 100_000); })]); }
+    catch (e: any) { return { error: String(e?.message ?? e) } as any; }
+    finally { clearTimeout(t); }
+  }, []);
   const [kinds, setKinds] = useState<Kind[]>([]);
   const [routeTypes, setRouteTypes] = useState<Record<string, number>>({});
   const [added, setAdded] = useState<Added[]>([]);
@@ -52,11 +59,12 @@ function Screen() {
   useEffect(() => {
     if (!kind || !k) return;
     const endpoint = k.fields.some((f) => f.id === "url");
-    if (endpoint && !/^https?:\/\/[^\s"]+$/.test(vals.url ?? "")) { setModels([]); setModelErr(null); return; }
+    // any typed link goes to the server, which fills in http:// and says exactly what is wrong; nothing is dropped silently here
+    if (endpoint && !(vals.url ?? "").trim()) { setModels([]); setModelErr(null); return; }
     let live = true;
     const t = setTimeout(async () => {
       setModelErr(null); setLoadingModels(true);
-      const r: any = await call({ verb: "models", args: { kind, url: vals.url, key: vals.key, provider: editing ?? undefined } });
+      const r: any = await call({ verb: "models", args: { kind, url: vals.url?.trim(), key: vals.key, provider: editing ?? undefined } });
       if (!live) return;
       setLoadingModels(false);
       if (r.error) { setModels([]); return setModelErr(r.error); }
@@ -132,6 +140,7 @@ function Screen() {
           ))}
           <SettingsAction label={editing ? `${S.save}: ${editing}` : S.add} actionLabel={busy ? S.adding : editing ? S.save : S.add} disabled={busy} onPress={() => void submit()} />
           {editing ? <SettingsAction label={editing} actionLabel={S.cancelEdit} onPress={reset} /> : null}
+          {msg ? <SettingsRow label={msg.text} error={msg.ok ? null : msg.text} /> : null}
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title={S.existing}>

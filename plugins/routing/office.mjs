@@ -105,6 +105,8 @@ export async function startAuthProxy(upstreamBase, key, f = fetch) {
 /** A provider base URL: http(s) only, a plain host[:port]/path (letters, digits and . _ ~ : / [ ] -), no credentials, query or fragment, none of & | < > ^ " ' ` % \ space or control characters. Returns the canonical form (no trailing slash) or "". */
 export const SAFE_URL = /^https?:\/\/[A-Za-z0-9._~:/[\]-]+$/;
 export function safeUrl(raw) {
+  // a link typed without a scheme ("host:8005/v1") means http://: the character check below still runs on the completed string
+  if (typeof raw === "string" && raw && !raw.includes("://")) raw = "http://" + raw;
   if (typeof raw !== "string" || !SAFE_URL.test(raw)) return "";
   let u; try { u = new URL(raw); } catch { return ""; }
   if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash || !u.hostname) return "";

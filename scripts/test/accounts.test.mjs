@@ -132,6 +132,6 @@ test('load-models path: UI verb -> backend -> GET <base>/v1/models fills the lis
   const f = async (u, init) => { seen.push({ u, timeout: !!init?.signal }); return { ok: true, json: async () => ({ data: [{ id: 'Qwen3.8-27B' }] }) }; };
   const r = await api({ verb: 'models', args: { kind: 'qwen-code', url: 'http://h.example:8005/v1' } }, box().p, { f });
   assert.deepEqual(r.models, [{ id: 'Qwen3.8-27B', label: 'Qwen3.8-27B' }]); assert.equal(seen[0].u, 'http://h.example:8005/v1/models'); assert.ok(seen[0].timeout, 'has a timeout signal');
-  await assert.rejects(api({ verb: 'models', args: { kind: 'qwen-code', url: 'http://h.example:8005/v1' } }, box().p, { f: async () => { throw new Error('ECONNREFUSED'); } }), /GET http:\/\/h.example:8005\/v1\/models -> ECONNREFUSED/);
+  await assert.rejects(api({ verb: 'models', args: { kind: 'qwen-code', url: 'http://h.example:8005/v1' } }, box().p, { f: async () => { throw new Error('ECONNREFUSED'); } }), /Couldn.t reach http:\/\/h.example:8005\/v1\/models: connection refused \(ECONNREFUSED\)/);
   await assert.rejects(api({ verb: 'models', args: { kind: 'qwen-code', url: 'not a link' } }, box().p, { f }), /http\(s\) base URL/);
 });
