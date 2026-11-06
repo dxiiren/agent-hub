@@ -1,0 +1,5 @@
+[User] Reply with exactly the word OK and nothing else. Do not use tools.
+[Thought] The user's message says "Reply with exactly the word OK and nothing else. Do not use tools."
+
+So I just need to reply with "OK".
+OK

@@ -7,10 +7,10 @@ const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-
 const routes = { readOnlyEnforced: ALL, readOnlyModes: { codex: "auto", qwen: "plan" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
   const calls = [];
-  const f = (args) => { calls.push(args); return args[0] === "ls" ? (script.ls ?? []) : args[0] === "stop" ? {} : script.run(args); };
+  const f = (args) => { calls.push(args); return args[0] === "worktree" && args[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : args[0] === "ls" ? (script.ls ?? []) : args[0] === "stop" ? {} : script.run(args); };
   f.calls = calls; return f;
 };
-const o = { type: "edit", prompt: "p", cwd: "/r", session: "S1", dev: "d", client: "claude" };
+const o = { type: "edit", prompt: "p", cwd: "/r", session: "S1", dev: "d", client: "claude", answerRetryMs: 0 };
 
 test("default wins when healthy; labels carry session, dev, client", () => {
   const p = fake({ run: () => ({ status: "completed", agentId: "A1" }) });
@@ -58,9 +58,9 @@ test("unsafe mode is dropped outside a worktree and kept (with --new-workspace w
   assert.ok(!p.calls.find((c) => c[0] === "run").includes("--mode"));
   p = mk(); runRoute({ ...o, mode: "yolo" }, p, r2);
   assert.ok(!p.calls.find((c) => c[0] === "run").includes("yolo"));
-  p = mk(); runRoute({ ...o, worktree: true }, p, r2);
+  p = mk(); runRoute({ ...o, worktree: true, base: "a".repeat(40) }, p, r2);
   const run = p.calls.find((c) => c[0] === "run");
-  assert.ok(run.includes("full-access") && run.includes("--new-workspace") && run.includes("worktree"));
+  assert.ok(run.includes("full-access") && run.includes("/wt/x") && !run.includes("--new-workspace"), "runs in the route-created worktree");
   p = mk(); runRoute({ ...o, provider: "qwen/x" }, p, r2);
   assert.ok(p.calls.find((c) => c[0] === "run").includes("plan"));
 });
@@ -261,8 +261,8 @@ test("an edit type that ends in `permission` outside a worktree returns a clear 
 
 test("worktree run: create is --no-wait, then a separate bounded wait; idle becomes completed", () => {
   const calls = [];
-  const p = (args) => { calls.push(args); return args[0] === "ls" ? [] : args[0] === "run" ? { agentId: "W1", status: "created" } : args[0] === "wait" ? { status: "idle" } : {}; };
-  const r = runRoute({ ...o, worktree: true, waitTimeout: "2m" }, p, routes);
+  const p = (args) => { calls.push(args); return args[0] === "worktree" ? { name: "wt-x", worktreePath: "/wt/x" } : args[0] === "ls" ? [] : args[0] === "run" ? { agentId: "W1", status: "created" } : args[0] === "wait" ? { status: "idle" } : {}; };
+  const r = runRoute({ ...o, worktree: true, base: "a".repeat(40), waitTimeout: "2m" }, p, routes);
   assert.equal(r.status, "completed"); assert.equal(r.agentId, "W1");
   assert.ok(calls.find((c) => c[0] === "run").includes("--no-wait"));
   assert.deepEqual(calls.find((c) => c[0] === "wait"), ["wait", "W1", "--timeout", "120"]);
@@ -293,7 +293,7 @@ test("read-only types use each provider's read-only mode, in or out of a worktre
   for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
     const r2 = { readOnlyEnforced: ALL, slots: {}, modes: { [p]: "yolo" }, routes: { summarise: [p] } };
     const f = fake({ run: () => ({ status: "completed", agentId: "A" }) });
-    runRoute({ ...o, type: "summarise", mode: "bypassPermissions", worktree }, f, r2);
+    runRoute({ ...o, type: "summarise", mode: "bypassPermissions", worktree, base: "a".repeat(40) }, f, r2);
     const run = f.calls.find((c) => c[0] === "run");
     assert.equal(run[run.indexOf("--mode") + 1], m, p);
   }
@@ -312,7 +312,7 @@ test("a completed route returns the agent's answer from `paseo logs`; truncation
   assert.equal(r.answer, "the answer"); assert.equal(r.answerTruncated, undefined);
   const t = runRoute({ ...o, provider: "qwen/b" }, mk("[User] q\n" + "y".repeat(9000)), routes);
   assert.equal(t.answer.length, 4096); assert.equal(t.answerTruncated, true); assert.equal(t.answerFull, "paseo logs A1");
-  assert.equal(runRoute({ ...o, provider: "qwen/b" }, (a) => (a[0] === "ls" ? [] : a[0] === "logs" ? { error: "x" } : { status: "completed", agentId: "A1" }), routes).answer, undefined);
+  assert.equal(runRoute({ ...o, provider: "qwen/b" }, (a) => (a[0] === "ls" ? [] : a[0] === "logs" ? { error: "x" } : { status: "completed", agentId: "A1" }), routes).answer, "");
 });
 test("cliPaseo returns `paseo logs` as raw text, without --json", () => {
   let seen;
@@ -433,13 +433,13 @@ test("a finished route stops and archives its agent after the answer is read; --
 });
 test("a route-created worktree is removed after the agent is archived; --keep and non-worktree routes leave it", () => {
   const mk = (script) => { const calls = []; const f = (a) => { calls.push(a); return script(a); }; f.calls = calls; return f; };
-  const sc = (a) => (a[0] === "ls" ? [] : a[0] === "worktree" ? [{ name: "wt-1", agent: "A1xxxxx" }, { name: "other", agent: "-" }] : a[0] === "run" ? { status: "completed", agentId: "A1xxxxx-full" } : {});
+  const sc = (a) => (a[0] === "ls" ? [] : a[0] === "worktree" ? (a[1] === "create" ? { name: "wt-1", worktreePath: "/wt/1" } : {}) : a[0] === "run" ? { status: "completed", agentId: "A1xxxxx-full" } : {});
   const w = mk(sc);
-  runRoute({ ...o, provider: "qwen/b", worktree: true }, w, routes);
+  runRoute({ ...o, provider: "qwen/b", worktree: true, base: "a".repeat(40) }, w, routes);
   assert.deepEqual(w.calls.filter((c) => c[0] === "worktree" && c[1] === "archive"), [["worktree", "archive", "wt-1", "--cwd", o.cwd]]);
   const k = mk(sc);
-  runRoute({ ...o, provider: "qwen/b", worktree: true, keep: true }, k, routes);
-  assert.ok(!k.calls.some((c) => c[0] === "worktree"));
+  runRoute({ ...o, provider: "qwen/b", worktree: true, keep: true, base: "a".repeat(40) }, k, routes);
+  assert.ok(!k.calls.some((c) => c[0] === "worktree" && c[1] === "archive"));
   const n = mk(sc);
   runRoute({ ...o, provider: "qwen/b" }, n, routes);
   assert.ok(!n.calls.some((c) => c[0] === "worktree"));
@@ -576,10 +576,10 @@ test("an unknown provider id fails fast, before any daemon call", () => {
 test("codex has no read-only mode: a read-only type skips it, an edit type still uses it", () => {
   const rt = { slots: { codex: 1, qwen: 2 }, routes: { summarise: ["codex/a", "qwen-code/b"], edit: ["codex/a"] } };
   const runs = [];
-  const p = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { status: "completed", agentId: "Z" }; } return a[0] === "ls" ? [] : {}; };
+  const p = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { status: "completed", agentId: "Z" }; } return a[0] === "worktree" && a[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : a[0] === "ls" ? [] : {}; };
   const r = runRoute({ type: "summarise", prompt: "x", cwd: process.cwd() }, p, rt);
   assert.deepEqual(runs, ["qwen-code-ro/b"]); assert.match(JSON.stringify(r.trace), /no read-only mode/);
-  runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: process.cwd(), worktree: true }, p, rt);
+  runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: process.cwd(), worktree: true, base: "a".repeat(40) }, p, rt);
   assert.deepEqual(runs, ["codex/a"]);
 });
 

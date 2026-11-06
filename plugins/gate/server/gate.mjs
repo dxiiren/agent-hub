@@ -17,7 +17,8 @@ export const SECRET_RE = new RegExp(
 const EMPTY_DIR = mkdtempSync(join(tmpdir(), "agent-hub-nohooks-"));
 const EMPTY_CFG = join(EMPTY_DIR, "empty.gitconfig");
 writeFileSync(EMPTY_CFG, "");
-export const GIT_FLAGS = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + EMPTY_DIR, "-c", "diff.external=", "-c", "core.pager=cat", "-c", "core.longpaths=true"];
+// core.autocrlf=input: a worktree checked out with the user's autocrlf=true holds CRLF files; the empty gate config would diff every one of them
+export const GIT_FLAGS = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + EMPTY_DIR, "-c", "diff.external=", "-c", "core.pager=cat", "-c", "core.longpaths=true", "-c", "core.autocrlf=input"];
 export const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: EMPTY_CFG, GIT_TERMINAL_PROMPT: "0" };
 const git = (cwd, args) => execFileSync("git", [...GIT_FLAGS, ...args], { cwd, env: GIT_ENV, encoding: "utf8", maxBuffer: 32 << 20, stdio: ["ignore", "pipe", "ignore"] });
 

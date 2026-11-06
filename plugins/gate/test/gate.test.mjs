@@ -256,3 +256,42 @@ test("round 5: forbid applies to __pycache__ and .pyc paths", () => {
   mkdirSync(join(d, "__pycache__")); writeFileSync(join(d, "__pycache__", "x.txt"), "hi");
   assert.match(runGate(d, { cmd: OK, forbid: "pycache" }).reasons.join(), /path not allowed: __pycache__\/x\.txt/);
 });
+
+import { writeRequest as wreq } from "../server/store.mjs";
+const gitOut = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
+const GID = ["-c", "user.name=t", "-c", "user.email=t@t.t"];
+function linkedWorktree() {
+  const d = repo(); const start = gitOut(d, "rev-parse", "HEAD");
+  const wt = join(mkdtempSync(join(tmpdir(), "wt-")), "w1");
+  sh(d, "worktree", "add", "-q", "-b", "task1", wt);
+  return { d, wt, start };
+}
+test("worktree task with NO recorded request fails closed: the base is never derived at turn end (fast agent finished before registration)", () => {
+  const { wt } = linkedWorktree(); writeFileSync(join(wt, "evil.txt"), "x\n");
+  sh(wt, "add", "."); sh(wt, ...GID, "commit", "-qm", "evil");
+  const r = evaluate({ dir: mkdtempSync(join(tmpdir(), "gs-")), id: "F", cwd: wt, routes: {} });
+  assert.notEqual(r.d.status, "PASS"); assert.match(r.res.reasons.join(), /no base commit recorded/);
+});
+test("worktree task with a request registered before the agent starts is judged against that base, and a clean task passes the first time", () => {
+  const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-"));
+  wreq(dir, wt, null, start);
+  writeFileSync(join(wt, "ok.txt"), "OK\n");
+  const first = evaluate({ dir, id: "W", cwd: wt, routes: {} });
+  assert.equal(first.d.status, "PASS"); assert.deepEqual(first.res.reasons, []);
+  assert.equal(first.res.files, 1, "a CRLF checkout of an untouched file (global autocrlf) is not a change");
+});
+test("attack: an agent that commits, moves HEAD and the branch ref, or rewrites history cannot move the recorded base: the gate still FAILs", () => {
+  const routesCfg = { gates: [{ match: ".*", forbid: "^evil" }] };
+  const attacks = {
+    "commit then move the branch ref back": (wt, start) => { writeFileSync(join(wt, "evil.txt"), "x\n"); sh(wt, "add", "."); sh(wt, ...GID, "commit", "-qm", "e"); sh(wt, "update-ref", "refs/heads/task1", start); },
+    "commit then re-root HEAD on an empty parentless commit": (wt) => { writeFileSync(join(wt, "evil.txt"), "x\n"); sh(wt, "add", "."); sh(wt, ...GID, "commit", "-qm", "e"); const c = gitOut(wt, ...GID, "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "fresh"); sh(wt, "update-ref", "refs/heads/task1", c); },
+    "commit, rewind HEAD, then hide the file from the index (assume-unchanged / skip-worktree)": (wt, start) => { writeFileSync(join(wt, "evil.txt"), "x\n"); sh(wt, "add", "."); sh(wt, ...GID, "commit", "-qm", "e"); sh(wt, "update-ref", "HEAD", start); sh(wt, "update-index", "--assume-unchanged", "--skip-worktree", "evil.txt"); },
+    "commit, rewind HEAD, drop the file from the index": (wt, start) => { writeFileSync(join(wt, "evil.txt"), "x\n"); sh(wt, "add", "."); sh(wt, ...GID, "commit", "-qm", "e"); sh(wt, "update-ref", "HEAD", start); sh(wt, "rm", "-q", "--cached", "evil.txt"); },
+  };
+  for (const [name, run] of Object.entries(attacks)) {
+    const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-")); wreq(dir, wt, null, start);
+    run(wt, start);
+    const r = evaluate({ dir, id: "A", cwd: wt, routes: routesCfg });
+    assert.notEqual(r.d.status, "PASS", name); assert.match(r.res.reasons.join(), /path not allowed: evil.txt/, name);
+  }
+});

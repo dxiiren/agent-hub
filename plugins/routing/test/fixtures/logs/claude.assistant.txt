@@ -1,0 +1,3 @@
+Fixed: `paging.py` now computes the start index as `(n - 1) * size`, so pages are 1-based as the docstring says. `python -m unittest test_paging` ran 2 tests and both passed.
+
+I didn't add handling for `n < 1`. With `n = 0` the start index goes negative and returns items from the end of the list.

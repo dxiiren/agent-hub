@@ -4,11 +4,12 @@
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
 // Usage: route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
-import { gateDir, writeRequest } from "../gate/server/store.mjs";
+import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
 import { runGate, gateOpts, EMPTY_TREE } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { batchAllowed } from "./readguard.mjs";
@@ -96,20 +97,37 @@ export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
   }
   return j;
 }
-const TAG = /^\[[A-Z][A-Za-z_ ]*\] /;
-/** The agent's last assistant message from `paseo logs` text: everything after the last tagged line ([User], [Read] ...), capped. */
-export function lastAnswer(text, cap = 4096) {
-  const lines = String(text ?? "").split(/\r?\n/); let i = lines.length;
-  while (i > 0 && !TAG.test(lines[i - 1])) i--;
-  const a = lines.slice(i).join("\n").trim();
+const TAG = /^\[[A-Z][A-Za-z_ ]*\](?: |$)/;
+const trimEnd = (l) => { while (l.length && !l[l.length - 1].trim()) l.pop(); return l; };
+const NL = String.fromCharCode(10);
+const lines = (t) => String(t ?? "").replace(/\r\n/g, NL).split(NL);
+/** The agent's last assistant message. `paseo logs` has no JSON, so two reads are combined: `full` is the whole transcript (tagged [User]/[Thought]/tool lines; a multi-line User or Thought block continues on untagged lines that look like an answer) and `assistant` is `paseo logs --filter assistant` (assistant messages only, untagged). The answer is the last untagged run of the full log, cut to the lines the assistant-only text also ends with, so a re-prompt tail or a thought continuation never leaks in. Without the assistant-only text (read failed) it is the last untagged run alone. Capped. */
+export function lastAnswer(full, cap = 4096, assistant = null) {
+  const ls = lines(full);
+  let end = ls.length; while (end > 0 && (!ls[end - 1].trim() || TAG.test(ls[end - 1]))) end--; // tool lines printed after the final message
+  let start = end; while (start > 0 && !TAG.test(ls[start - 1])) start--;
+  let run = trimEnd(ls.slice(start, end));
+  if (assistant !== null) {
+    const al = trimEnd(lines(assistant));
+    let n = 0; while (n < run.length && n < al.length && run[run.length - 1 - n].trimEnd() === al[al.length - 1 - n].trimEnd()) n++;
+    run = n ? run.slice(run.length - n) : trimEnd(al.join(NL).split(/\n\s*\n/).pop().split(NL)); // no overlap (the run is a thought): last paragraph of the assistant text
+  }
+  const a = run.join(NL).trim();
   return a.length > cap ? { answer: a.slice(0, cap), truncated: true } : { answer: a, truncated: false };
 }
-const withAnswer = (r, paseo) => {
+/** Attach `answer` (always present: "" plus `answerReason` when nothing could be read). The log is re-read once when its last line is a tool line or the text is empty: the final message may not be flushed yet. */
+export function withAnswer(r, paseo, retryMs = 1500, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)) {
   if (!r.agentId) return r;
-  const l = paseo(["logs", r.agentId]); const a = lastAnswer(l?.text);
-  if (!a.answer) return r;
-  return { ...r, answer: a.answer, ...(a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
-};
+  const read = () => {
+    const f = paseo(["logs", r.agentId]); const as = paseo(["logs", r.agentId, "--filter", "assistant"]);
+    return { f, a: lastAnswer(f?.text, 4096, as?.text ?? null) };
+  };
+  let x = read();
+  const tail = lines(x.f?.text).filter((l) => l.trim()).pop() ?? "";
+  if (retryMs && (!x.a.answer || TAG.test(tail))) { sleep(retryMs); const y = read(); if (y.a.answer) x = y; }
+  if (!x.a.answer) return { ...r, answer: "", answerReason: x.f?.error ? "logs unreadable: " + String(x.f.error).slice(0, 120) : "the agent log holds no assistant text" };
+  return { ...r, answer: x.a.answer, ...(x.a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
+}
 
 /** Git-Bash and Cygwin drive paths (/c/Users/x, /cygdrive/c/x) are not paths to the Windows daemon: it spent 74 s on WORKSPACE_CREATE_FAILED. Rewrite them to C:/... on win32. */
 export function normCwd(p, platform = process.platform) {
@@ -134,10 +152,16 @@ export function snapshot(dir, max = 5000) {
   walk(dir); return out.sort().join(String.fromCharCode(10));
 }
 
+/** The agent's real cwd (`paseo ls` abbreviates the home folder as "~"); undefined when unknown. */
+export function agentCwd(paseo, agentId) {
+  const r = paseo(["ls"]); const c = (Array.isArray(r) ? r : []).find((a) => a.id === agentId)?.cwd;
+  return c?.replace(/^~(?=[\\/])/, os.homedir());
+}
+
 /** Run the gate in the agent's cwd with the same options the plugin hook uses (gateOpts). First failure: re-prompt once (decision 47) and block until the agent is idle; freeze it; second gate. */
 export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   // `paseo ls` abbreviates the home folder as "~"
-  const cwdOf = () => { const r = paseo(["ls"]); const c = (Array.isArray(r) ? r : []).find((a) => a.id === agentId)?.cwd; return c?.replace(/^~(?=[\\/])/, os.homedir()); };
+  const cwdOf = () => agentCwd(paseo, agentId);
   const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
   let res = gate(cwd, gateOpts(routes, cwd, o.gate, o.base));
@@ -172,14 +196,13 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   // fail fast: an unknown provider id would otherwise reach the daemon, which holds the create for minutes with no agent
   if (o.provider) { const known = knownProviders(routes); if (!known.has(base(o.provider))) return { used: null, trace: [{ provider: o.provider, error: `unknown provider id "${base(o.provider)}": not in routes slots, any route chain or the built-in provider list (known: ${[...known].sort().join(", ")})` }] }; }
   // A finished agent keeps its provider process (a claude is ~250 MB idle): stop and archive it once its answer and gate are read, unless --keep.
-  // A route-created worktree (--new-workspace worktree) is removed with its agent, or it piles up under ~/.paseo/worktrees.
-  const retire = (id) => {
-    if (o.keep || !id) return;
-    const wt = o.worktree ? [].concat(paseo(["worktree", "ls"]) ?? []).find((w) => w.agent && w.agent !== "-" && id.startsWith(w.agent)) : null;
-    paseo(["stop", id]); paseo(["archive", id]);
+  // A route-created worktree (--new-workspace worktree) is removed with its agent, or it piles up under ~/.paseo/worktrees. The route creates it itself (named, so retire needs no lookup).
+  const retire = (id, wt) => {
+    if (o.keep) return;
+    if (id) { paseo(["stop", id]); paseo(["archive", id]); }
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
   };
-  const done = (r) => { retire(r.agentId); return r; };
+  const done = (r, wt) => { retire(r.agentId, wt); return r; };
   let partial = null;
   for (const entry of chain) {
     let prov;
@@ -188,6 +211,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && [base(prov), base(prov) + "-ro"].includes(a.provider)).length;
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
+    let wt = null; // this entry's route-created worktree
     const ro0 = readOnlyType(o.type, routes);
     // Qwen read-only twin: plan mode lets Qwen read an in-cwd .env with no permission request, so a read-only task runs on "<id>-ro", the same launcher started with --read-only, which points QWEN_CODE_SYSTEM_SETTINGS_PATH at config/qwen/system-settings-readonly.json (sensitive-read deny). Nothing is ever written under the task cwd.
     const launch = ro0 ? roTwin(prov) : prov;
@@ -196,13 +220,22 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "no read-only mode for this provider (read-only task types never run on it)" }); continue; }
     if (ro && !readOnlyEnforced(base(prov), routes)) { trace.push({ provider: prov, skip: "no enforced sensitive-read guard for this provider (read-only task types never run on it)" }); continue; }
     const mode = ro ? readOnlyMode(base(prov), routes) : o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
-    if (o.worktree) args.push("--new-workspace", "worktree");
+    if (o.worktree) {
+      // The task's start commit and gate request must exist BEFORE the agent can act, and must not come from state the agent can write at turn end. So the route creates the worktree itself, from the pinned base commit, and registers the request under its path before `run`: the hook finds it by the agent's cwd. No request = the hook fails closed.
+      if (!o.base) o.base = headSha(o.cwd);
+      if (!o.base || o.base === EMPTY_TREE) { trace.push({ provider: prov, error: "worktree task needs a git repo with at least one commit (the base commit is pinned at creation)" }); continue; }
+      const c = paseo(["worktree", "create", "--mode", "branch-off", "--new-branch", "route-" + randomBytes(5).toString("hex"), "--base", o.base, "--cwd", o.cwd]);
+      if (!c?.worktreePath || c.error) { trace.push({ provider: prov, error: "worktree create failed: " + String(c?.error ?? "no path returned").slice(0, 200) }); continue; }
+      wt = { name: c.name, path: c.worktreePath };
+      args[2] = wt.path;
+      writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base);
+    }
     if (mode && (o.worktree || !unsafeMode(mode))) args.push("--mode", mode);
     else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: needs --new-workspace worktree` });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
-    // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels
+    // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
-    if (o.gate || o.base) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base);
+    if (!o.worktree && (o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base);
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
@@ -216,18 +249,21 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
-      return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace });
+      return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);
     }
     if (j.status === "completed") {
-      if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo));
+      if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
       const g = callerGate(o, j.agentId, paseo, gate, routes);
+      // the plugin hook may have re-prompted already (its attempts live in the plugin store, keyed by agent id)
+      const pluginAttempts = (() => { try { return Number(loadState(o.gateDir ?? gateDir())[j.agentId]?.attempts) || 0; } catch { return 0; } })();
+      g.attempts += pluginAttempts;
       trace.push({ provider: prov, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
-      return done(withAnswer({ used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo));
+      return done(withAnswer({ used: prov, agentId: j.agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo, o.answerRetryMs), wt);
     }
     // a read-only agent stopped on a refused read may still have written an answer: keep it (the refusal stays in the trace) in case no entry completes
-    if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
-    if (j.agentId) retire(j.agentId); // a timed-out agent must not keep running while the next entry works
+    if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
+    if (j.agentId || wt) retire(j.agentId, wt); // a timed-out agent must not keep running while the next entry works
   }
   return partial ? { used: null, status: "permission", partial, trace } : { used: null, trace };
 }
