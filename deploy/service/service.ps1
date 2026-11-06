@@ -19,6 +19,9 @@ function Start-UsageStack { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_USAGE
   Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\usage\ensure-usage.ps1')) }
 # Put the Agent Hub kinds into Paseo's own Add-provider list (version+hash checked, idempotent, warns and skips on a Paseo it does not know).
 function Invoke-WebPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_WEB_PATCH -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\paseo-web-patch.mjs') apply --quiet 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { Write-Host "[WARN] paseo web patch: $_" } }
+# Who asked for this start/stop: one line (requester process chain) in <home>/restart-requests.log. Never fails the action.
+function Write-RestartLog { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_RESTART_LOG -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\restart-log.mjs') $Action 2>&1 | Out-Null } catch { } }
+if ($Action -in 'start','stop') { Write-RestartLog }
 switch ($Action) {
   'install' {
     $cmd = "& '$(Join-Path $PSScriptRoot 'daemon-run.ps1')'"

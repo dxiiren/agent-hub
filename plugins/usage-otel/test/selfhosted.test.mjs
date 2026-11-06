@@ -91,13 +91,15 @@ test("card label is the provider's configured display name, falling back to the 
 test("the module loads when import.meta.url is undefined (Paseo bundles plugins that way; a load failure silently stops every usage record)", async () => {
   const { readFileSync, writeFileSync, unlinkSync } = await import("node:fs");
   const src = new URL("../server/selfhosted-usage.mjs", import.meta.url);
-  const tmp = new URL("../server/_nourl.tmp.mjs", import.meta.url);
+  const tmp = new URL(`../server/_nourl.${process.pid}.tmp.mjs`, import.meta.url);
   writeFileSync(tmp, readFileSync(src, "utf8").replaceAll("import.meta.url", "undefined"));
   try {
     const m = await import(tmp.href + "?" + Date.now());
     assert.equal(typeof m.selfHostedProviders, "function");
     await m.selfHostedReport("none", { env: { PASEO_HOME: tmpdir() } }).catch(() => {}); // must not throw a TypeError from fileURLToPath
-  } finally { unlinkSync(tmp); }
+  } finally { // Windows: another test (Paseo's compiler reading this plugin folder) may hold the file for a moment
+    for (let i = 0; ; i++) { try { unlinkSync(tmp); break; } catch (e) { if (e.code === "ENOENT") break; if (i >= 20) throw e; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100); } }
+  }
 });
 
 test('kindOfProvider: the provider record kind (hub.local.json extraProviders[name].type) wins over the label guess', async () => {

@@ -10,6 +10,18 @@ export const aliasFile = (outer) => `qwen-session-${String(outer).replace(/[^A-Z
 export const innerSession = (outer) => { try { return readStateJson(join(runDir(), aliasFile(outer)))?.inner ?? null; } catch { return null; } };
 
 export const RO_MODE = { id: 'read-only', name: 'Read-only', description: 'Reads files inside the task folder only: no edits, no shell, sensitive files refused by the agent itself.' };
+/** Qwen's runtime model id `$runtime|openai|<id>(openai)` as the plain served id `<id>` (what the endpoint calls it). */
+export const cleanModelId = (id) => { const m = /^\$runtime\|[^|]*\|(.*)\([^()]*\)$/.exec(String(id ?? '')); return m ? m[1] : String(id ?? ''); };
+/**
+ * A hub launcher starts qwen with exactly one model (--model). Qwen also lists every model of the user's own ~/.qwen/settings.json
+ * (modelProviders) and shows the runtime id; advertise only the launched model under its plain id. `back` maps that id to qwen's own.
+ */
+export function cleanModels(models, back) {
+  const list = models?.availableModels; if (!Array.isArray(list)) return models;
+  const cur = list.find((x) => x?.modelId === models.currentModelId) ?? list[0]; if (!cur) return models;
+  const id = cleanModelId(cur.modelId); back.set(id, cur.modelId);
+  return { ...models, currentModelId: id, availableModels: [{ ...cur, modelId: id, name: id }] };
+}
 const NL = String.fromCharCode(10);
 const lines = (stream, fn) => createInterface({ input: stream, crlfDelay: Infinity }).on('line', fn);
 
@@ -19,7 +31,7 @@ const lines = (stream, fn) => createInterface({ input: stream, crlfDelay: Infini
  * Returns { done } resolving with the agent's exit code.
  */
 export function modeProxy({ spawnAgent, input = process.stdin, output = process.stdout, initialReadOnly = false, roBaseMode = 'plan', beforeForward, onAgentLine, timeoutMs = 60000 }) {
-  let agent = null, known = new Set(), ro = false, gen = 0, prompted = false, init = null, sess = null, outer = null, inner = null, awaiting = null, hub = 0;
+  let agent = null, models = new Map(), known = new Set(), ro = false, gen = 0, prompted = false, init = null, sess = null, outer = null, inner = null, awaiting = null, hub = 0;
   const waits = new Map();
   let exit; const done = new Promise((r) => { exit = r; });
   const toAgent = (m) => agent.stdin.write(JSON.stringify(m) + NL);
@@ -47,6 +59,7 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
         const a = m.result.modes?.availableModes; if (Array.isArray(a)) for (const x of a) known.add(x.id);
         if (Array.isArray(a) && !a.some((x) => x.id === RO_MODE.id)) a.push(RO_MODE);
         if (ro && m.result.modes) m.result.modes.currentModeId = RO_MODE.id;
+        if (m.result.models) m.result.models = cleanModels(m.result.models, models);
       }
       return toClient(m);
     }
@@ -82,6 +95,7 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
       if (ro) return fail(m.id, 'this session is read-only: its mode cannot be changed');
     }
     if (m.params?.sessionId && m.params.sessionId === outer && inner !== outer) m.params.sessionId = inner;
+    if (typeof m.params?.modelId === 'string' && models.has(m.params.modelId)) m.params.modelId = models.get(m.params.modelId); // the plain id we advertised -> qwen's runtime id
     toAgent(m);
   }
   start(initialReadOnly); // eager: Paseo's first message (initialize) arrives at once, and a launcher with no ACP client still runs its agent

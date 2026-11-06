@@ -36,15 +36,20 @@ const gpu = NV ? smi() : { ok: true, usedMiB: 0, apps: [] };
 const used = gpu.usedMiB;
 if (!gpu.ok) refuse('GPU missing -> provider disabled (nvidia-smi fails)');
 
-if (E.HEAVY_LOCK_GLOB) {
-  const dir = dirname(E.HEAVY_LOCK_GLOB);
-  const [pre, post = ''] = basename(E.HEAVY_LOCK_GLOB).split('*'); // one * wildcard is enough for heavy-run-*.lock
-  if (existsSync(dir) && readdirSync(dir).some((f) => f.startsWith(pre) && f.endsWith(post))) refuse('heavy-run lock present');
+// "Paused" reasons (heavy-run lock, low free RAM) are not faults: Paseo's status probe (initialize + session/new) must see a healthy provider,
+// so they are checked at --check (doctor) and again on the first prompt (the router then falls back), never before the ACP handshake.
+function pausedReason(serverUp) {
+  if (E.HEAVY_LOCK_GLOB) {
+    const dir = dirname(E.HEAVY_LOCK_GLOB);
+    const [pre, post = ''] = basename(E.HEAVY_LOCK_GLOB).split('*'); // one * wildcard is enough for heavy-run-*.lock
+    if (existsSync(dir) && readdirSync(dir).some((f) => f.startsWith(pre) && f.endsWith(post))) return 'heavy-run lock present';
+  }
+  const free = freemem() / 2 ** 30, min = Number(E.LAPTOP_MIN_FREE_GB || 3);
+  return !serverUp && free < min ? `free RAM ${free.toFixed(1)} GB < ${min}` : '';
 }
-
 const serverUp0 = await up();
 const freeGb = freemem() / 2 ** 30;
-if (!serverUp0 && freeGb < Number(E.LAPTOP_MIN_FREE_GB || 3)) refuse(`free RAM ${freeGb.toFixed(1)} GB < ${E.LAPTOP_MIN_FREE_GB || 3}`);
+if (process.argv.includes('--check')) { const w = pausedReason(serverUp0); if (w) refuse(w); }
 if (process.argv.includes('--check')) { console.log(`laptop pre-flight ok (GPU used ${used} MiB, free RAM ${freeGb.toFixed(1)} GB, server ${serverUp0 ? 'up' : 'not started'})`); process.exit(0); }
 if (!E.LLAMA_SERVER_BIN || !E.LAPTOP_MODEL_PATH || !E.QWEN_BIN) refuse('LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and QWEN_BIN must be set');
 
@@ -84,7 +89,7 @@ const spawnQwen = (ro) => spawnSafe(E.QWEN_BIN, ['--acp', '--auth-type', 'openai
 // ACP proxy (offers the mode "read-only", restarts qwen with the deny settings when it is chosen); the model server starts only when the first prompt arrives.
 const refuseOn = (e) => { process.stderr.write('LAPTOP-REFUSED: ' + e.message + String.fromCharCode(10)); proxy.kill(); process.exit(3); };
 const proxy = modeProxy({ spawnAgent: spawnQwen, initialReadOnly: READ_ONLY,
-  beforeForward: async (l) => { if (l.includes('"session/prompt"')) { inflight++; markInflight(PORT); try { await ensureServer(); } catch (e) { refuseOn(e); } touch(); } },
+  beforeForward: async (l) => { if (l.includes('"session/prompt"')) { const w = pausedReason(await up()); if (w) refuseOn(new Error(w)); inflight++; markInflight(PORT); try { await ensureServer(); } catch (e) { refuseOn(e); } touch(); } },
   onAgentLine: (d) => { const n = String(d).split('"stopReason"').length - 1; if (n) { inflight = Math.max(0, inflight - n); touch(); } } });
 const child = { kill: () => proxy.kill() };
 proxy.done.then((c) => { clearInflight(PORT); process.exit(c ?? 1); });

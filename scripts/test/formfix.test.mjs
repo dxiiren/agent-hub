@@ -68,3 +68,12 @@ test('the form sends every typed link to the server (no silent client-side drop)
   assert.match(src, /setModelErr\(r\.error\)/);
   assert.ok((src.match(/msg \? <SettingsRow/g) ?? []).length >= 2, 'the result message also shows next to the buttons');
 });
+
+test('provider.mjs never calls process.exit() right after the work (Windows libuv abort 0xC0000409 = the Save returned no result); the api verb exits 0 with its output', async () => {
+  assert.doesNotMatch(readFileSync(join(ROOT, 'scripts', 'provider.mjs'), 'utf8'), /process\.exit\(await/);
+  const { s, port } = await serve((q, r) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify({ data: [{ id: 'm1' }] })); });
+  try {
+    const r = await new Promise((ok, no) => { const c = spawn(process.execPath, [join(ROOT, 'scripts', 'provider.mjs'), 'api'], { stdio: ['pipe', 'pipe', 'pipe'] }); let out = ''; c.stdout.on('data', (d) => (out += d)); c.on('error', no); c.on('close', (code) => ok({ code, out })); c.stdin.end(JSON.stringify({ verb: 'models', args: { kind: 'qwen-code', url: `http://127.0.0.1:${port}/v1` } })); });
+    assert.equal(r.code, 0); assert.ok(JSON.parse(r.out));
+  } finally { s.close(); }
+});

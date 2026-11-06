@@ -456,4 +456,8 @@ export async function main(argv) {
     return 0;
   } catch (e) { console.error(`[REFUSED] ${e.message}`); return 1; }
 }
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) process.exit(await main(process.argv.slice(2)));
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  // Never process.exit() with sockets or timers still closing (fetch discovery): on Windows libuv aborts with 0xC0000409 (exit 3221226505) and the Save in the form got no result.
+  process.exitCode = await main(process.argv.slice(2));
+  setTimeout(() => process.exit(), 5000).unref(); // a handle that never closes must not keep the tool alive
+}

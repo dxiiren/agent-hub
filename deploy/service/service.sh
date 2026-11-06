@@ -6,6 +6,7 @@ UNIT=agent-hub
 HOME_DIR="${AGENT_HUB_HOME:-$HOME/.paseo}"
 LAUNCH="$(cd "$(dirname "$0")/../.." && pwd)/scripts/daemon-env.mjs" # allow-listed environment for the daemon and its agents
 DIR="$HOME/.config/systemd/user"
+case "$ACTION" in start|stop) [ -z "${AGENT_HUB_PASEO:-}" ] && [ "${AGENT_HUB_NO_RESTART_LOG:-}" != 1 ] && { node "$(dirname "$LAUNCH")/restart-log.mjs" "$ACTION" >/dev/null 2>&1 || true; } ;; esac
 have() { command -v "$1" >/dev/null 2>&1; }
 # Put the Agent Hub kinds into Paseo's own Add-provider list (version+hash checked, idempotent, never fails the start).
 if [ "$ACTION" = start ] && [ -z "${AGENT_HUB_NO_WEB_PATCH:-}" ] && [ -z "${AGENT_HUB_PASEO:-}" ]; then node "$(dirname "$LAUNCH")/paseo-web-patch.mjs" apply --quiet || true; fi

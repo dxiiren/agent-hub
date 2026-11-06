@@ -132,3 +132,20 @@ test('every other .mjs under deploy/ and plugins/ imports without error (a new p
     assert.equal(r.status, 0, `${relative(ROOT, p)} failed to import:\n${r.stderr}`);
   }
 });
+
+test('laptop-agent: low free RAM is a paused state, not a probe error: initialize + session/new answer, only the prompt is refused (exit 3)', async () => {
+  const t = mkdtempSync(join(tmpdir(), 'smoke-paused-'));
+  const p = spawn(process.execPath, ['--import', STUB, f('deploy/laptop/laptop-agent.mjs')], { env: laptopEnv(t, 1, { LAPTOP_MIN_FREE_GB: '100000' }), stdio: ['pipe', 'pipe', 'pipe'], cwd: ROOT });
+  let out = ''; let err = '';
+  p.stdout.on('data', (d) => { out += d; }); p.stderr.on('data', (d) => { err += d; });
+  const exited = new Promise((r) => p.on('exit', (c) => r(c)));
+  try {
+    p.stdin.write('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n');
+    p.stdin.write('{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":".","mcpServers":[]}}\n');
+    for (let i = 0; i < 100 && !/"id":2/.test(out) && p.exitCode === null; i++) await sleep(100);
+    assert.match(out, /"id":2/, `the probe got no session/new answer; stderr: ${err}`);
+    assert.equal(p.exitCode, null, 'the launcher must stay up for the probe');
+    p.stdin.write('{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{}}\n');
+    assert.equal(await exited, 3); assert.match(err, /LAPTOP-REFUSED: free RAM/);
+  } finally { if (p.exitCode === null) p.kill(); }
+});

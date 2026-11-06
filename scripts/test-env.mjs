@@ -2,10 +2,14 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSyncSafe } from "../plugins/routing/spawn-safe.mjs";
 
+// npm finds the global root from %APPDATA%\npm, so a redirected APPDATA made `npm root -g` miss the real global bcryptjs (4 hub configure tests failed in every full run): pin the prefix first.
+const npmPrefix = (base) => { const r = spawnSyncSafe("npm", ["config", "get", "prefix"], { encoding: "utf8", env: base }); return r.status === 0 ? r.stdout.trim() : ""; };
 export function hermeticEnv(base = process.env) {
   const h = mkdtempSync(join(tmpdir(), "agent-hub-test-home-"));
-  return { ...base, HOME: h, USERPROFILE: h, APPDATA: join(h, "AppData", "Roaming"), LOCALAPPDATA: join(h, "AppData", "Local"), XDG_CONFIG_HOME: join(h, ".config"), XDG_DATA_HOME: join(h, ".local", "share"), XDG_CACHE_HOME: join(h, ".cache"),
+  const prefix = npmPrefix(base);
+  return { ...base, ...(prefix ? { npm_config_prefix: prefix } : {}), HOME: h, USERPROFILE: h, APPDATA: join(h, "AppData", "Roaming"), LOCALAPPDATA: join(h, "AppData", "Local"), XDG_CONFIG_HOME: join(h, ".config"), XDG_DATA_HOME: join(h, ".local", "share"), XDG_CACHE_HOME: join(h, ".cache"),
     PASEO_HOME: join(h, ".paseo"), AGENT_HUB_HOME: join(h, ".paseo"), AGENT_HUB_NO_LOCAL: "1" };
 }
 // Test files that need the gitleaks binary; `npm test` skips them (loudly) when none is found.

@@ -6,7 +6,8 @@ const out = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m })
 createInterface({ input: process.stdin }).on('line', (l) => {
   const m = JSON.parse(l);
   if (m.method === 'initialize') return out({ id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: false } } });
-  if (m.method === 'session/new') { sid = `S${process.pid}`; return out({ id: m.id, result: { sessionId: sid, modes: { currentModeId: 'default', availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }] } } }); }
+  if (m.method === 'session/new') { sid = `S${process.pid}`; return out({ id: m.id, result: { sessionId: sid, modes: { currentModeId: 'default', availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }] }, ...(process.env.FAKE_MODELS ? { models: { currentModelId: '$runtime|openai|Big-Model(openai)', availableModels: [{ modelId: '$runtime|openai|Big-Model(openai)', name: 'Big-Model' }, { modelId: 'Own(openai)', name: 'user-own' }] } } : {}) } }); }
+  if (m.method === 'session/set_model') { mode = 'model=' + m.params.modelId; return out({ id: m.id, result: {} }); }
   if (m.method === 'session/set_mode') { mode = m.params.modeId; return out({ id: m.id, result: {} }); }
   if (m.method === 'session/prompt') {
     const [verb, arg] = m.params.prompt[0].text.split(' '); let text;

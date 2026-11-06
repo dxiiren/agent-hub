@@ -71,7 +71,8 @@ function secret() {
 }
 
 function bcrypt() {
-  const g = run('npm', ['root', '-g']).stdout?.trim();
+  let g = ''; // `npm root -g` can fail once on a loaded machine (4 configure tests failed on it in a full run, pass alone): ask up to 3 times
+  for (let i = 0; i < 3 && !g; i++) g = run('npm', ['root', '-g']).stdout?.trim() || '';
   for (const p of [g && join(g, '@getpaseo', 'cli', 'node_modules', 'bcryptjs'), g && join(g, 'bcryptjs'), 'bcryptjs']) {
     try { return createRequire(import.meta.url)(p); } catch { /* try next */ }
   }

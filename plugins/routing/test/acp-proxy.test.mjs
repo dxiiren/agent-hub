@@ -6,7 +6,7 @@ import { mkdtempSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { modeProxy, RO_MODE } from '../acp-proxy.mjs';
+import { modeProxy, RO_MODE, cleanModelId } from '../acp-proxy.mjs';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-acp.mjs', import.meta.url));
 const spawned = [];
@@ -72,4 +72,17 @@ test('deny by default: an unknown or missing mode id restarts the agent read-onl
     assert.deepEqual(spawned, [false, true]);
     assert.equal((await s.prompt(r.sessionId, `WRITE ${f}`)).text, 'REFUSED write'); assert.ok(!existsSync(f)); s.close();
   }
+});
+
+test('models: only the launched model is advertised, under its plain id; set_model maps back to the runtime id', async () => {
+  process.env.FAKE_MODELS = '1';
+  try {
+    const s = session(); const r = await open(s);
+    assert.deepEqual(r.models.availableModels.map((m) => [m.modelId, m.name]), [['Big-Model', 'Big-Model']]);
+    assert.equal(r.models.currentModelId, 'Big-Model');
+    await s.call('session/set_model', { sessionId: r.sessionId, modelId: 'Big-Model' });
+    assert.equal((await s.prompt(r.sessionId, 'HI')).text, 'MODE model=$runtime|openai|Big-Model(openai) RO false');
+    s.close();
+  } finally { delete process.env.FAKE_MODELS; }
+  assert.equal(cleanModelId('$runtime|openai|A-b_1.2(openai)'), 'A-b_1.2'); assert.equal(cleanModelId('plain'), 'plain');
 });

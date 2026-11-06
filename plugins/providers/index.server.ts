@@ -23,7 +23,15 @@ function repoRoot(): string {
 }
 
 /** Runs the CLI's api verb; the request (it may carry an API key) goes in on stdin, never on the command line. */
-function call(verb: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+const crashed = (code: number | null) => code === null || code < 0 || code > 255; // a normal exit is 0-255; 0xC0000409 (3221226505) is a process crash
+async function call(verb: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  // a tool that died (not one that answered with an error): the read-only model lookup is retried once; a write is never replayed blindly (it may have half-run), the form shows a plain message instead
+  let r = await callOnce(verb, args);
+  if (r.crashed && verb === "models") r = await callOnce(verb, args);
+  if (r.crashed) return { error: `The provider tool stopped unexpectedly (exit ${r.code}). Check the Providers page in case it was saved, then press Save again; if it keeps happening, run \`node scripts/provider.mjs doctor\` or restart the daemon.` };
+  return r;
+}
+function callOnce(verb: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   return new Promise((ok) => {
     let out = "";
     let err = "";
@@ -36,7 +44,7 @@ function call(verb: string, args: Record<string, unknown> = {}): Promise<Record<
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => ok({ error: String(e.message) }));
-    child.on("close", (code) => { clearTimeout(timer); try { ok(JSON.parse(out)); } catch { ok({ error: `provider tool returned no result (exit ${code}, ${node}): ${err.slice(0, 200)}` }); } });
+    child.on("close", (code) => { clearTimeout(timer); try { ok(JSON.parse(out)); } catch { ok(crashed(code) ? { error: `provider tool died (exit ${code})`, crashed: true, code } : { error: `provider tool returned no result (exit ${code}, ${node}): ${err.slice(0, 200)}` }); } });
     child.stdin.end(JSON.stringify({ verb, args }));
   });
 }

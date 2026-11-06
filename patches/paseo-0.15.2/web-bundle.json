@@ -32,7 +32,47 @@
    "name": "model-picker-use",
    "find": "X=(0,z.jsx)(u.AdaptiveTextInput,{initialValue:_,resetKey:J,onChangeText:T,onSubmitEditing:W,placeholder:N,placeholderTextColor:S.colors.foregroundMuted,autoCapitalize:\"none\",autoCorrect:!1,returnKeyType:\"done\",style:Q}),",
    "replace": "X=(0,z.jsx)(__AhPick,{__p:l,__s:f,__v:m,__t:T,__e:R,__c:S.colors,__f:(0,z.jsx)(u.AdaptiveTextInput,{initialValue:_,resetKey:J,onChangeText:T,onSubmitEditing:W,placeholder:N,placeholderTextColor:S.colors.foregroundMuted,autoCapitalize:\"none\",autoCorrect:!1,returnKeyType:\"done\",style:Q})}),"
+  },
+  {
+   "name": "plugin-screen-reconnect",
+   "find": "const B=(0,c.withUnistyles)(function(c){const u=(0,s.c)(40),{serverId:f,pluginId:h,screenId:v,theme:y}=c,",
+   "replace": "function __AhRe(p){(0,l.useEffect)(()=>{let down=!1,on=!0;const id=setInterval(async()=>{let ok=!1;try{ok=(await fetch(\"/api/health\",{cache:\"no-store\"})).ok}catch(e){}if(!on)return;if(!ok)down=!0;else if(down){clearInterval(id);location.reload()}},3e3);return()=>{on=!1;clearInterval(id)}},[]);return(0,T.jsx)(n.Text,{style:k.message,children:p.t})}const B=(0,c.withUnistyles)(function(c){const u=(0,s.c)(40),{serverId:f,pluginId:h,screenId:v,theme:y}=c,"
+  },
+  {
+   "name": "plugin-screen-offline-use",
+   "find": "s=(0,T.jsx)(n.Text,{style:k.message,children:t}),u[16]=t,u[17]=s):s=u[17],s}if(!F)",
+   "replace": "s=(0,T.jsx)(__AhRe,{t:t}),u[16]=t,u[17]=s):s=u[17],s}if(!F)"
+  },
+  {
+   "name": "transport-1006-hint",
+   "find": "Transport closed (code ${n.code})`",
+   "replace": "Transport closed (code ${n.code})${1006===n.code?\". The host closed the connection: a password is required or wrong, or the address is not reachable.\":\"\"}`"
+  },
+  {
+   "name": "config-read-back",
+   "find": "=await h.patchDaemonConfig(n);return C.setQueryData(w,t.config),t.config}",
+   "replace": "=await h.patchDaemonConfig(n);return C.setQueryData(w,t.config),h.getDaemonConfig().then(q=>C.setQueryData(w,q.config)).catch(()=>{}),t.config}"
+  },
+  {
+   "name": "scrollback-state",
+   "find": "[T,j]=(0,s.useState)(String(L.terminalScrollbackLines));let w;c[0]===Symbol.for(\"react.memo_cache_sentinel\")?(w=t=>{j(t.replace(/[^\\d]/g,\"\"))},c[0]=w):w=c[0];",
+   "replace": "[T,j]=(0,s.useState)(String(L.terminalScrollbackLines)),[__m,__sm]=(0,s.useState)({m:\"\",k:0});let w;c[0]===Symbol.for(\"react.memo_cache_sentinel\")?(w=t=>{__sm(p=>({...p,m:/[^\\d]/.test(t)?\"Only whole numbers are accepted (digits 0-9): letters, signs and decimals are dropped.\":\"\"}));j(t.replace(/[^\\d]/g,\"\"))},c[0]=w):w=c[0];"
+  },
+  {
+   "name": "scrollback-blur",
+   "find": "_=()=>{const t=(0,u.parseTerminalScrollbackLines)(T)??L.terminalScrollbackLines;j(String(t))",
+   "replace": "_=()=>{const t=(0,u.parseTerminalScrollbackLines)(T)??L.terminalScrollbackLines;__sm(p=>({m:\"\"===T.trim()?\"Enter a number of lines. Kept \"+t+\".\":String(t)!==String(Number(T))?\"Out of range. Using \"+t+\".\":p.m,k:p.k+1}));j(String(t))"
+  },
+  {
+   "name": "scrollback-input-key",
+   "find": "(H=(0,k.jsx)(b.FormTextInput,{initialValue:T,onChangeText:f,",
+   "replace": "(H=(0,k.jsx)(b.FormTextInput,{initialValue:T,resetKey:__m.k,onChangeText:f,"
+  },
+  {
+   "name": "scrollback-message",
+   "find": "P=(0,k.jsx)(t.View,{style:y.settingsStyles.card,children:(0,k.jsxs)(t.View,{style:y.settingsStyles.row,children:[O,H]})})",
+   "replace": "P=(0,k.jsx)(t.View,{style:y.settingsStyles.card,children:[(0,k.jsxs)(t.View,{style:y.settingsStyles.row,children:[O,H]},\"r\"),__m.m?(0,k.jsx)(l.Text,{style:y.settingsStyles.rowHint,testID:\"terminal-scrollback-message\",children:__m.m},\"m\"):null]})"
   }
  ],
- "rev": 2
+ "rev": 3
 }
