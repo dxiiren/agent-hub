@@ -92,12 +92,13 @@ export async function discover(type, { url, key, provider } = {}, { f = fetch, r
     let body;
     try {
       const r = await f(modelsUrl(url), { signal: AbortSignal.timeout(8000), headers: key ? { Authorization: `Bearer ${key}` } : {} });
-      if (!r.ok) throw new Error(`the server answered HTTP ${r.status}, so this is not an OpenAI-compatible /v1/models`);
+      if (!r.ok) throw Object.assign(new Error(`${modelsUrl(url)} answered HTTP ${r.status}, so it is not an OpenAI-compatible /v1/models.${portHint}`), { shown: true });
       body = await r.json();
     } catch (e) {
+      if (e.shown) throw new Error(`endpoint check failed: ${e.message}`);
       const code = e?.cause?.code ?? (/^E[A-Z]+$/.test(e?.message ?? '') ? e.message : '');
       const why = { ECONNREFUSED: 'connection refused', ENOTFOUND: 'host name not found', EHOSTUNREACH: 'host unreachable', ETIMEDOUT: 'timed out', UND_ERR_CONNECT_TIMEOUT: 'timed out' }[code];
-      const text = e?.name === 'TimeoutError' ? 'no answer within 8 s' : why ? `${why} (${code})` : (e.cause?.message ?? e.message);
+      const text = e?.name === 'TimeoutError' ? 'no answer within 8 s' : e?.cause?.message === 'bad port' ? 'the HTTP client blocks this port (pick another)' : why ? `${why} (${code})` : (e.cause?.message ?? e.message);
       throw new Error(`endpoint check failed: Couldn't reach ${modelsUrl(url)}: ${text}.${portHint}`);
     }
     return (Array.isArray(body?.data) ? body.data : []).map((m) => m?.id).filter(Boolean).map((id) => ({ id, label: id }));

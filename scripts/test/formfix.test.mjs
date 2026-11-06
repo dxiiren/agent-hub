@@ -37,7 +37,8 @@ test('every failure returns a message that names the exact problem', async () =>
     assert.match(noPort.error, /Couldn't reach http:\/\/127\.0\.0\.1\/v1\/models/);
     assert.match(noPort.error, /Did you mean a port, e\.g\. http:\/\/127\.0\.0\.1:8000\/v1\?/);
     const wrongPath = await rpc('models', { kind: 'qwen-code', url: `http://127.0.0.1:${port}/nope` });
-    assert.match(wrongPath.error, /HTTP 404/);
+    assert.match(wrongPath.error, /answered HTTP 404/);
+    assert.doesNotMatch(wrongPath.error, /Couldn't reach/);
     const junk = await rpc('models', { kind: 'qwen-code', url: 'http://h/v1;ls' });
     assert.match(junk.error, /is not a usable link/);
     const empty = await rpc('models', { kind: 'qwen-code', url: '' });
