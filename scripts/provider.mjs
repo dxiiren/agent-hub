@@ -11,7 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelsUrl, safeId } from '../plugins/routing/office.mjs';
 import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
-import { writeJsonKeepEol } from '../plugins/routing/jsonfile.mjs';
+import { writeJsonKeepEol, readJsonStrict } from '../plugins/routing/jsonfile.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const NAME_RE = /^qwen-[a-z0-9]+(-[a-z0-9]+)*$/; // routing derives the read-only twin only for names starting "qwen" (roTwin in route.mjs)
@@ -27,7 +27,7 @@ export function paths(env = process.env) {
   return { local: join(REPO, 'config', 'hub.local.json'), paseo: join(home, 'config.json'),
     routes: env.AGENT_HUB_ROUTES || (existsSync(join(routesDir, 'routes.local.json')) ? join(routesDir, 'routes.local.json') : join(routesDir, 'routes.template.json')) };
 }
-const rd = (p, d) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return d; } };
+const rd = readJsonStrict; // BOM-safe; missing file = default; unparsable = throws, so add/remove never overwrite a config they could not read
 const wr = writeJsonKeepEol; // keeps the file's own line endings
 const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
 const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };

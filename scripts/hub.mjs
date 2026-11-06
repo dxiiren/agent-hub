@@ -9,7 +9,7 @@
 //      AGENT_HUB_CLIENT_ROOT (redirect every client config into a temp dir, for tests),
 //      OFFICE_QWEN_URL / OFFICE_QWEN_MODEL / LLAMA_SERVER_BIN / LAPTOP_MODEL_PATH / HEAVY_LOCK_GLOB
 //      (or the same keys in config/hub.local.json, git-ignored).
-import { writeJsonKeepEol } from '../plugins/routing/jsonfile.mjs';
+import { writeJsonKeepEol, readJsonStrict } from '../plugins/routing/jsonfile.mjs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
@@ -30,7 +30,7 @@ const SECRET_FILE = join(HOME, 'agent-hub-secret');
 const HUB_DIR = join(HOME, 'hub');
 const NAME = 'agent-hub';
 
-const local = (() => { try { return JSON.parse(readFileSync(join(REPO, 'config', 'hub.local.json'), 'utf8')); } catch { return {}; } })();
+const local = (() => { try { return readJsonStrict(join(REPO, 'config', 'hub.local.json'), {}); } catch { return {}; } })(); // read-only here
 const opt = (env, key) => process.env[env] || local[key] || '';
 const cfg = {
   officeUrl: opt('OFFICE_QWEN_URL', 'officeQwenUrl'),
@@ -58,7 +58,7 @@ function which(name) {
   return WIN ? lines.find((l) => /\.(cmd|exe|bat)$/i.test(l)) || lines[0] : lines[0];
 }
 const writeJson = writeJsonKeepEol;
-const readJson = (p, d) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return d; } };
+const readJson = readJsonStrict; // every caller that later writes the file: unparsable = throw, never default-and-overwrite
 
 // Owner-only file: 0600 on POSIX, current-user-only ACL on Windows. Called after every write of a file that holds the token.
 function protect(file) {
@@ -312,7 +312,7 @@ async function doctor(deep) {
       let r, j, aid, good = false;
       for (let attempt = 0; attempt < 3 && !good; attempt++) {
         if (aid) paseo(['delete', aid]);
-        r = paseo(['run', '--provider', model[id] || id, '--cwd', dir, '--wait-timeout', '240s', '--json', 'Reply with exactly the word OK and do nothing else.']);
+        r = paseo(['run', '--provider', model[id] || id, '--cwd', dir, '--wait-timeout', '240s', '--json', '--', 'Reply with exactly the word OK and do nothing else.']);
         j = {}; try { j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))); } catch { /* keep raw */ }
         aid = j.agentId || j.id;
         const reply = aid ? paseo(['logs', aid]).stdout || '' : '';

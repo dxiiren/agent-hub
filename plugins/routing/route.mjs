@@ -10,7 +10,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
-import { runGate, gateOpts, EMPTY_TREE, SECRET_RE, wrappedSecret } from "../gate/server/gate.mjs";
+import { runGate, gateOpts, EMPTY_TREE, hasSecret } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { batchAllowed } from "./readguard.mjs";
 
@@ -41,6 +41,13 @@ export const createTimeoutS = (env = process.env) => Number(env.AGENT_HUB_CREATE
 export const logsTimeoutS = (env = process.env) => Number(env.AGENT_HUB_LOGS_TIMEOUT_S) || 30;
 export const toSeconds = (d) => { const m = /^(\d+)\s*(s|m|h)?$/.exec(String(d ?? "").trim()); return m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 }[m[2] ?? "s"]) : 900; };
 
+/** The ONE place a paseo argv is built. Callers put caller/agent text after a "--" marker; here the options (--home, --json) go BEFORE the "--" and the text after it, so text such as "--help" or "--provider x" arrives verbatim as a positional and never as an option. */
+export function cliArgs(args, home, json) {
+  const i = args.indexOf("--");
+  const [head, tail] = i < 0 ? [args, []] : [args.slice(0, i), args.slice(i)];
+  return [...head, ...(home ? ["--home", home] : []), ...(json ? ["--json"] : []), ...tail];
+}
+
 /** Default CLI runner: parsed JSON of `paseo <args> --json`, or {error}. */
 export function cliPaseo(home, env = process.env, spawn = spawnSync) {
   const [cmd, ...pre] = paseoCommand(env);
@@ -54,7 +61,7 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
     // Every CLI call is bounded (a hung `paseo logs` once held a route for the whole 15 min). Only wait/run legitimately run long; logs is short and retried once, then reported unreadable so the route still returns.
     const long = args[0] === "wait" || args[0] === "run";
     const timeout = create ? createTimeoutS(env) * 1000 : text ? logsTimeoutS(env) * 1000 : long ? 15 * 60_000 : 2 * 60_000;
-    const call = () => spawn(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), ...(text ? [] : ["--json"])], { encoding: "utf8", timeout, killSignal: "SIGKILL", env });
+    const call = () => spawn(cmd, [...pre, ...cliArgs(args, home, !text)], { encoding: "utf8", timeout, killSignal: "SIGKILL", env });
     let r = call();
     if (text && r.error?.code === "ETIMEDOUT") { r = call(); if (r.error?.code === "ETIMEDOUT") return { error: `logs call hung and was killed after 2 x ${logsTimeoutS(env)} s` }; }
     if (create && r.error?.code === "ETIMEDOUT") return { error: `CREATE_TIMEOUT: the daemon did not create the agent within ${createTimeoutS(env)} s (saturated daemon or a provider that stalls at initialize; upstream Paseo, not a worktree bug). Check \`paseo ls\` and the laptop load, then retry; raise AGENT_HUB_CREATE_TIMEOUT_S if the host is just slow.` };
@@ -178,7 +185,7 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   if (res.status === "PASS") return { status: "PASS", reasons: [], attempts: 0 };
   if (routes.gateRetry === false) return { status: "FAIL", reasons: res.reasons, attempts: 1 };
   const fail = (why) => ({ status: "FAIL", reasons: [...res.reasons, why], attempts: 1 });
-  const s = paseo(["send", agentId, "Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish."]);
+  const s = paseo(["send", agentId, "--", "Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish."]);
   if (s?.error) return fail("re-prompt failed: " + String(s.error).slice(0, 120));
   const w = paseo(["wait", agentId, "--timeout", "900"]);
   if (w?.error) return fail("wait for re-prompt failed: " + String(w.error).slice(0, 120));
@@ -206,8 +213,11 @@ const parkDir = (home) => join(home || process.env.PASEO_HOME || join(os.homedir
 /** Remember what a parked agent needs for its reply (gate, base, worktree) and arm a detached reaper that stops it after PARK_SECONDS without a reply. */
 /** Paseo ids are UUIDs; the id becomes a file name, so allow only plain id characters and keep the resolved path inside the park folder. */
 export const AGENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+/** Windows device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9; any case, any extension) open the device, not a file. */
+export const RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:[.].*)?$/i;
+export const safeName = (n) => typeof n === "string" && AGENT_ID_RE.test(n) && !RESERVED_NAME_RE.test(n);
 export function parkFile(dir, agentId) {
-  if (typeof agentId !== "string" || !AGENT_ID_RE.test(agentId)) return null;
+  if (!safeName(agentId)) return null;
   const f = resolve(dir, agentId + ".json");
   return f.startsWith(resolve(dir) + sep) ? f : null;
 }
@@ -240,14 +250,14 @@ export function reapParked(paseo, agentId, parkedAt, dir = parkDir()) {
  */
 export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, dir = parkDir(), answerRetryMs, reaper = true, waitTimeout } = {}) {
   if (!parkFile(dir, agentId)) return { used: null, status: "error", error: `invalid agent id: only ${AGENT_ID_RE} is accepted` };
-  if (SECRET_RE.test(String(text)) || wrappedSecret(text)) return { used: null, status: "rejected", error: "reply rejected: it looks like a credential, token or key. Reply without it." };
+  if (hasSecret(text)) return { used: null, status: "rejected", error: "reply rejected: it looks like a credential, token or key. Reply without it." };
   const rec = loadPark(agentId, dir);
   if (!rec) return { used: null, status: "error", error: `no parked agent ${agentId}: it never asked, already finished, or was stopped after ${PARK_SECONDS / 60} min without a reply` };
   dropPark(agentId, dir); // the reaper must not stop it while this reply runs
   const last = !mayAsk(rec.asks);
   const trace = [{ provider: rec.provider, reply: rec.asks }];
   const fail = (error, status = "error") => { retireParked(paseo, rec); return { used: rec.provider, agentId, status, error, trace }; };
-  const s = paseo(["send", agentId, String(text) + (last ? "\n\n(This is the last reply you get: finish the task now, do not ask again.)" : "")]);
+  const s = paseo(["send", agentId, "--", String(text) + (last ? "\n\n(This is the last reply you get: finish the task now, do not ask again.)" : "")]);
   if (s?.error) return fail("send failed: " + String(s.error).slice(0, 160));
   const w = paseo(["wait", agentId, "--timeout", String(toSeconds(waitTimeout ?? routes.waitTimeout ?? "10m"))]);
   if (w?.error || (w?.status && w.status !== "idle")) return fail(w?.error ? "wait failed: " + String(w.error).slice(0, 160) : `agent ended with status ${w.status}`, w?.status ?? "error");
@@ -275,7 +285,7 @@ const ALLOW = {
 };
 export function inputError(o) {
   for (const [k, re, v] of [["type", ALLOW.type, o.type], ["provider", ALLOW.provider, o.provider], ["mode", ALLOW.mode, o.mode], ["session", ALLOW.label, o.session], ["dev", ALLOW.label, o.dev], ["client", ALLOW.label, o.client]])
-    if (v !== undefined && v !== null && !(typeof v === "string" && re.test(v))) return `invalid ${k}: only ${re} is accepted`;
+    if (v !== undefined && v !== null && !(typeof v === "string" && re.test(v) && (re !== ALLOW.label || !RESERVED_NAME_RE.test(v)))) return `invalid ${k}: only ${re} is accepted (and no Windows device name)`;
   for (const [k, v] of [["cwd", o.cwd], ["home", o.home]])
     if (v !== undefined && v !== null && (typeof v !== "string" || !v || v.startsWith("-") || [...v].some((c) => c.charCodeAt(0) < 32))) return `invalid ${k}: an absolute path without control characters or a leading dash is required`;
   return null;
@@ -360,7 +370,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
-    let j = paseo([...args, o.prompt]);
+    let j = paseo([...args, "--", o.prompt]);
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };

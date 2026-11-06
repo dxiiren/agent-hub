@@ -9,14 +9,31 @@ import { fileURLToPath } from "node:url";
 const SECRET_KEY = String.raw`(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*`;
 // value: quoted 8+ non-space chars holding a digit or punctuation (or 16+ plain chars) | unquoted 8+ with a digit/punctuation and no brackets/parens, so `token = tokens[i]`, `password_field = input` and `token = parse_the_user_token` stay clean
 const PUNCT = String.raw`[\d!@#$%^&*+]`;
-export const SECRET_RE = new RegExp(
-  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9\-._~+/]{20,}|aws\w*secret\w*['"]?\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}|` + SECRET_KEY +
-  String.raw`['"]?\s*[:=]\s*(?:['"](?=[^'"\s]*` + PUNCT + String.raw`)[^'"\s]{8,}['"]|['"][A-Za-z0-9_\-\/+]{16,}['"]|['"]?(?=[^\s'"\[\]()<>{},;]*` + PUNCT + String.raw`)[^\s'"\[\]()<>{},;]{8,}))`, "i");
-
-/** Token-shaped secrets can be wrapped over lines (LF or CRLF): drop all whitespace and look for the ones with a distinctive prefix. Case-sensitive on purpose (joined prose must not match). The per-line SECRET_RE keeps covering key-name rules and the case-insensitive forms. */
-const WRAPPED_RE = /eyJ[A-Za-z0-9_-]{8,}[.]eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|-----BEGIN[A-Z]*PRIVATEKEY(?:BLOCK)?-----/;
-export const wrappedSecret = (text) => WRAPPED_RE.test(String(text).replace(/\s+/g, ""));
-export const wrappedJwt = wrappedSecret;
+/**
+ * THE secret list (gate diff, file bytes, reply scan all use hasSecret below). One builder, two shapes of the same rules:
+ * per line (SECRET_RE) and on the lines trimmed and joined (JOINED_RE), which catches a secret wrapped over LF/CRLF lines or padded with spaces.
+ * The joined shape only relaxes the separators inside the PEM header and after Bearer to \s* (the wrap may fall on a space).
+ * Both are case-insensitive: AKIA, PEM headers, aws_secret_access_key, a password key, Bearer, sk- all match in any case.
+ */
+function secretRe(sq) {
+  const sp = sq ? String.raw`\s*` : String.raw`\s+`;
+  const val = String.raw`[^\s'"\[\]()<>{},;]`;
+  return new RegExp(
+    String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN` + sp + String.raw`[A-Z ]*PRIVATE` + sp + String.raw`KEY(?:` + sp + String.raw`BLOCK)?-----|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-` + String.raw`[A-Za-z0-9]{20,}|Bearer` + sp + String.raw`[A-Za-z0-9\-._~+/]{20,}|aws\w*secret\w*['"]?\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}|` + SECRET_KEY +
+    String.raw`['"]?\s*[:=]\s*(?:['"](?=[^'"\s]*` + PUNCT + String.raw`)[^'"\s]{8,}['"]|['"][A-Za-z0-9_\-\/+]{16,}['"]|['"]?(?=` + val + String.raw`*` + PUNCT + String.raw`)` + val + String.raw`{8,}))`, "i");
+}
+export const SECRET_RE = secretRe(false);
+const JOINED_RE = secretRe(true);
+const LINES = /\r\n|\n|\r/;
+/** Lines trimmed and concatenated with no separator: a token wrapped at any column reads as one string again, while spaces inside a line stay (prose does not join into a match). */
+const joinLines = (t) => t.split(LINES).map((l) => l.trim()).join("");
+/** True when `text` holds a secret: on any single line, or with the line breaks removed (a wrapped secret). */
+export function hasSecret(text) {
+  const t = String(text);
+  return t.split(/\r\n|\n|\r/).some((l) => SECRET_RE.test(l)) || JOINED_RE.test(joinLines(t));
+}
+export const wrappedSecret = hasSecret;
+export const wrappedJwt = hasSecret;
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.
 const EMPTY_DIR = mkdtempSync(join(tmpdir(), "agent-hub-nohooks-"));
@@ -58,10 +75,10 @@ const MAX_FILE = 16 << 20, MAX_TOTAL = 128 << 20, MAX_DEPTH = 16;
 /** True when the bytes hold a secret as UTF-8/latin1 text (binary files too) or as UTF-16 text, little or big endian, at either byte alignment (odd-length buffers included). */
 export function bufHasSecret(buf) {
   const t = buf.toString("latin1");
-  if (SECRET_RE.test(t) || wrappedSecret(t)) return true;
+  if (hasSecret(t)) return true;
   for (const b of [buf, buf.subarray(1)]) {
     const even = b.subarray(0, b.length & ~1);
-    for (const u of [even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le")]) if (SECRET_RE.test(u) || wrappedSecret(u)) return true;
+    for (const u of [even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le")]) if (hasSecret(u)) return true;
   }
   return false;
 }
@@ -165,7 +182,7 @@ export function runGate(cwd, opts = {}) {
   const added = lines.filter((l) => l.startsWith("+") && !l.startsWith("+++"));
   const removed = lines.filter((l) => l.startsWith("-") && !l.startsWith("---"));
   const histAdded = hist.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++"));
-  if (added.some((l) => SECRET_RE.test(l)) || histAdded.some((l) => SECRET_RE.test(l)) || wrappedSecret(added.map((l) => l.slice(1)).join("")) || wrappedSecret(histAdded.map((l) => l.slice(1)).join(""))) reasons.push("secret pattern in diff");
+  if (hasSecret(added.map((l) => l.slice(1)).join(String.fromCharCode(10))) || hasSecret(histAdded.map((l) => l.slice(1)).join(String.fromCharCode(10)))) reasons.push("secret pattern in diff");
   if (added.length + removed.length > maxLines) reasons.push(`diff larger than ${maxLines} lines`);
   // binary and UTF-16 files show no text in a diff: scan every changed file's bytes, and ignored files too (an agent can hide a file with .gitignore)
   if (inRepo) {

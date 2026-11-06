@@ -56,7 +56,7 @@ test("reply can ask again and stays parked with the next round", () => {
 test("after the third question the reply must finish: a further [ASK] is returned as the final answer", () => {
   const d = dir(); rec(d, { asks: 3 }); const p = fake("still unsure\n[ASK] again?");
   const r = runReply("A1", "just guess", p, {}, { dir: d, answerRetryMs: 0 });
-  assert.equal(r.status, "completed"); assert.match(p.calls.find((c) => c[0] === "send")[2], /last reply/);
+  assert.equal(r.status, "completed"); assert.match(p.calls.find((c) => c[0] === "send")[3], /last reply/);
   assert.equal(loadPark("A1", d), null);
 });
 test("the original gate runs on the final answer", () => {

@@ -35,7 +35,8 @@ export function toRecord(snap, now = new Date()) {
   };
 }
 
-const safe = (s) => s.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
+// A Windows device name (CON, NUL, COM1 ... with or without an extension) opens the device, not a file: prefix it.
+export const safe = (s) => { const t = s.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80); return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:[.].*)?$/i.test(t) ? "_" + t : t; };
 
 const zero = () => ({ in: 0, out: 0, cached: 0, cost_usd: 0, credits: 0, n: 0 });
 
