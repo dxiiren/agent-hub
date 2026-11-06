@@ -149,6 +149,7 @@ function mcp(action) {
 const paseo = (args, o = {}) => run('paseo', ['--home', HOME, ...args], { timeout: args[0] === 'logs' ? 30_000 : 300_000, killSignal: 'SIGKILL', ...o }); // bounded: the deep run's own wait is 240 s
 let fails = 0;
 const row = (good, label, detail = '') => { console.log(`${good ? 'PASS' : 'FAIL'}  ${label}${detail ? '  ' + detail : ''}`); if (!good) fails++; };
+const warn = (label, detail = '') => console.log(`WARN  ${label}${detail ? '  ' + detail : ''}`); // environment (quota, expired login): shown, never counted as a failure
 async function http(path, headers = {}, body) {
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}${path}`, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers }, body, signal: AbortSignal.timeout(15000) });
@@ -256,14 +257,21 @@ async function doctor(deep) {
         aid = j.agentId || j.id; if (aid) made.add(aid);
         const reply = aid ? paseo(['logs', aid]).stdout || '' : '';
         good = j.status === 'completed' && reply.split(String.fromCharCode(10)).some((l) => l.trim() === 'OK'); // the agent's own line, not the prompt echo
+        if (!good && aid) { const { agentLastError, classifyFailure } = await import('./doctor-classify.mjs'); if (classifyFailure(agentLastError(HOME, aid)).kind !== 'real') break; } // a quota or expired login does not change on the next try
       }
-      row(good, `provider ${id}: live task`, good ? 'replied OK' : `status ${j.status || 'none'}; ${out(r).slice(0, 120).replace(/\s+/g, ' ')}`);
+      if (good) row(true, `provider ${id}: live task`, 'replied OK');
+      else {
+        const { agentLastError, classifyFailure } = await import('./doctor-classify.mjs');
+        const why = classifyFailure(aid ? agentLastError(HOME, aid) : '');
+        if (why.kind === 'real') row(false, `provider ${id}: live task`, `status ${j.status || 'none'}; ${why.reason || out(r).slice(0, 200).replace(/\s+/g, ' ')}`);
+        else warn(`provider ${id}: live task not run: ${why.kind === 'quota' ? 'usage limit / quota' : 'login expired'} (the provider is fine; fix the account, not the hub)`, why.reason);
+      }
       if (aid) retire(aid);
     }
     } finally {
       for (const a of made) retire(a);
       try { const { cleanup } = await import('../plugins/routing/cleanup.mjs'); cleanup({ paseo: (a) => { try { return JSON.parse(paseo([...a, '--json']).stdout || '[]'); } catch { return []; } }, routes: {} }); } catch { /* the by-id archive above is the primary path */ } // backstop: a run that timed out before returning its id
-      rmSync(dir, { recursive: true, force: true });
+      try { const { removeDoctorDir } = await import('../plugins/routing/cleanup.mjs'); removeDoctorDir(dir, (a) => { try { return JSON.parse(paseo([...a, '--json']).stdout || '[]'); } catch { return []; } }); } catch { /* best effort: `agent-hub cleanup` removes leftovers later */ }
     }
   }
   console.log(fails ? `\n${fails} check(s) FAILED` : '\nall checks PASSED');

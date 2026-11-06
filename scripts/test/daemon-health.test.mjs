@@ -21,7 +21,7 @@ test('probeDaemon: up / sick / hung (port open, no answer) / down (refused)', as
   try {
     assert.equal((await probeDaemon(pOk, { timeoutMs: 1000 })).state, 'up');
     assert.equal((await probeDaemon(pSick, { timeoutMs: 1000 })).state, 'sick');
-    const hp = await probeDaemon(pHung, { timeoutMs: 300 });
+    const hp = await probeDaemon(pHung, { timeoutMs: 300, attempts: 2, backoffMs: 10 });
     assert.equal(hp.state, 'hung'); assert.match(daemonAdvice(hp), /HUNG.*#8244.*restart/s);
     const dp = await probeDaemon(await freePort(), { timeoutMs: 1000 });
     assert.equal(dp.state, 'down'); assert.match(daemonAdvice(dp), /just up/);
@@ -35,4 +35,11 @@ test('doctor says HUNG, not "down", and exits 1 when the daemon accepts connecti
     const r = await new Promise((res) => { const p = spawn(process.execPath, [HUB, 'doctor'], { env }); let o = ''; p.stdout.on('data', (d) => { o += d; }); p.stderr.on('data', (d) => { o += d; }); p.on('exit', (c) => res({ c, o })); });
     assert.equal(r.c, 1, r.o); assert.match(r.o, /FAIL\s+daemon health/); assert.match(r.o, /daemon is HUNG/); assert.doesNotMatch(r.o, /daemon is down/);
   } finally { await h.closeAll(); }
+});
+
+test('probeDaemon: one missed window followed by an answer is up, not hung (busy daemon)', async () => {
+  let n = 0;
+  const f = async (u, { signal }) => { if (n++ === 0) throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); return { status: 200, text: async () => '{}' }; };
+  assert.equal((await probeDaemon(1, { fetchFn: f, backoffMs: 5 })).state, 'up');
+  assert.equal(n, 2);
 });

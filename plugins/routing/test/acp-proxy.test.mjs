@@ -6,7 +6,7 @@ import { mkdtempSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { modeProxy, RO_MODE, cleanModelId } from '../acp-proxy.mjs';
+import { modeProxy, RO_MODE, cleanModelId, cleanConfigOptions, cleanUpdate } from '../acp-proxy.mjs';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-acp.mjs', import.meta.url));
 const spawned = [];
@@ -85,4 +85,25 @@ test('models: only the launched model is advertised, under its plain id; set_mod
     s.close();
   } finally { delete process.env.FAKE_MODELS; }
   assert.equal(cleanModelId('$runtime|openai|A-b_1.2(openai)'), 'A-b_1.2'); assert.equal(cleanModelId('plain'), 'plain');
+});
+
+test('qwen >= 0.26 ids ("<id>(openai)") are plain in models AND configOptions; the model selector maps back on set_config_option', async () => {
+  process.env.FAKE_MODELS = '1';
+  try {
+    const s = session(); const r = await open(s);
+    const model = r.configOptions.find((o) => o.id === 'model');
+    assert.deepEqual([model.currentValue, model.options.map((o) => [o.value, o.name])], ['Big-Model', [['Big-Model', 'Big-Model']]]);
+    assert.equal(r.configOptions.find((o) => o.id === 'mode').currentValue, 'auto', 'other options untouched');
+    await s.call('session/set_config_option', { sessionId: r.sessionId, configId: 'model', value: 'Big-Model' });
+    assert.equal((await s.prompt(r.sessionId, 'HI')).text, 'MODE cfg=model:$runtime|openai|Big-Model(openai) RO false');
+    s.close();
+  } finally { delete process.env.FAKE_MODELS; }
+});
+test('the captured qwen 0.26.7 payload and streamed updates lose the "(openai)" suffix', () => {
+  const back = new Map();
+  const opts = cleanConfigOptions([{ id: 'model', currentValue: 'Qwen3.8-27B(openai)', options: [{ value: 'Qwen3.8-27B(openai)', name: 'office-qwen', description: '' }] }], back);
+  assert.deepEqual(opts[0].options, [{ value: 'Qwen3.8-27B', name: 'Qwen3.8-27B', description: '' }]); assert.equal(back.get('Qwen3.8-27B'), 'Qwen3.8-27B(openai)');
+  assert.equal(cleanUpdate({ sessionUpdate: 'current_model_update', currentModelId: 'Qwen3.8-27B(openai)' }, back).currentModelId, 'Qwen3.8-27B');
+  assert.equal(cleanUpdate({ configOptions: [{ id: 'model', currentValue: 'A(openai)', options: [{ value: 'A(openai)', name: 'x' }] }] }, back).configOptions[0].currentValue, 'A');
+  for (const [a, b] of [['Qwen3.8-27B(openai)', 'Qwen3.8-27B'], ['Qwen3.8-27B-NVFP-Cluster', 'Qwen3.8-27B-NVFP-Cluster'], ['qwen35-9b', 'qwen35-9b']]) assert.equal(cleanModelId(a), b);
 });

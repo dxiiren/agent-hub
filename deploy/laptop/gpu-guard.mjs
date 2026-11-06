@@ -1,30 +1,55 @@
 // GPU-only guard for the laptop model (owner rule: the model must load 100% on the GPU, never on the CPU).
 // Pure decision logic (judge) plus the Windows/NVIDIA probes. Used by laptop-agent.mjs (start + watchdog).
 import { spawnSync } from 'node:child_process';
-import { existsSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, statSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runDir, readState, readStateJson, writeState, tryWriteState, listState, procStart } from '../../plugins/routing/runstate.mjs';
 
-const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 15000, windowsHide: true });
+const sh = (cmd, args, timeout = 15000) => spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true });
+const wait = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* no wait available: retry at once */ } };
+/** A probe that timed out, was killed or printed nothing says NOTHING about the card (a restart leaves PowerShell cold and slow for minutes): 'Indeterminate', never 'Missing'. */
+export const UNKNOWN = 'Indeterminate';
+const answered = (r) => r && !r.error && !r.signal && r.status === 0;
 
-// The NVIDIA display adapter must report PnP status OK; after a sleep the card can sit at "Unknown".
-export function pnpStatus() {
+let pnpGood = null; // { at } of the last OK, kept briefly so a burst of probes (picker, doctor, watchdog) costs one PowerShell start
+export function _resetGpuCacheForTest() { pnpGood = null; }
+/** The NVIDIA display adapter must report PnP status OK; after a sleep the card can sit at "Unknown".
+ *  Returns OK, the real PnP status, 'Missing' (the query ANSWERED and lists no NVIDIA device) or 'Indeterminate' (every attempt timed out or printed nothing; callers must not refuse on it). */
+export function pnpStatus({ attempts = 3, backoffMs = 1500, timeoutMs = 20000, run = sh, cacheMs = 5000, now = Date.now } = {}) {
   if (process.platform !== 'win32') return 'OK';
-  const r = sh('powershell', ['-NoProfile', '-Command', "Get-PnpDevice -Class Display | Where-Object FriendlyName -like '*NVIDIA*' | ForEach-Object { $_.Status }"]);
-  return (r.stdout || '').trim().split(/\s+/)[0] || 'Missing';
+  if (pnpGood && now() - pnpGood.at < cacheMs) return 'OK';
+  const script = "$d = @(Get-PnpDevice -Class Display | Where-Object FriendlyName -like '*NVIDIA*'); if ($d.Count -eq 0) { 'NONE' } else { $d[0].Status }";
+  for (let i = 0; i < attempts; i++) {
+    if (i) wait(backoffMs * i);
+    const r = run('powershell', ['-NoProfile', '-Command', script], timeoutMs);
+    const tok = answered(r) ? (r.stdout || '').trim().split(/\s+/)[0] : '';
+    if (tok === 'NONE') return 'Missing';
+    if (tok) { if (tok === 'OK') pnpGood = { at: now() }; return tok; }
+  }
+  return UNKNOWN;
 }
 
-export function smi() {
-  const g = sh('nvidia-smi', ['--query-gpu=memory.used', '--format=csv,noheader,nounits']);
-  const usedMiB = parseInt((g.stdout || '').split(/\s/)[0], 10);
-  const a = sh('nvidia-smi', ['--query-compute-apps=pid', '--format=csv,noheader']);
-  return { ok: g.status === 0 && !Number.isNaN(usedMiB), usedMiB, apps: (a.stdout || '').split(/\s+/).map(Number).filter(Boolean) };
+/** nvidia-smi: { ok, unknown, usedMiB, apps }. `unknown` = it timed out or was killed (says nothing about the card); ok:false without `unknown` = it ran and failed (no device). */
+export function smi({ attempts = 2, backoffMs = 1000, run = sh } = {}) {
+  let last = { ok: false, unknown: true, usedMiB: 0, apps: [] };
+  for (let i = 0; i < attempts; i++) {
+    if (i) wait(backoffMs);
+    const g = run('nvidia-smi', ['--query-gpu=memory.used', '--format=csv,noheader,nounits']);
+    const usedMiB = parseInt((g.stdout || '').split(/\s/)[0], 10);
+    if (answered(g) && !Number.isNaN(usedMiB)) {
+      const a = run('nvidia-smi', ['--query-compute-apps=pid', '--format=csv,noheader']);
+      return { ok: true, unknown: false, usedMiB, apps: (a.stdout || '').split(/\s+/).map(Number).filter(Boolean) };
+    }
+    last = { ok: false, unknown: !!(g.error || g.signal || !(g.stdout || g.stderr)), usedMiB: 0, apps: [] };
+    if (!last.unknown) return last; // it answered with an error: the driver says no device
+  }
+  return last;
 }
 
 // in: { pnp, smiOk, usedMiB, apps[], serverPid|null, cpuPct|null, idle }. Returns a reason string, or '' when healthy.
-export function judge({ pnp, smiOk, usedMiB = 0, apps = [], serverPid = null, cpuPct = null, idle = false }, cpuMax = 60) {
-  if (pnp !== 'OK') return `NVIDIA device PnP status is ${pnp}, not OK`;
-  if (!smiOk) return 'nvidia-smi failed';
+export function judge({ pnp, smiOk, smiUnknown = false, usedMiB = 0, apps = [], serverPid = null, cpuPct = null, idle = false }, cpuMax = 60) {
+  if (pnp !== 'OK' && pnp !== UNKNOWN) return `NVIDIA device PnP status is ${pnp}, not OK`;
+  if (!smiOk) return smiUnknown ? '' : 'nvidia-smi failed'; // unknown = the probe itself failed: never a verdict on the card
   // WDDM may not list the pid, so "no app" only counts when no model-sized GPU memory is in use either
   if (serverPid && !apps.includes(serverPid) && usedMiB < 1000) return `llama-server pid ${serverPid} is loaded but uses no GPU memory (running on the CPU)`;
   if (serverPid && idle && cpuPct != null && cpuPct > cpuMax) return `llama-server burns ${cpuPct.toFixed(0)}% CPU while idle`;
@@ -64,8 +89,8 @@ export function llamaArgs({ model, ctx = '65536', port, alias, device = 'CUDA0' 
     '--temp', '0.7', '--top-p', '0.8', '--top-k', '20', '--device', device, '--load-mode', 'none', '--host', '127.0.0.1', '--port', String(port), '--alias', alias, '--metrics', '--cache-ram', '0', '-ot', `token_embd\.weight=${device}`];
 }
 /** Start verdict: a reason string when the server must NOT be started (GPU missing, nvidia-smi failing, GPU already used by something else), else ''. */
-export function startRefusal({ pnp, smiOk, usedMiB = 0 }, busyMiB = 600) {
-  if (pnp !== 'OK' || !smiOk) return 'GPU missing -> provider disabled';
+export function startRefusal({ pnp, smiOk, smiUnknown = false, usedMiB = 0 }, busyMiB = 600) {
+  if ((pnp !== 'OK' && pnp !== UNKNOWN) || (!smiOk && !smiUnknown)) return 'GPU missing -> provider disabled';
   if (usedMiB > busyMiB) return `GPU busy (${usedMiB} MiB used by another process)`;
   return '';
 }
@@ -118,13 +143,31 @@ export function ensureReaper(port, reaperScript, { spawn = spawnOrphan, own = re
   if (!needsReaper({ own, ownAlive: alive(own), reaperPid, reaperAlive: reaperPid ? pAlive(reaperPid) : false })) return false;
   return Boolean(spawn(process.execPath, [reaperScript, String(port)]));
 }
+/** Every run-dir file of the server on `port`: its ownership record, its reaper registration and the in-flight markers of the agents that used it. Called by EVERY path that stops or finds a server gone. */
+export function removeServerFiles(port, dir = runDir()) {
+  const mine = new RegExp(`^agent-hub-laptop-${port}[.](json|reaper|inflight[.][0-9]+)$`);
+  let n = 0;
+  try { for (const f of readdirSync(dir)) if (mine.test(f)) { try { unlinkSync(join(dir, f)); n++; } catch { /* gone or not ours */ } } } catch { /* no run dir */ }
+  return n;
+}
+const ALIAS_MAX_AGE = 7 * 86400_000;
+/** Leftovers of servers that are gone: records whose pid is dead, in-flight markers whose agent died, dead reaper registrations, session aliases older than a week. Safe to run any time. */
+export function sweepStale({ dir = runDir(), now = Date.now(), alive = ownedAlive, pAlive = pidAlive } = {}) {
+  let n = 0; const rm = (f) => { try { unlinkSync(join(dir, f)); n++; } catch { /* gone */ } };
+  for (const f of listState(dir, /^agent-hub-laptop-[0-9]+[.]json$/)) { const own = readStateJson(join(dir, f)); if (!own?.pid || !alive(own)) rm(f); }
+  for (const f of listState(dir, /^agent-hub-laptop-[0-9]+[.]inflight[.][0-9]+$/)) if (!pAlive(Number(f.split('.').pop()))) rm(f);
+  for (const f of listState(dir, /^agent-hub-laptop-[0-9]+[.]reaper$/)) { const p = parseInt(readState(join(dir, f)) ?? '', 10); if (!p || !pAlive(p)) rm(f); }
+  for (const f of listState(dir, /^qwen-session-.*[.]json$/)) { try { if (now - statSync(join(dir, f)).mtimeMs > ALIAS_MAX_AGE) rm(f); } catch { /* gone */ } }
+  return n;
+}
 /** Hub down / doctor / cleanup: stop every hub-owned llama-server nobody is using (no prompt in flight and idle past `idleMs`; 0 = stop at once, for `down`). Returns what it stopped. */
 export function reapOrphans({ idleMs, now = Date.now(), dir = runDir(), stop = stopVerified, alive = ownedAlive, inflightOf = (port) => anyInflight(port, now, dir) } = {}) {
   const out = [];
+  sweepStale({ dir, now, alive });
   for (const f of listState(dir, /^agent-hub-laptop-[0-9]+[.]json$/)) { // only regular files we own: a planted or foreign record is never read
     const port = f.match(/[0-9]+/)[0]; const own = readStateJson(join(dir, f)); if (!own) continue;
     if (!own?.pid || !alive(own) || inflightOf(port) || (idleMs > 0 && !idleExpired(own, now, idleMs))) continue;
-    if (stop(own)) { out.push({ port, pid: own.pid }); try { unlinkSync(join(dir, f)); } catch { /* gone */ } }
+    if (stop(own)) { out.push({ port, pid: own.pid }); removeServerFiles(port, dir); }
   }
   return out;
 }

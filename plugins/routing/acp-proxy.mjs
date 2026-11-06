@@ -10,8 +10,8 @@ export const aliasFile = (outer) => `qwen-session-${String(outer).replace(/[^A-Z
 export const innerSession = (outer) => { try { return readStateJson(join(runDir(), aliasFile(outer)))?.inner ?? null; } catch { return null; } };
 
 export const RO_MODE = { id: 'read-only', name: 'Read-only', description: 'Reads files inside the task folder only: no edits, no shell, sensitive files refused by the agent itself.' };
-/** Qwen's runtime model id `$runtime|openai|<id>(openai)` as the plain served id `<id>` (what the endpoint calls it). */
-export const cleanModelId = (id) => { const m = /^\$runtime\|[^|]*\|(.*)\([^()]*\)$/.exec(String(id ?? '')); return m ? m[1] : String(id ?? ''); };
+/** Qwen's own model ids as the plain served id `<id>` (what the endpoint calls it): `$runtime|openai|<id>(openai)` (older qwen) and `<id>(openai)` (qwen >= 0.26: models AND configOptions). */
+export const cleanModelId = (id) => { const m = /^(?:\$runtime\|[^|]*\|)?(.*?)\s*\([A-Za-z][\w-]*\)$/.exec(String(id ?? '')); return m && m[1] ? m[1] : String(id ?? ''); };
 /**
  * A hub launcher starts qwen with exactly one model (--model). Qwen also lists every model of the user's own ~/.qwen/settings.json
  * (modelProviders) and shows the runtime id; advertise only the launched model under its plain id. `back` maps that id to qwen's own.
@@ -21,6 +21,23 @@ export function cleanModels(models, back) {
   const cur = list.find((x) => x?.modelId === models.currentModelId) ?? list[0]; if (!cur) return models;
   const id = cleanModelId(cur.modelId); back.set(id, cur.modelId);
   return { ...models, currentModelId: id, availableModels: [{ ...cur, modelId: id, name: id }] };
+}
+/** The same for the ACP `configOptions` model selector (qwen repeats its runtime id there; Paseo's pickers and agent profile read this one too). */
+export function cleanConfigOptions(opts, back) {
+  if (!Array.isArray(opts)) return opts;
+  return opts.map((o) => {
+    if (o?.id !== 'model' || !Array.isArray(o.options)) return o;
+    const cur = o.options.find((x) => x?.value === o.currentValue) ?? o.options[0]; if (!cur) return o;
+    const id = cleanModelId(cur.value); back.set(id, cur.value);
+    return { ...o, currentValue: id, options: [{ ...cur, value: id, name: id }] };
+  });
+}
+/** Streamed updates that carry the model again (config_option_update, current_model_update). */
+export function cleanUpdate(u, back) {
+  if (!u || typeof u !== 'object') return u;
+  if (Array.isArray(u.configOptions)) u.configOptions = cleanConfigOptions(u.configOptions, back);
+  for (const k of ['currentModelId', 'modelId']) if (typeof u[k] === 'string') { const id = cleanModelId(u[k]); if (id !== u[k]) back.set(id, u[k]); u[k] = id; }
+  return u;
 }
 const NL = String.fromCharCode(10);
 const lines = (stream, fn) => createInterface({ input: stream, crlfDelay: Infinity }).on('line', fn);
@@ -60,10 +77,12 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
         if (Array.isArray(a) && !a.some((x) => x.id === RO_MODE.id)) a.push(RO_MODE);
         if (ro && m.result.modes) m.result.modes.currentModeId = RO_MODE.id;
         if (m.result.models) m.result.models = cleanModels(m.result.models, models);
+        if (m.result.configOptions) m.result.configOptions = cleanConfigOptions(m.result.configOptions, models);
       }
       return toClient(m);
     }
     if (m.params?.sessionId && m.params.sessionId === inner && inner !== outer) m.params.sessionId = outer;
+    if (m.method === 'session/update') cleanUpdate(m.params?.update, models);
     toClient(m);
   }
   async function restartReadOnly() {
@@ -96,6 +115,7 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
     }
     if (m.params?.sessionId && m.params.sessionId === outer && inner !== outer) m.params.sessionId = inner;
     if (typeof m.params?.modelId === 'string' && models.has(m.params.modelId)) m.params.modelId = models.get(m.params.modelId); // the plain id we advertised -> qwen's runtime id
+    if (m.params?.configId === 'model' && typeof m.params.value === 'string' && models.has(m.params.value)) m.params.value = models.get(m.params.value);
     toAgent(m);
   }
   start(initialReadOnly); // eager: Paseo's first message (initialize) arrives at once, and a launcher with no ACP client still runs its agent

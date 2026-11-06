@@ -577,9 +577,9 @@ test("codex has no read-only mode: a read-only type skips it, an edit type still
   const rt = { slots: { codex: 1, qwen: 2 }, routes: { summarise: ["codex/a", "qwen-code/b"], edit: ["codex/a"] } };
   const runs = [];
   const p = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { status: "completed", agentId: "Z" }; } return a[0] === "worktree" && a[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : a[0] === "ls" ? [] : {}; };
-  const r = runRoute({ type: "summarise", prompt: "x", cwd: process.cwd() }, p, rt);
+  const r = runRoute({ type: "summarise", prompt: "x", cwd: mkdtempSync(join(tmpdir(), "rt-cwd-")) }, p, rt);
   assert.deepEqual(runs, ["qwen-code/b"]); assert.match(JSON.stringify(r.trace), /no verified read-only mode/);
-  runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: process.cwd(), worktree: true, base: "a".repeat(40) }, p, rt);
+  runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: mkdtempSync(join(tmpdir(), "rt-cwd-")), worktree: true, base: "a".repeat(40) }, p, rt);
   assert.deepEqual(runs, ["codex/a"]);
 });
 

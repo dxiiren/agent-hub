@@ -9,8 +9,10 @@ export const paseoHome = (env = process.env) => env.PASEO_HOME ?? join(homedir()
 export const readJson = (f) => { try { if (!f) return {}; return JSON.parse(readFileSync(f, "utf8").replace(/^﻿/, "")); } catch { return {}; } };
 /** Every place hub.local.json can be, best first: explicit env, the repo env, next to this file, then beside each plugin the Paseo config loads. */
 export function localConfigPaths(env = process.env) {
-  const out = [env.AGENT_HUB_LOCAL, env.AGENT_HUB_REPO && join(env.AGENT_HUB_REPO, "config", "hub.local.json")];
-  try { out.push(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json")); } catch { /* bundled */ }
+  // hermetic (tests, AGENT_HUB_NO_LOCAL=1 in the given env or the process): only paths the caller handed in; the clone's own config is never searched
+  const hermetic = env.AGENT_HUB_NO_LOCAL === "1" || process.env.AGENT_HUB_NO_LOCAL === "1";
+  const out = [env.AGENT_HUB_LOCAL, !hermetic && env.AGENT_HUB_REPO && join(env.AGENT_HUB_REPO, "config", "hub.local.json")];
+  if (!hermetic) try { out.push(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json")); } catch { /* bundled */ }
   for (const p of Object.values(readJson(join(paseoHome(env), "config.json")).plugins ?? {})) if (p?.path) out.push(join(p.path, "..", "..", "config", "hub.local.json"));
   return out.filter(Boolean);
 }

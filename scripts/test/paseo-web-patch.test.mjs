@@ -110,3 +110,53 @@ test('a newer patch revision re-patches from the untouched original and drops th
   const pick = s.edits.find((e) => e.name === 'model-picker-component');
   assert.ok(pick.replace.includes('/*agent-hub-rev:' + s.rev + '*/') && pick.replace.endsWith(pick.find), 'component source loaded and ends with the anchor it precedes');
 });
+
+// ---- the logic the patch injects, run for real with stubbed browser globals (verifier D: plugin-page reload and schedule hint were UNTESTED)
+import vm from 'node:vm';
+const shipped = () => loadSpec('0.15.2');
+const edit = (name) => shipped().edits.find((e) => e.name === name);
+const grab = (src, fn) => { const i = src.indexOf(`function ${fn}(`); assert.ok(i >= 0, fn); let d = 0, j = src.indexOf('{', i); for (let k = j; k < src.length; k++) { if (src[k] === '{') d++; if (src[k] === '}' && --d === 0) return src.slice(i, k + 1); } throw new Error('unbalanced'); };
+
+function reconnectHarness({ health, session = {} } = {}) {
+  const src = grab(edit('plugin-screen-reconnect').replace, '__AhRe');
+  const timers = []; let reloads = 0, cleanup = null; const store = { ...session };
+  const ctx = vm.createContext({
+    l: { useEffect: (fn) => { cleanup = fn(); } }, T: { jsx: (...a) => a }, n: { Text: 'Text' }, k: { message: 'm' },
+    setInterval: (f) => { timers.push(f); return timers.length; }, clearInterval: () => {},
+    fetch: async () => { const v = health.shift(); if (v instanceof Error) throw v; return { ok: v }; },
+    sessionStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
+    location: { reload: () => { reloads++; } }, Date: { now: () => ctx.__now }, __now: 100_000, String, Number,
+  });
+  vm.runInContext(src + ';this.__AhRe=__AhRe;', ctx);
+  ctx.__AhRe({ t: 'Plugin offline' });
+  return { tick: () => timers.at(-1)(), reloads: () => reloads, ctx, store, stop: () => cleanup?.() };
+}
+test('plugin page: reloads once the daemon answers again after it was down; never while it is still down', async () => {
+  const h = reconnectHarness({ health: [new Error('refused'), new Error('refused'), true] });
+  await h.tick(); await h.tick(); assert.equal(h.reloads(), 0, 'down: no reload');
+  await h.tick(); assert.equal(h.reloads(), 1, 'back: reload');
+  h.stop();
+});
+test('plugin page: the message shown while the daemon already answers reloads too (no stuck screen), but at most every 10 s and 20 times', async () => {
+  const h = reconnectHarness({ health: [true, true, true] });
+  await h.tick(); assert.equal(h.reloads(), 1);
+  await h.tick(); assert.equal(h.reloads(), 1, 'within 10 s of the last reload: wait');
+  h.ctx.__now += 11_000; await h.tick(); assert.equal(h.reloads(), 2);
+  const capped = reconnectHarness({ health: [true], session: { 'ah-rl-t': '0', 'ah-rl-c': '20' } });
+  await capped.tick(); assert.equal(capped.reloads(), 0, 'cap reached: a plugin that truly failed does not reload forever');
+});
+test('schedule form hint lists exactly what is missing, nothing for a heartbeat or a complete form', () => {
+  const ctx = vm.createContext({}); vm.runInContext(grab(edit('schedule-missing-fn').replace, '__AhMissing') + ';this.f=__AhMissing;', ctx); const F = (a, b) => [...ctx.f(a, b)]; // same realm for deepEqual
+  const full = { targetKind: 'new', workingDir: '/p', selectedProvider: 'x', selectedModel: 'm', prompt: 'do', submitCadence: { type: 'cron' } };
+  assert.deepEqual(F(full, null), []);
+  assert.deepEqual(F({ ...full, workingDir: ' ', selectedModel: '' }, null), ['a project', 'a model']);
+  assert.deepEqual(F({ ...full, prompt: '', submitCadence: null }, null), ['a prompt', 'a valid cadence']);
+  assert.deepEqual(F(full, 'bad cron'), ['a valid cadence']);
+  assert.deepEqual(F({ targetKind: 'agent' }, null), []);
+});
+test('the switch read-back edit refetches the plugin list again after the daemon has applied the change', () => {
+  const r = edit('plugin-switch-readback').replace;
+  const calls = []; const ctx = vm.createContext({ ce: () => {}, fe: async () => { calls.push('fetch'); }, setTimeout: (f, ms) => calls.push(`t${ms}`) });
+  vm.runInContext(`const o={};let je;o.x=0;${r.replace(/^je=/, 'je=')};je("ok").then(()=>{})`, ctx);
+  return new Promise((ok) => setImmediate(() => { assert.deepEqual(calls, ['fetch', 't1200', 't3500']); ok(); }));
+});

@@ -3,6 +3,9 @@
 // --mine (default): only agents agent-hub itself created = labelled route/type=<a route type> (set by route.mjs) or caller=agent-hub-doctor (doctor --deep).
 // --all: every finished agent of the daemon, including other users' (never the default). Running agents are never touched.
 import { fileURLToPath } from "node:url";
+import { existsSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { cliPaseo, withRetry, loadRoutes } from "./route.mjs";
 
 export const DOCTOR_LABEL = "caller=agent-hub-doctor";
@@ -31,6 +34,29 @@ export function cleanup({ paseo, olderThan = 0, all = false, routes = {}, dry = 
   return { archived, skipped };
 }
 
+/** hub-doctor-XXXXXX temp folders (and the Paseo project the daemon registers for each) are ours only when BOTH the project name and the folder name match and the folder sits in the temp dir. */
+const DOCTOR_DIR = /^hub-doctor-[A-Za-z0-9]{6}$/;
+const same = (a, b) => { try { return realpathSync(a).toLowerCase() === realpathSync(b).toLowerCase(); } catch { return resolve(a).toLowerCase() === resolve(b).toLowerCase(); } };
+const ours = (path) => DOCTOR_DIR.test(basename(String(path))) && same(dirname(String(path)), tmpdir());
+/** Delete the Paseo project(s) registered for one doctor folder, then the folder (retried: the daemon may still hold it as a cwd for a moment). `paseo(args)` -> parsed JSON. */
+export function removeDoctorDir(dir, paseo, { rm = rmSync, tries = 5, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  if (!ours(dir)) return { projects: 0, removed: false };
+  let projects = 0;
+  const rows = paseo(["project", "ls"]);
+  for (const p of Array.isArray(rows) ? rows : []) if (p.projectId && p.path && same(p.path, dir)) { paseo(["project", "delete", p.projectId]); projects++; }
+  for (let i = 0; i < tries; i++) { try { rm(dir, { recursive: true, force: true }); if (!existsSync(dir)) return { projects, removed: true }; } catch { /* held: retry */ } if (i < tries - 1) sleep(1000); }
+  return { projects, removed: !existsSync(dir) };
+}
+/** Leftovers of earlier doctor runs: every temp hub-doctor-XXXXXX folder and its project (dry: only counted). */
+export function cleanDoctorLeftovers({ paseo, dry = false, tmp = tmpdir(), rm = rmSync }) {
+  let dirs = 0, projects = 0;
+  const rows = paseo(["project", "ls"]);
+  for (const p of Array.isArray(rows) ? rows : []) if (p.projectId && ours(p.path) && p.name === basename(p.path)) { if (!dry) paseo(["project", "delete", p.projectId]); projects++; }
+  let names = []; try { names = readdirSync(tmp).filter((n) => DOCTOR_DIR.test(n)); } catch { /* no temp dir */ }
+  for (const n of names) { if (!dry) { try { rm(join(tmp, n), { recursive: true, force: true }); } catch { continue; } } dirs++; }
+  return { dirs, projects };
+}
+
 const guard = await import("../../deploy/laptop/gpu-guard.mjs").catch(() => null); // optional in a trimmed install
 import { reapAgentOrphans } from "./orphans.mjs";
 
@@ -42,6 +68,7 @@ export function main(argv, env = process.env) {
   const home = opt("--home") ?? env.PASEO_HOME;
   const r = cleanup({ paseo: withRetry(cliPaseo(home, env)), olderThan, all: argv.includes("--all"), routes: loadRoutes(env), dry: argv.includes("--dry-run") });
   console.log(`${argv.includes("--dry-run") ? "would archive" : "archived"} ${r.archived.length} agent(s), ${r.skipped} left (running, too new or not finished)${r.archived.length ? ": " + r.archived.map((i) => i.slice(0, 8)).join(" ") : ""}`);
+  try { const d = cleanDoctorLeftovers({ paseo: withRetry(cliPaseo(home, env)), dry: argv.includes("--dry-run") }); if (d.dirs || d.projects) console.log(`${argv.includes("--dry-run") ? "would remove" : "removed"} ${d.dirs} leftover hub-doctor temp folder(s) and ${d.projects} of their Paseo project(s)`); } catch { /* the daemon may be down: the folders go next time */ }
   if (!argv.includes("--dry-run") && guard) { try { for (const x of guard.reapOrphans({ idleMs: Number(env.LAPTOP_IDLE_MIN || 15) * 60_000 })) console.log(`stopped an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`); } catch { /* best effort */ } }
   if (!argv.includes("--dry-run")) { const o = reapAgentOrphans(); if (o.length) console.log(`stopped ${o.length} orphaned agent shell snapshot process(es)`); }
   return 0;

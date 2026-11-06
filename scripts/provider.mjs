@@ -41,7 +41,7 @@ export function localSpec(a) {
 export function paths(env = process.env) {
   const home = resolve(env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
   const routesDir = join(REPO, 'config', 'routes');
-  return { local: env.AGENT_HUB_LOCAL || join(REPO, 'config', 'hub.local.json'), paseo: join(home, 'config.json'),
+  return { local: env.AGENT_HUB_LOCAL || (env.AGENT_HUB_NO_LOCAL === '1' ? join(home, 'hub.local.json') : join(REPO, 'config', 'hub.local.json')), paseo: join(home, 'config.json'),
     routes: env.AGENT_HUB_ROUTES || (env.AGENT_HUB_NO_LOCAL !== '1' && existsSync(join(routesDir, 'routes.local.json')) ? join(routesDir, 'routes.local.json') : join(routesDir, 'routes.template.json')) };
 }
 const rd = readJsonStrict; // BOM-safe; missing file = default; unparsable = throws, so add/remove never overwrite a config they could not read

@@ -13,7 +13,7 @@ import { basename, dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
 import { runDir } from '../../plugins/routing/runstate.mjs';
-import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan, ensureReaper, ownRecord } from './gpu-guard.mjs';
+import { removeServerFiles, UNKNOWN, judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan, ensureReaper, ownRecord } from './gpu-guard.mjs';
 
 const READ_ONLY = takeReadOnlyFlag(process.argv); // legacy "-ro" twin entry: read-only from the start
 const E = process.env;
@@ -31,10 +31,10 @@ const REAPER = join(dirname(fileURLToPath(import.meta.url)), 'laptop-reaper.mjs'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const pnp = NV ? pnpStatus() : 'OK';
-if (pnp !== 'OK') refuse(`GPU missing -> provider disabled (NVIDIA PnP status ${pnp})`);
+if (pnp !== 'OK' && pnp !== UNKNOWN) refuse(`GPU missing -> provider disabled (NVIDIA PnP status ${pnp})`);
 const gpu = NV ? smi() : { ok: true, usedMiB: 0, apps: [] };
 const used = gpu.usedMiB;
-if (!gpu.ok) refuse('GPU missing -> provider disabled (nvidia-smi fails)');
+if (!gpu.ok && !gpu.unknown) refuse('GPU missing -> provider disabled (nvidia-smi fails)');
 
 // "Paused" reasons (heavy-run lock, low free RAM) are not faults: Paseo's status probe (initialize + session/new) must see a healthy provider,
 // so they are checked at --check (doctor) and again on the first prompt (the router then falls back), never before the ACP handshake.
@@ -50,7 +50,7 @@ function pausedReason(serverUp) {
 const serverUp0 = await up();
 const freeGb = freemem() / 2 ** 30;
 if (process.argv.includes('--check')) { const w = pausedReason(serverUp0); if (w) refuse(w); }
-if (process.argv.includes('--check')) { console.log(`laptop pre-flight ok (GPU used ${used} MiB, free RAM ${freeGb.toFixed(1)} GB, server ${serverUp0 ? 'up' : 'not started'})`); process.exit(0); }
+if (process.argv.includes('--check')) { console.log(`laptop pre-flight ok (GPU used ${gpu.unknown || pnp === UNKNOWN ? 'unknown (probe timed out, not a refusal)' : used + ' MiB'}, free RAM ${freeGb.toFixed(1)} GB, server ${serverUp0 ? 'up' : 'not started'})`); process.exit(0); }
 if (!E.LLAMA_SERVER_BIN || !E.LAPTOP_MODEL_PATH || !E.QWEN_BIN) refuse('LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and QWEN_BIN must be set');
 
 // A server already on the port is reused only if it serves our model; otherwise refuse and leave it alone (never use or stop it).
@@ -69,7 +69,7 @@ async function ensureServer() {
   try {
     if (owner && !(await listening())) {
       const g = NV ? smi() : null;
-      const why = g ? startRefusal({ pnp: pnpStatus(), smiOk: g.ok, usedMiB: g.usedMiB }, Number(E.LAPTOP_BUSY_MIB || 600)) : '';
+      const why = g ? startRefusal({ pnp: pnpStatus(), smiOk: g.ok, smiUnknown: g.unknown, usedMiB: g.usedMiB }, Number(E.LAPTOP_BUSY_MIB || 600)) : '';
       if (why) throw new Error(why);
       // outside the launcher's process tree: Paseo's tree kill of an archived/timed-out agent must not take the model server (or its reaper) with it
       const pid = spawnOrphan(E.LLAMA_SERVER_BIN, llamaArgs({ model: E.LAPTOP_MODEL_PATH, ctx: E.LAPTOP_CTX, port: PORT, alias: ALIAS, device: DEVICE }));
@@ -110,11 +110,11 @@ setInterval(() => {
   let cpuPct = null;
   if (pid) { const c = cpuSeconds(pid); if (c != null && lastCpu && lastCpu.pid === pid) cpuPct = ((c - lastCpu.c) / ((Date.now() - lastCpu.t) / 1000)) * 100; lastCpu = c == null ? null : { pid, c, t: Date.now() }; }
   const g = smi();
-  const why = judge({ pnp: pnpStatus(), smiOk: g.ok, usedMiB: g.usedMiB, apps: g.apps, serverPid: pid, cpuPct, idle });
+  const why = judge({ pnp: pnpStatus({ cacheMs: 0 }), smiOk: g.ok, smiUnknown: g.unknown, usedMiB: g.usedMiB, apps: g.apps, serverPid: pid, cpuPct, idle });
   strikes = why ? strikes + 1 : 0;
   // a lost card is certain after one probe; the softer signals need two in a row
   if (why && (strikes >= 2 || /PnP|nvidia-smi/.test(why))) {
-    if (pid) stopPid(pid);
+    if (pid) { stopPid(pid); removeServerFiles(PORT); }
     process.stderr.write(`LAPTOP-REFUSED: GPU missing -> provider disabled (${why})
 `);
     child.kill(); process.exit(3);

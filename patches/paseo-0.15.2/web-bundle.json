@@ -36,7 +36,7 @@
   {
    "name": "plugin-screen-reconnect",
    "find": "const B=(0,c.withUnistyles)(function(c){const u=(0,s.c)(40),{serverId:f,pluginId:h,screenId:v,theme:y}=c,",
-   "replace": "function __AhRe(p){(0,l.useEffect)(()=>{let down=!1,on=!0;const id=setInterval(async()=>{let ok=!1;try{ok=(await fetch(\"/api/health\",{cache:\"no-store\"})).ok}catch(e){}if(!on)return;if(!ok)down=!0;else if(down){clearInterval(id);location.reload()}},3e3);return()=>{on=!1;clearInterval(id)}},[]);return(0,T.jsx)(n.Text,{style:k.message,children:p.t})}const B=(0,c.withUnistyles)(function(c){const u=(0,s.c)(40),{serverId:f,pluginId:h,screenId:v,theme:y}=c,"
+   "replace": "function __AhRe(p){(0,l.useEffect)(()=>{let on=!0;const id=setInterval(async()=>{let ok=!1;try{ok=(await fetch(\"/api/health\",{cache:\"no-store\"})).ok}catch(e){}if(!on||!ok)return;let t=0,c=0;try{t=+sessionStorage.getItem(\"ah-rl-t\")||0;c=+sessionStorage.getItem(\"ah-rl-c\")||0}catch(e){}if(Date.now()-t<1e4||c>=20)return;try{sessionStorage.setItem(\"ah-rl-t\",String(Date.now()));sessionStorage.setItem(\"ah-rl-c\",String(c+1))}catch(e){}clearInterval(id);location.reload()},3e3);return()=>{on=!1;clearInterval(id)}},[]);return(0,T.jsx)(n.Text,{style:k.message,children:p.t})}const B=(0,c.withUnistyles)(function(c){const u=(0,s.c)(40),{serverId:f,pluginId:h,screenId:v,theme:y}=c,"
   },
   {
    "name": "plugin-screen-offline-use",
@@ -72,7 +72,37 @@
    "name": "scrollback-message",
    "find": "P=(0,k.jsx)(t.View,{style:y.settingsStyles.card,children:(0,k.jsxs)(t.View,{style:y.settingsStyles.row,children:[O,H]})})",
    "replace": "P=(0,k.jsx)(t.View,{style:y.settingsStyles.card,children:[(0,k.jsxs)(t.View,{style:y.settingsStyles.row,children:[O,H]},\"r\"),__m.m?(0,k.jsx)(l.Text,{style:y.settingsStyles.rowHint,testID:\"terminal-scrollback-message\",children:__m.m},\"m\"):null]})"
+  },
+  {
+   "name": "plugin-switch-readback",
+   "find": "je=async n=>{ce({kind:\"success\",message:n}),await fe()}",
+   "replace": "je=async n=>{ce({kind:\"success\",message:n}),await fe(),setTimeout(fe,1200),setTimeout(fe,3500)}"
+  },
+  {
+   "name": "schedule-missing-fn",
+   "find": "function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){",
+   "replace": "function __AhMissing(T,te){if(\"agent\"===T.targetKind)return[];return[!(T.workingDir||\"\").trim()&&\"a project\",!(T.selectedProvider&&T.selectedModel)&&\"a model\",!(T.prompt||\"\").trim()&&\"a prompt\",(!T.submitCadence||te)&&\"a valid cadence\"].filter(Boolean)}function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){"
+  },
+  {
+   "name": "schedule-missing-use",
+   "find": "ae=(0,c.useMemo)(()=>(0,N.jsxs)(t.View,{style:ue.footer,children:[(0,N.jsx)(I.Button,{style:ue.footerButton,variant:\"secondary\"",
+   "replace": "ae=(0,c.useMemo)(()=>(0,N.jsxs)(t.View,{style:ue.footer,children:[se||ee||!__AhMissing(T,te).length?null:(0,N.jsx)(t.Text,{style:{flex:1,fontSize:12,opacity:.7,alignSelf:\"center\"},testID:\"schedule-form-missing\",children:\"Needed before Create: \"+__AhMissing(T,te).join(\", \")},\"m\"),(0,N.jsx)(I.Button,{style:ue.footerButton,variant:\"secondary\""
+  },
+  {
+   "name": "schedule-missing-deps",
+   "find": "[se,de,ee,u,o]);return(0,N.jsx)(p.AdaptiveModalSheet",
+   "replace": "[se,de,ee,u,o,T,te]);return(0,N.jsx)(p.AdaptiveModalSheet"
+  },
+  {
+   "name": "model-error-lines",
+   "find": "S=(0,T.jsx)(t.Text,{style:Ce.emptyStateText,children:u})",
+   "replace": "S=(0,T.jsx)(t.Text,{style:Ce.emptyStateText,numberOfLines:5,children:u})"
+  },
+  {
+   "name": "model-error-retry-room",
+   "find": "emptyState:{padding:o.spacing[4],alignItems:\"center\",gap:o.spacing[2],uni__dependencies:[0]},emptyStateText",
+   "replace": "emptyState:{padding:o.spacing[4],paddingBottom:o.spacing[8],flexShrink:0,alignItems:\"center\",gap:o.spacing[2],uni__dependencies:[0]},emptyStateText"
   }
  ],
- "rev": 3
+ "rev": 4
 }

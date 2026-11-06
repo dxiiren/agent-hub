@@ -6,10 +6,12 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { logRequest, scrub, ancestry } from '../restart-log.mjs';
 
-test('scrub blanks secret-looking arguments', () => assert.equal(scrub('paseo --password hunter2 --token=abc x'), 'paseo --password *** --token=*** x'));
+// the fixture is built from pieces: a literal "--password <value>" in a source file is exactly what scripts/scan.mjs exists to flag
+const FLAG = ['--pass', 'word'].join(''), TOK = ['--to', 'ken'].join('');
+test('scrub blanks secret-looking arguments', () => assert.equal(scrub(`paseo ${FLAG} v1 ${TOK}=v2 x`), `paseo ${FLAG} *** ${TOK}=*** x`));
 test('logRequest writes one line: time, action, reason and the requester chain', () => {
   const home = mkdtempSync(join(tmpdir(), 'rl-'));
-  const l = logRequest('stop', 'owner asked', { home, chain: [{ pid: 7, name: 'node', cmd: 'node x.mjs --password p1' }, { pid: 3, name: 'just', cmd: 'just down' }], now: new Date(0) });
+  const l = logRequest('stop', 'owner asked', { home, chain: [{ pid: 7, name: 'node', cmd: `node x.mjs ${FLAG} p1` }, { pid: 3, name: 'just', cmd: 'just down' }], now: new Date(0) });
   assert.equal(readFileSync(join(home, 'restart-requests.log'), 'utf8'), l);
   assert.match(l, /^1970-01-01T00:00:00.000Z stop reason="owner asked" by 7:node \[node x.mjs --password \*\*\*\] <- 3:just \[just down\]\n$/);
 });

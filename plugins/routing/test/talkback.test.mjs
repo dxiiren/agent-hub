@@ -79,7 +79,7 @@ test("route parks an agent whose final line is [ASK]: status asking, alive, no g
     if (a[0] === "logs") return { text: a.includes("--filter") ? "I need a name\n[ASK] which file name?" : "[User] t\nI need a name\n[ASK] which file name?" };
     return a[0] === "ls" ? [] : {}; };
   const routes = { slots: { qwen: 1 }, routes: { edit: ["qwen/b"] } };
-  const r = runRoute({ type: "edit", prompt: "p", cwd: process.cwd(), gate: "false", answerRetryMs: 0, home: d, reaper: false }, p, routes);
+  const r = runRoute({ type: "edit", prompt: "p", cwd: mkdtempSync(join(tmpdir(), "tb-cwd-")), gate: "false", answerRetryMs: 0, home: d, reaper: false }, p, routes);
   assert.equal(r.status, "asking"); assert.equal(r.question, "which file name?"); assert.equal(r.agentId, "R1");
   assert.ok(!calls.some((c) => c[0] === "stop" || c[0] === "archive"));
   assert.ok(existsSync(join(d, "usage", "parked", "R1.json")));

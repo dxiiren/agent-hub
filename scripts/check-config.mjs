@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const files = [];
-const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); statSync(p).isDirectory() ? walk(p) : p.endsWith('.json') && !p.includes('.local.') && files.push(p); } };
+const walk = (d) => { for (const n of readdirSync(d)) { if (/[.]local[.]/.test(n)) continue; /* the developer's own files are never read here (nor stat-ed) */ const p = join(d, n); statSync(p).isDirectory() ? walk(p) : p.endsWith('.json') && files.push(p); } };
 walk('config');
 
 let bad = 0;

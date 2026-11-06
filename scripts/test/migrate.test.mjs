@@ -52,7 +52,7 @@ test('after migrate, Remove works on every Qwen provider (the product path) and 
 
 test('a route entry for a provider nobody configured is skipped, never sent to the daemon; an empty chain names the fix', () => {
   const ran = []; const paseo = (a) => (a[0] === 'provider' ? [{ provider: 'codex' }] : a[0] === 'ls' ? [] : a[0] === 'run' ? (ran.push(a[a.indexOf('--provider') + 1]), { status: 'completed', agentId: 'A' }) : {});
-  const o = { type: 'code-edit', prompt: 'p', cwd: process.cwd() };
+  const o = { type: 'code-edit', prompt: 'p', cwd: mkdtempSync(join(tmpdir(), 'mg-cwd-')) };
   const r = runRoute(o, paseo, { slots: {}, routes: { 'code-edit': ['qwen-code', 'codex/a'] } });
   assert.deepEqual(ran, ['codex/a']); assert.match(JSON.stringify(r.trace), /provider not configured/);
   const none = runRoute(o, paseo, { slots: {}, routes: { 'code-edit': ['qwen-code'] } });
@@ -80,7 +80,7 @@ test('Paseo own Remove (config.json only) leaves nothing behind: list/add forget
 
 test('fail closed: a stale or unknown read-only mode never reaches a Qwen provider as a normal mode; built-in Qwen ids always get read-only; migrate repairs a stale value', () => {
   const modes = []; const paseo = (a) => (a[0] === 'run' ? (modes.push(a.includes('--mode') ? a[a.indexOf('--mode') + 1] : null), { status: 'completed', agentId: 'A' }) : a[0] === 'ls' ? [] : {});
-  const o = { type: 'summarise', prompt: 'p', cwd: process.cwd() };
+  const o = { type: 'summarise', prompt: 'p', cwd: mkdtempSync(join(tmpdir(), 'mg-cwd-')) };
   const rt = { slots: {}, readOnlyEnforced: ['lab-box', 'qwen-code'], readOnlyModes: { 'lab-box': 'plan', 'qwen-code': 'plan' }, routes: { summarise: ['lab-box', 'qwen-code'] } };
   assert.equal(readOnlyMode('lab-box', rt), undefined); assert.equal(readOnlyMode('qwen-code', rt), 'read-only'); assert.equal(readOnlyMode('lab-box', { readOnlyModes: { 'lab-box': 'read-only' } }), 'read-only');
   assert.equal(readOnlyMode('claude-clean', { readOnlyModes: { 'claude-clean': 'bypassPermissions' } }), undefined, 'an unsafe override on a known kind is refused');

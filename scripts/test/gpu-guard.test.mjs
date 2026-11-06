@@ -71,3 +71,71 @@ test('truly idle server burning CPU is still flagged; a lost GPU is caught regar
   assert.match(judge({ ...ok, pnp: 'Unknown', idle: false }), /PnP/);
   assert.match(judge({ ...ok, apps: [], usedMiB: 100, idle: false }), /no GPU memory/);
 });
+
+// ---- verifier D2: a probe that timed out or printed nothing is UNKNOWN, never "GPU missing"
+const slowThenOk = (outs) => { let i = 0; return () => outs[Math.min(i++, outs.length - 1)]; };
+const R = (stdout, extra = {}) => ({ status: 0, stdout, stderr: '', ...extra });
+test('pnpStatus retries empty/timeout answers and returns the real status once PowerShell answers', { skip: process.platform !== 'win32' }, async () => {
+  const { pnpStatus, _resetGpuCacheForTest } = await import('../../deploy/laptop/gpu-guard.mjs');
+  _resetGpuCacheForTest();
+  assert.equal(pnpStatus({ run: slowThenOk([R(''), { error: new Error('ETIMEDOUT'), stdout: '' }, R('OK\r\n')]), backoffMs: 1 }), 'OK');
+  _resetGpuCacheForTest();
+});
+test('pnpStatus: all attempts empty = Indeterminate (never Missing); an answered empty device list = Missing; Unknown stays Unknown', { skip: process.platform !== 'win32' }, async () => {
+  const { pnpStatus, _resetGpuCacheForTest, UNKNOWN } = await import('../../deploy/laptop/gpu-guard.mjs');
+  _resetGpuCacheForTest();
+  assert.equal(pnpStatus({ run: () => R(''), backoffMs: 1 }), UNKNOWN);
+  assert.equal(pnpStatus({ run: () => ({ signal: 'SIGTERM', stdout: '' }), backoffMs: 1 }), UNKNOWN);
+  assert.equal(pnpStatus({ run: () => R('NONE\r\n'), backoffMs: 1 }), 'Missing');
+  assert.equal(pnpStatus({ run: () => R('Unknown\r\n'), backoffMs: 1 }), 'Unknown');
+});
+test('pnpStatus caches a good result briefly, then asks again', { skip: process.platform !== 'win32' }, async () => {
+  const { pnpStatus, _resetGpuCacheForTest } = await import('../../deploy/laptop/gpu-guard.mjs');
+  _resetGpuCacheForTest(); let calls = 0, t = 1000;
+  const run = () => { calls++; return R('OK'); };
+  pnpStatus({ run, now: () => t }); pnpStatus({ run, now: () => t + 3000 }); assert.equal(calls, 1);
+  pnpStatus({ run, now: () => t + 60000 }); assert.equal(calls, 2);
+  _resetGpuCacheForTest();
+});
+test('smi: timeout = unknown (retried), error answer = no device, good answer = ok', async () => {
+  const { smi } = await import('../../deploy/laptop/gpu-guard.mjs');
+  assert.deepEqual(smi({ run: slowThenOk([{ error: new Error('ETIMEDOUT'), stdout: '' }, R('812\n'), R('')]), backoffMs: 1 }).usedMiB, 812);
+  const t = smi({ run: () => ({ error: new Error('ETIMEDOUT'), stdout: '' }), backoffMs: 1 }); assert.equal(t.ok, false); assert.equal(t.unknown, true);
+  const n = smi({ run: () => ({ status: 9, stdout: '', stderr: 'No devices were found' }), backoffMs: 1 }); assert.equal(n.ok, false); assert.equal(n.unknown, false);
+});
+test('judge and startRefusal never refuse on an unknown probe, still refuse on a real miss', async () => {
+  const { judge, startRefusal, UNKNOWN } = await import('../../deploy/laptop/gpu-guard.mjs');
+  assert.equal(judge({ ...ok, pnp: UNKNOWN }), '');
+  assert.equal(judge({ ...ok, smiOk: false, smiUnknown: true }), '');
+  assert.match(judge({ ...ok, smiOk: false }), /nvidia-smi failed/);
+  assert.match(judge({ ...ok, pnp: 'Missing' }), /Missing/);
+  assert.equal(startRefusal({ pnp: UNKNOWN, smiOk: false, smiUnknown: true }), '');
+  assert.match(startRefusal({ pnp: 'Missing', smiOk: true }), /GPU missing/);
+  assert.match(startRefusal({ pnp: 'OK', smiOk: false }), /GPU missing/);
+});
+
+// ---- verifier D7/L4: no state, reaper or in-flight file survives its server
+import { mkdtempSync, writeFileSync, readdirSync, utimesSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { removeServerFiles, sweepStale, reapOrphans } from '../../deploy/laptop/gpu-guard.mjs';
+import { writeState } from '../../plugins/routing/runstate.mjs';
+const runDirWith = (files) => { const d = mkdtempSync(join(tmpdir(), 'gg-run-')); for (const [n, v] of Object.entries(files)) writeState(join(d, n), v); return d; };
+test('removeServerFiles removes the record, the reaper file and every in-flight marker of that port only', () => {
+  const d = runDirWith({ 'agent-hub-laptop-8080.json': { pid: 1 }, 'agent-hub-laptop-8080.reaper': '9', 'agent-hub-laptop-8080.inflight.44808': '1', 'agent-hub-laptop-8080.inflight.1': '1', 'agent-hub-laptop-8081.json': { pid: 2 }, 'agent-hub-office-models.json': {} });
+  assert.equal(removeServerFiles(8080, d), 4);
+  assert.deepEqual(readdirSync(d).sort(), ['agent-hub-laptop-8081.json', 'agent-hub-office-models.json']);
+});
+test('sweepStale removes dead-pid records, dead in-flight markers, dead reapers and week-old session aliases; keeps live ones', () => {
+  const d = runDirWith({ 'agent-hub-laptop-8080.json': { pid: 111 }, 'agent-hub-laptop-8081.json': { pid: 222 }, 'agent-hub-laptop-8080.inflight.111': '1', 'agent-hub-laptop-8081.inflight.222': '1',
+    'agent-hub-laptop-8080.reaper': '111', 'agent-hub-laptop-8081.reaper': '222', 'qwen-session-old.json': {}, 'qwen-session-new.json': {} });
+  const old = new Date(Date.now() - 8 * 86400_000); utimesSync(join(d, 'qwen-session-old.json'), old, old);
+  const n = sweepStale({ dir: d, alive: (own) => own.pid === 222, pAlive: (p) => p === 222 });
+  assert.equal(n, 4);
+  assert.deepEqual(readdirSync(d).sort(), ['agent-hub-laptop-8081.inflight.222', 'agent-hub-laptop-8081.json', 'agent-hub-laptop-8081.reaper', 'qwen-session-new.json']);
+});
+test('reapOrphans, after stopping a server, leaves none of its files behind', () => {
+  const d = runDirWith({ 'agent-hub-laptop-8080.json': { pid: 5, lastUsed: 0 }, 'agent-hub-laptop-8080.inflight.44808': '1', 'agent-hub-laptop-8080.reaper': '7' });
+  const out = reapOrphans({ idleMs: 1, dir: d, alive: () => true, stop: () => true, inflightOf: () => false, now: 1e12 });
+  assert.deepEqual(out, [{ port: '8080', pid: 5 }]); assert.deepEqual(readdirSync(d), []);
+});
