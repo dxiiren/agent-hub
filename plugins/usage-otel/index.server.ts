@@ -3,6 +3,8 @@ import { appendUsage, emitOtlp, toRecord, usageDir } from "./server/usage.mjs";
 import { mcpCall, hubPassword } from "./server/mcp.mjs";
 import { fillRecord, qoderCredits, qoderSession, qwenSession } from "./server/sidecar.mjs";
 import { join } from "node:path";
+import { z } from "zod";
+import { qoderSummary, toReport } from "./server/qoder-usage.mjs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
 
@@ -28,6 +30,14 @@ export default function contribute(server: PluginServerContext) {
       appendUsage(usageDir(), rec);
       await emitOtlp(process.env.AGENT_HUB_OTLP, rec).then(() => { otlpDown = false; }, (e) => { if (!otlpDown) console.error("agent-hub-usage otlp down", String(e)); otlpDown = true; });
     } catch (e) { console.error("agent-hub-usage", event.agent.id, String(e)); }
+  });
+  // Paseo web UI Usage panel: one Qoder account row beside Codex and Claude (Paseo caches a fetch for 5 min)
+  server.registerUsageSource({
+    id: "qoder",
+    label: "Qoder",
+    input: z.object({}),
+    discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
+    fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
   return () => {};
 }

@@ -84,3 +84,27 @@ test("OTLP export gives up on a hung collector instead of holding the hook", asy
   srv.closeAllConnections(); srv.close();
   assert.ok(Date.now() - t < 3000);
 });
+
+import { toReport } from "../server/qoder-usage.mjs";
+test("qoder panel report: credits window and balance from the poller summary", () => {
+  const r = toReport({ userType: "enterprise", totalUsagePercentage: 0, isQuotaExceeded: false, reset_time: "2026-11-28T16:00:00+00:00", credits_used: 6181, credits_remaining: 526, credits_used_today: 12.5 });
+  assert.equal(r.status, "available");
+  assert.equal(r.windows[0].usedPct, 92.2); assert.equal(r.windows[0].tone, "danger"); assert.equal(r.balances[0].limit, 6707);
+  assert.equal(r.windows[0].resetsAt, "2026-11-28T16:00:00+00:00"); assert.equal(r.details[0].value, "12.5 credits");
+});
+test("qoder panel report: unreadable poller summary is an error, not zeros", () => {
+  assert.equal(toReport({}).status, "error"); assert.equal(toReport(null).status, "error");
+});
+
+import { qoderSummary, _resetForTest } from "../server/qoder-usage.mjs";
+test("qoder summary: cached within ttl, slow poll answered from stale cache, no cache means error", async () => {
+  _resetForTest();
+  let n = 0, t = 0;
+  const poll = () => { n++; return n === 2 ? new Promise((r) => setTimeout(() => r({ v: 2 }), 80)) : Promise.resolve({ v: n }); };
+  const o = { poll, now: () => t, waitMs: 20 };
+  assert.deepEqual(await qoderSummary(o), { v: 1 }); assert.deepEqual(await qoderSummary(o), { v: 1 }); assert.equal(n, 1);
+  t = 400_000; assert.deepEqual(await qoderSummary(o), { v: 1 }); // 2nd poll is slow: stale value, poll keeps running
+  await new Promise((r) => setTimeout(r, 120)); t = 400_001; assert.deepEqual(await qoderSummary(o), { v: 2 }); assert.equal(n, 2);
+  _resetForTest(); await assert.rejects(qoderSummary({ poll: () => new Promise(() => {}), now: () => 0, waitMs: 10 }), /still running/);
+  _resetForTest();
+});
