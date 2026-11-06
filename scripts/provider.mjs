@@ -52,7 +52,7 @@ export function entries(name, spec, qwenBin, repo = REPO, hubDir) {
   return { [name]: e, ...(k.twin && spec.readOnly !== false ? { [name + '-ro']: { ...e, label: e.label + ' (read-only)', command: [...e.command, '--read-only'] } } : {}) };
 }
 const opencodeFile = (name, spec) => ({ $schema: 'https://opencode.ai/config.json', model: `${name}/${spec.model}`, autoupdate: false, share: 'disabled',
-  provider: { [name]: { npm: '@ai-sdk/openai-compatible', name, options: { baseURL: spec.url, apiKey: spec.key || 'none' }, models: { [spec.model]: { name: spec.model, tool_call: true, limit: { context: 131072, output: 8192 } } } } } });
+  provider: { [name]: { npm: '@ai-sdk/openai-compatible', name, options: { baseURL: spec.url, apiKey: 'none' }, models: { [spec.model]: { name: spec.model, tool_call: true, limit: { context: 131072, output: 8192 } } } } } });
 
 /** "code-edit:2,summarise" -> [{c:'code-edit',pos:2},{c:'summarise'}] (pos is 1-based; absent = append). */
 export function parseRoutes(s) {
@@ -71,6 +71,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
     if (!/^https?:\/\/[^\s"]+$/.test(url || '')) throw new Error('--url must be an http(s) base URL');
     if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');
   }
+  if (key && !k.fields.some((x) => x.id === 'key')) throw new Error(`kind ${type} takes no API key (an agent of that kind could read it)`);
   if (!safeId(model)) throw new Error('--model must be a plain model id');
   const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
   const local = rd(p.local, {});

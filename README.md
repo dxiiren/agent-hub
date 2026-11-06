@@ -195,7 +195,7 @@ Paseo's own Settings > Providers > "Add provider" is a fixed catalog of ACP agen
 | Kind | What it is | Fields |
 | --- | --- | --- |
 | `qwen` | [Qwen Code](https://github.com/QwenLM/qwen-code) on any OpenAI-compatible endpoint (vLLM, SGLang, llama.cpp, Ollama, a hosted API) | base URL, model, optional API key |
-| `opencode` | OpenCode on any OpenAI-compatible endpoint | base URL, model, optional API key |
+| `opencode` | OpenCode on any OpenAI-compatible endpoint (no key field: OpenCode runs without a hub launcher, so its agent could read a key) | base URL, model |
 | `qoder`, `codex`, `claude` | one more model of a CLI you have installed and signed in to (route entry `<cli>/<model>`; no new Paseo provider) | model |
 
 Every kind also takes a name, parallel slots (kinds with their own provider), which task types it serves with its position in each route chain, and (qwen) whether to create the read-only twin that `summarise` and `review` need. Model lists are read live: from the endpoint's `GET /v1/models`, or from `paseo provider models <cli>` for the CLI kinds. Nothing about your hosts, models or accounts is built in.
@@ -217,7 +217,7 @@ agent-hub provider list
 agent-hub provider remove qwen-lab
 ```
 
-`--routes code-edit:2,summarise` puts the provider second in the `code-edit` chain and at the end of `summarise`. `add` refuses a URL that is not http(s), an endpoint that does not answer `/v1/models`, a model the endpoint or CLI does not list, and a name already in use; nothing is written when it refuses. The API key lives in `config/hub.local.json` (git-ignored) and in the provider's `env` in the Paseo config, and reaches the agent through the environment, never a command line or a log. `remove` puts the configuration files back byte for byte while nothing else has changed them since; `edit` keeps that guarantee relative to the original add.
+`--routes code-edit:2,summarise` puts the provider second in the `code-edit` chain and at the end of `summarise`. `add` refuses a URL that is not http(s), an endpoint that does not answer `/v1/models`, a model the endpoint or CLI does not list, and a name already in use; nothing is written when it refuses. The API key (qwen kind) lives in `config/hub.local.json` (git-ignored) and in the provider's `env` in the Paseo config, and goes only to the hub's launcher (`deploy/office/office-agent.mjs`), which keeps it in a small local auth proxy and starts the agent with the key removed from its environment: the agent and its shell commands never see it, and it is never on a command line or in a log. `remove` puts the configuration files back byte for byte while nothing else has changed them since; `edit` keeps that guarantee relative to the original add.
 
 **Add your own kind** (any ACP agent CLI, any other OpenAI-compatible launcher). The built-in kinds live in `scripts/provider-kinds.mjs`; yours go in `config/provider-kinds.local.json` (git-ignored) or the file named by `AGENT_HUB_KINDS`, and appear in both the CLI and the UI:
 
@@ -236,7 +236,7 @@ agent-hub provider remove qwen-lab
 }
 ```
 
-`launch` is the ACP command Paseo should run (`{node}`, `{repo}`, `{url}`, `{model}` are filled in; the key arrives in `HUB_OPENAI_API_KEY`). Names of this kind start with `myagent-`. Use `"base": "<an installed provider id>"` instead of `launch` for a kind that only adds `<base>/<model>` route entries.
+`launch` is the ACP command Paseo should run (`{node}`, `{repo}`, `{url}`, `{model}` are filled in; the key arrives in `HUB_OPENAI_API_KEY`, so your launcher must keep it from the agent: reuse `startAuthProxy` and `scrubKeyEnv` from `plugins/routing/office.mjs`, or take no key field). Names of this kind start with `myagent-`. Use `"base": "<an installed provider id>"` instead of `launch` for a kind that only adds `<base>/<model>` route entries.
 
 The UI is one small Paseo plugin (`plugins/providers`) drawn from this same schema with Paseo's own Settings components; all of its text is in `plugins/providers/client/strings.ts`. A Paseo-side change to put these fields into the built-in "Add provider" dialog would be a better home for it; none is needed for this to work.
 

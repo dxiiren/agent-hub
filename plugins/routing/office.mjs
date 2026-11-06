@@ -55,3 +55,30 @@ export const QWEN_SYSTEM_SETTINGS_RO = join(dirname(fileURLToPath(import.meta.ur
 /** readOnly = the launcher was started as the "-ro" twin provider (--read-only): sensitive reads are denied by the CLI itself. */
 export const qwenEnv = (env = process.env, readOnly = false) => ({ ...env, QWEN_CODE_SYSTEM_SETTINGS_PATH: readOnly ? QWEN_SYSTEM_SETTINGS_RO : QWEN_SYSTEM_SETTINGS });
 export const takeReadOnlyFlag = (argv) => { const i = argv.indexOf("--read-only"); if (i < 0) return false; argv.splice(i, 1); return true; };
+
+/** Env for an agent process and its tool subprocesses: the hub's endpoint-key variables never reach it. */
+export const scrubKeyEnv = (env) => { const e = { ...env }; delete e.HUB_OPENAI_API_KEY; delete e.OPENAI_API_KEY; return e; };
+
+/**
+ * Local auth proxy: the agent talks to 127.0.0.1:<port>, this launcher adds the Bearer key and forwards to the one upstream origin.
+ * The key lives only in this process, never in the agent's env, argv or any file the agent could read. Returns { base, close }.
+ */
+export async function startAuthProxy(upstreamBase, key, f = fetch) {
+  const { createServer } = await import("node:http");
+  const u = new URL(upstreamBase);
+  const srv = createServer(async (req, res) => {
+    try {
+      const chunks = []; for await (const c of req) chunks.push(c);
+      const headers = {}; for (const [k, v] of Object.entries(req.headers)) if (!["host", "authorization", "content-length", "connection"].includes(k)) headers[k] = v;
+      headers.authorization = `Bearer ${key}`;
+      const body = chunks.length ? Buffer.concat(chunks) : undefined;
+      const r = await f(u.origin + req.url, { method: req.method, headers, body: ["GET", "HEAD"].includes(req.method) ? undefined : body });
+      const out = {}; r.headers.forEach((v, k) => { if (!["content-encoding", "content-length", "transfer-encoding", "connection"].includes(k)) out[k] = v; });
+      res.writeHead(r.status, out);
+      if (r.body) for await (const c of r.body) res.write(c);
+      res.end();
+    } catch (e) { if (!res.headersSent) res.writeHead(502); res.end(String(e?.message ?? e).replace(key, "***")); }
+  });
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  return { base: `http://127.0.0.1:${srv.address().port}${u.pathname.replace(/\/$/, "")}`, close: () => srv.close() };
+}

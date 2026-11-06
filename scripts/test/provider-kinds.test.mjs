@@ -88,3 +88,25 @@ test('a custom kind from AGENT_HUB_KINDS is offered and builds its launch comman
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: join(import.meta.dirname, '..', '..'), encoding: 'utf8', env: { ...process.env, AGENT_HUB_KINDS: f } });
   const o = JSON.parse(r.stdout); assert.equal(o.has, true); assert.deepEqual(o.cmd, [o.cmd[0], 'run.mjs', URL1, 'm1']); assert.equal(o.ro, false);
 });
+
+test('the endpoint key reaches the upstream only through the launcher proxy and never the agent env', async () => {
+  const { createServer } = await import('node:http');
+  const { startAuthProxy, scrubKeyEnv } = await import('../../plugins/routing/office.mjs');
+  const seen = []; const up = createServer((req, res) => { seen.push({ url: req.url, auth: req.headers.authorization }); res.setHeader('content-type', 'application/json'); res.end('{"data":[{"id":"m1"}]}'); });
+  await new Promise((ok) => up.listen(0, '127.0.0.1', ok));
+  const proxy = await startAuthProxy(`http://127.0.0.1:${up.address().port}/v1`, 'sk-proxy-secret');
+  try {
+    assert.ok(!proxy.base.includes('sk-proxy-secret'));
+    const r = await fetch(`${proxy.base}/models`); assert.deepEqual(await r.json(), { data: [{ id: 'm1' }] });
+    assert.deepEqual(seen, [{ url: '/v1/models', auth: 'Bearer sk-proxy-secret' }]);
+    const bad = await fetch(`${proxy.base}/models`, { headers: { authorization: 'Bearer attacker' } }); await bad.text();
+    assert.equal(seen[1].auth, 'Bearer sk-proxy-secret', 'a caller-supplied Authorization is replaced');
+  } finally { proxy.close(); up.close(); }
+  const env = scrubKeyEnv({ HUB_OPENAI_API_KEY: 'k', OPENAI_API_KEY: 'k', PATH: 'p' }); assert.deepEqual(env, { PATH: 'p' });
+});
+
+test('a kind without a key field refuses a key (opencode)', async () => {
+  const { p } = box();
+  await assert.rejects(add({ name: 'opencode-k', kind: 'opencode', url: URL1, model: 'm1', key: 'sk-x' }, p, { f: served(['m1']) }), /takes no API key/);
+  assert.ok(!existsSync(p.local));
+});

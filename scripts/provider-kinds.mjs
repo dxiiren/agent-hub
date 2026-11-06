@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelsUrl } from '../plugins/routing/office.mjs';
 
-const KEY_ENV = 'HUB_OPENAI_API_KEY'; // read by deploy/office/office-agent.mjs; the key goes to the launcher through the provider env, never argv
+const KEY_ENV = 'HUB_OPENAI_API_KEY'; // read by deploy/office/office-agent.mjs, which keeps it in a local auth proxy and strips it from the agent's env; never argv
 const ENDPOINT_FIELDS = [
   { id: 'url', label: 'Base URL', type: 'url', required: true, help: 'OpenAI-compatible base URL, e.g. http://host:8000/v1' },
   { id: 'model', label: 'Model', type: 'model', required: true, help: 'Picked from the endpoint\'s /v1/models list' },
@@ -17,7 +17,8 @@ const ENDPOINT_FIELDS = [
 export const KINDS = {
   'qwen-code': { aliases: ['qwen'], label: 'Qwen Code (OpenAI-compatible endpoint)', fields: ENDPOINT_FIELDS, modelsFrom: 'endpoint', own: true, twin: true, slots: true,
     nameRe: /^qwen-[a-z0-9]+(-[a-z0-9]+)*$/, nameHelp: 'must start with "qwen-" (e.g. qwen-lab)' },
-  opencode: { label: 'OpenCode (OpenAI-compatible endpoint)', fields: ENDPOINT_FIELDS, modelsFrom: 'endpoint', own: true, twin: false, slots: true,
+  // opencode has no key field: it runs without a hub launcher, so its agent could read a stored key
+  opencode: { label: 'OpenCode (OpenAI-compatible endpoint)', fields: ENDPOINT_FIELDS.filter((f) => f.id !== 'key'), modelsFrom: 'endpoint', own: true, twin: false, slots: true,
     nameRe: /^opencode-[a-z0-9]+(-[a-z0-9]+)*$/, nameHelp: 'must start with "opencode-" (e.g. opencode-lab)' },
   qoder: { label: 'Qoder (model tier)', base: 'qoder', fields: [{ id: 'model', label: 'Tier / model', type: 'model', required: true, help: 'From `paseo provider models qoder`' }], modelsFrom: 'cli', own: false, twin: false, slots: false,
     nameRe: /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/, nameHelp: 'lower-case letters, digits, dashes' },
