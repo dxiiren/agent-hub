@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelsUrl, safeId } from '../plugins/routing/office.mjs';
+import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const NAME_RE = /^qwen-[a-z0-9]+(-[a-z0-9]+)*$/; // routing derives the read-only twin only for names starting "qwen" (roTwin in route.mjs)
@@ -61,6 +62,8 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen' } = 
   cfg.agents ??= {}; cfg.agents.providers = { ...cfg.agents.providers, ...entries(name, { type, url, model }, bin) };
   local.extraProviders = { ...local.extraProviders, [name]: { type, url, model } };
   routes.slots = { ...routes.slots, [name]: slots }; routes.modes = { ...routes.modes, [name]: 'yolo' };
+  // the -ro twin runs the same launcher with the sensitive-read deny settings, so summarise/review may run on it (route.mjs refuses read-only types on unlisted providers)
+  routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), name])]; routes.readOnlyModes = { ...routes.readOnlyModes, [name]: 'plan' };
   for (const c of chains) routes.routes[c].push(name);
   wr(p.local, local); wr(p.routes, routes); wr(p.paseo, cfg);
   return { name, slots, routes: chains };
@@ -71,7 +74,8 @@ export function remove(name, p = paths()) {
   if (!local.extraProviders?.[name]) throw new Error(`${name} is not an added provider (list: ${Object.keys(local.extraProviders || {}).join(', ') || 'none'})`);
   delete local.extraProviders[name];
   const routes = rd(p.routes, {});
-  delete routes.slots?.[name]; delete routes.modes?.[name];
+  delete routes.slots?.[name]; delete routes.modes?.[name]; delete routes.readOnlyModes?.[name];
+  if (routes.readOnlyEnforced) routes.readOnlyEnforced = routes.readOnlyEnforced.filter((x) => x !== name);
   for (const c of Object.keys(routes.routes || {})) routes.routes[c] = routes.routes[c].filter((x) => x.split('/')[0] !== name);
   const cfg = rd(p.paseo, {});
   if (cfg.agents?.providers) { delete cfg.agents.providers[name]; delete cfg.agents.providers[name + '-ro']; }

@@ -27,12 +27,13 @@ test('add writes provider + ro twin, local config, slots, modes and routes; list
   assert.deepEqual(prov['qwen-extra-ro'].command, [...prov['qwen-extra'].command, '--read-only']);
   assert.deepEqual(read('local').extraProviders['qwen-extra'], { type: 'qwen-code', url: URL1, model: 'm1' });
   const r = read('routes');
+  assert.ok(r.readOnlyEnforced.includes('qwen-extra') && r.readOnlyEnforced.includes('qwen-laptop')); assert.equal(r.readOnlyModes['qwen-extra'], 'plan');
   assert.equal(r.slots['qwen-extra'], 3); assert.equal(r.modes['qwen-extra'], 'yolo');
   assert.deepEqual(r.routes.summarise, ['qwen-laptop', 'qwen-extra']); assert.deepEqual(r.routes['code-edit'], ['codex/latest-terra', 'qwen-extra']);
   assert.deepEqual(list(p), [{ name: 'qwen-extra', type: 'qwen-code', url: URL1, model: 'm1', slots: 3, routes: ['summarise', 'code-edit'] }]);
   remove('qwen-extra', p);
   assert.deepEqual(Object.keys(read('paseo').agents.providers), ['codex']);
-  assert.deepEqual(read('routes').routes.summarise, ['qwen-laptop']); assert.equal(read('routes').slots['qwen-extra'], undefined);
+  assert.deepEqual(read('routes').routes.summarise, ['qwen-laptop']); assert.equal(read('routes').slots['qwen-extra'], undefined); assert.ok(!read('routes').readOnlyEnforced.includes('qwen-extra')); assert.equal(read('routes').readOnlyModes['qwen-extra'], undefined);
   assert.deepEqual(list(p), []);
 });
 
