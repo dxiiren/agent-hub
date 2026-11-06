@@ -115,5 +115,8 @@ function Screen() {
 }
 
 export default function contribute(client: PluginClientContext) {
-  return client.addSettingsScreen({ id: "providers", title: S.navTitle, icon: "Server", Component: Screen });
+  const screen = client.addSettingsScreen({ id: "providers", title: S.navTitle, icon: "Server", Component: Screen });
+  // Paseo has no extension point on its Providers page or its "Add provider" dialog (see docs/paseo-upstream-notes.md), so the form is also one command-palette entry away.
+  const command = client.addCommandCenterItem({ id: "add-provider", title: S.navTitle, icon: "Server", keywords: ["provider", "endpoint", "model", "add"], context: "global", onSelect: (c) => c.openSettings("providers") });
+  return () => { screen(); command(); };
 }
