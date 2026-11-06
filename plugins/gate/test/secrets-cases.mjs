@@ -27,7 +27,7 @@ export const SECRETS = {
   authKeyCamel: "au" + "thKey=" + "Xk9mQ2pL7:abcdefghij",
   authkeyLower: "au" + "thkey: " + "Xk9mQ2pL7=abcdefghij",
   authorizationKey: "au" + "thorizationKey=" + "Xk9mQ2pL7:abcdefghij",
-  authTokenSnake: "AU" + "TH_TOKEN=" + "Zq8!wR5tPq2",
+  authTokenSnake: ["AU", "TH_TO", "KEN=", "Zq8", "!wR5", "tPq2"].join(""),
   apiKeyPadded: "api_" + "key=" + "base64abc==XYZ1",
   apiKey: "api_" + "key: " + "abcdefghijklmnopqrstuv9",
   pem: "-----BEGIN " + "RSA PRIVATE KEY" + "-----",
