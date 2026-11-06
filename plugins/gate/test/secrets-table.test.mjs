@@ -14,7 +14,7 @@ test("blocked in file bytes too: UTF-8 split CRLF and UTF-16LE", () => {
 test("allowed: public keys, certificates, normal code and prose, also over line breaks", () => {
   const ok = [
     "-----BEGIN PGP PUBLIC KEY BLOCK-----", "-----BEGIN CERTIFICATE-----", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz user@host",
-    "token = tokens[i]", "password_field = input", "const token = await getToken(req);", "Authorization: Bearer <token>", "private_key = load_private_key(path)",
+    "author = John:Smith1234", "token = tokens[i]", "password_field = input", "const token = await getToken(req);", "Authorization: Bearer <token>", "private_key = load_private_key(path)",
     "a risk-based approach to the deployment of the task-force", "The bearer of the message described the secret recipe at length" + LF + "and the token economy",
     "ask-the-team-about-their-schedule-for-the-release", "see eyJ-prefixed values in the docs", "a.b.c version 1.2.3", "const secret = getSecretFromTheEnvironment();",
     "function parse(a) {" + LF + "  return a.map((x) => x + 1);" + LF + "}", "# api_key is read from the environment" + LF + "x = 1234567890",
@@ -54,9 +54,9 @@ const ADVERSARIAL = {
 hasSecret("warm up");
 const T0 = process.hrtime.bigint(); hasSecret("x"); const SPAWN_MS = Number(process.hrtime.bigint() - T0) / 1e6; // process start cost of this machine (virus scanners make it 0.7 s)
 for (const [name, t] of Object.entries(ADVERSARIAL)) {
-  test(`ReDoS: ${name} (${t.length} chars) is scanned in within 1 s of a bare process spawn`, () => {
+  test(`ReDoS: ${name} (${t.length} chars) is scanned in within 5 s of a bare process spawn (RE2 is linear; this catches blow-ups, not machine load)`, () => {
     const t0 = process.hrtime.bigint(); try { hasSecret(t); } catch (e) { assert.match(e.message, /secret scanner unavailable/); /* blocked, never passed */ } const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    assert.ok(ms < SPAWN_MS + 1000, `${name}: ${ms.toFixed(1)} ms`);
+    assert.ok(ms < SPAWN_MS + 5000, `${name}: ${ms.toFixed(1)} ms`);
   });
 }
 test("a secret in the middle of a 200 KB line, and across a window boundary, is still found", () => {

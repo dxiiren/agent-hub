@@ -23,6 +23,7 @@ export const SECRETS = {
   colonDb: "db_pass" + "word=" + "Qw3rTy9@:superlongtail",
   colonQuoted: "pass" + "word=\"" + "Xk9mQ2pL7:abcdefghij\"",
   pwdEqInside: "pass" + "word=" + "a1=bcdefghijk",
+  authBare: "au" + "th=" + "Xk9mQ2pL7:abcdefghij",
   apiKeyPadded: "api_" + "key=" + "base64abc==XYZ1",
   apiKey: "api_" + "key: " + "abcdefghijklmnopqrstuv9",
   pem: "-----BEGIN " + "RSA PRIVATE KEY" + "-----",

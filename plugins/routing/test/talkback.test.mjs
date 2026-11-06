@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withAnswer, isEmptyState, parkFile, parseAsk, mayAsk, MAX_ASKS, park, loadPark, reapParked, runReply, runRoute } from "../route.mjs";
@@ -18,7 +18,8 @@ test("round cap: three asks allowed, the fourth is final", () => {
   assert.deepEqual([0, 1, 2, 3].map(mayAsk), [true, true, true, false]);
 });
 
-const dir = () => mkdtempSync(join(tmpdir(), "parked-"));
+const made = []; process.on("exit", () => { for (const d of made) try { rmSync(d, { recursive: true, force: true }); } catch {} });
+const dir = () => { const d = mkdtempSync(join(tmpdir(), "parked-")); made.push(d); return d; };
 // logs: full transcript then assistant-only, both end with `ans`
 const fake = (ans, extra = {}) => {
   const calls = [];

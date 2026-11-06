@@ -13,6 +13,11 @@ class Pollers(unittest.TestCase):
             self.assertEqual(ahu.safe(n), "_" + n, n)
         for n in ["CONSOLE", "com10", "lpt0", "nullable", "aux-1", "abc123", "COM", "a/b"]:
             self.assertEqual(ahu.safe(n), n.replace("/", "_"), n)
+        # same name as the JS writer for non-BMP chars (one "_" per code point)
+        import subprocess, json
+        for n in ["s😀x", "café", "a b"]:
+            js = subprocess.run(["node", "-e", "import('./plugins/usage-otel/server/usage.mjs').then(m=>process.stdout.write(m.safe(JSON.parse(process.argv[1]))))", json.dumps(n)], capture_output=True, text=True, encoding="utf-8", cwd=os.path.join(os.path.dirname(__file__), "..", "..", "..")).stdout
+            self.assertEqual(ahu.safe(n), js, n)
 
     def test_opencode_empty_session_list_is_zero(self):
         self.assertEqual(oe.session_ids(""), [])

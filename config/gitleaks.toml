@@ -9,7 +9,7 @@ useDefault = true
 [[rules]]
 id = "agent-hub-assigned-secret"
 description = "assigned password, secret, token, api or private key"
-regex = '''(?i)(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential|auth(?:orization|[_-]?key|[_-]?token|[_-]?secret))\w*['"]? ?[:=] ?['"]?([^\s'"\[\]()<>{},;=][^\s'"\[\]()<>{},;]{7,})'''
+regex = '''(?i)(?:(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*|auth(?:orization|[_-]\w*)?)['"]? ?[:=] ?['"]?([^\s'"\[\]()<>{},;=][^\s'"\[\]()<>{},;]{7,})'''
 secretGroup = 1
 keywords = ["secret", "passw", "pwd", "token", "key", "credential", "auth"]
 # Allowlists match the WHOLE value only (anchored): a placeholder or an env-var name, never a secret that merely starts or ends like one.
