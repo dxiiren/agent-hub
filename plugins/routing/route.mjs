@@ -197,10 +197,20 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   if (o.provider) { const known = knownProviders(routes); if (!known.has(base(o.provider))) return { used: null, trace: [{ provider: o.provider, error: `unknown provider id "${base(o.provider)}": not in routes slots, any route chain or the built-in provider list (known: ${[...known].sort().join(", ")})` }] }; }
   // A finished agent keeps its provider process (a claude is ~250 MB idle): stop and archive it once its answer and gate are read, unless --keep.
   // A route-created worktree (--new-workspace worktree) is removed with its agent, or it piles up under ~/.paseo/worktrees. The route creates it itself (named, so retire needs no lookup).
+  // The daemon registers a Paseo project for every cwd and route worktree a run touches; remove the ones this route created (not in the before-snapshot, path = this run's cwd or worktree) once no other agent still runs there, or the UI project list fills with scratch folders.
+  const projects = () => { try { const r = paseo(["project", "ls"]); return Array.isArray(r) ? r : []; } catch { return []; } };
+  const pnorm = (p) => String(p ?? "").split(String.fromCharCode(92)).join("/").replace(/\/+$/, "").toLowerCase();
+  const projBefore = o.keep ? null : new Set(projects().map((p) => p.projectId));
+  const dropProjects = (wt) => {
+    const targets = [o.cwd, wt?.path].filter(Boolean).map(pnorm);
+    const rows = paseo(["ls"]); const live = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running").map((a) => pnorm(a.cwd?.replace(/^~(?=[\/])/, os.homedir())));
+    for (const p of projects()) if (!projBefore.has(p.projectId) && targets.includes(pnorm(p.path)) && !live.includes(pnorm(p.path))) paseo(["project", "delete", p.projectId]);
+  };
   const retire = (id, wt) => {
     if (o.keep) return;
     if (id) { paseo(["stop", id]); paseo(["archive", id]); }
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
+    dropProjects(wt);
   };
   const done = (r, wt) => { retire(r.agentId, wt); return r; };
   let partial = null; let ramLeftMs;

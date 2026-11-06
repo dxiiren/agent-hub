@@ -142,7 +142,7 @@ test("doctor version comparison", () => {
 
 test("DAEMON_UNREACHABLE on start is retried up to 3 times with backoff, then succeeds", () => {
   let n = 0; const waits = [];
-  const raw = (args) => (args[0] === "ls" ? [] : ["logs", "stop", "archive"].includes(args[0]) ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
+  const raw = (args) => (args[0] === "ls" ? [] : ["logs", "stop", "archive", "project"].includes(args[0]) ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
   const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms), jitter: () => 0 }), routes);
   assert.equal(r.used, "codex/a"); assert.equal(n, 3); assert.deepEqual(waits, [2000, 4000]);
 });
@@ -649,4 +649,20 @@ test("markActive sweeps markers older than 30 min and keeps fresh ones", async (
   writeFileSync(old, "{}"); writeFileSync(fresh, "{}"); const t = (Date.now() - 31 * 60 * 1000) / 1000; utimesSync(old, t, t);
   markActive({ slots: {} }, "a/x", d)();
   assert.equal(existsSync(old), false); assert.equal(existsSync(fresh), true);
+});
+
+test("retire removes only the project this route created (not one that existed before, not one with another agent still running there); --keep removes nothing", () => {
+  const mk = (before, after, ls = []) => { let n = 0; const calls = [];
+    const f = (a) => { calls.push(a); if (a[0] === "project" && a[1] === "ls") return n++ === 0 ? before : after; if (a[0] === "ls") return ls; if (a[0] === "worktree" && a[1] === "create") return { name: "wt-x", worktreePath: "/wt/x" }; return a[0] === "run" ? { status: "completed", agentId: "A" } : {}; };
+    f.calls = calls; return f; };
+  const del = (f) => f.calls.filter((c) => c[0] === "project" && c[1] === "delete").map((c) => c[2]);
+  const mine = { projectId: "P2", path: "c:/r/" }, wtp = { projectId: "P3", path: "/wt/x" }, old = { projectId: "P1", path: "/r" };
+  const f1 = mk([old], [old, mine, wtp]); runRoute({ ...o, cwd: "C:/r", worktree: true, base: "a".repeat(40) }, f1, { ...routes, routes: { edit: ["qwen/b"] } });
+  assert.deepEqual(del(f1).sort(), ["P2", "P3"]);
+  const f2 = mk([{ projectId: "P2", path: "C:/r" }], [{ projectId: "P2", path: "C:/r" }]); runRoute({ ...o, cwd: "C:/r" }, f2, { ...routes, routes: { edit: ["qwen/b"] } });
+  assert.deepEqual(del(f2), [], "existed before: kept");
+  const f3 = mk([], [mine], [{ status: "running", cwd: "C:/r", id: "other" }]); runRoute({ ...o, cwd: "C:/r" }, f3, { ...routes, routes: { edit: ["qwen/b"] } });
+  assert.deepEqual(del(f3), [], "another agent still runs there: kept");
+  const f4 = mk([], [mine]); runRoute({ ...o, cwd: "C:/r", keep: true }, f4, { ...routes, routes: { edit: ["qwen/b"] } });
+  assert.deepEqual(del(f4), [], "--keep");
 });
