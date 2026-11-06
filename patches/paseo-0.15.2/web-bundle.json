@@ -22,6 +22,17 @@
    "name": "no-empty-link",
    "find": "U=(0,b.jsx)(v.ExternalLink,{href:A,label:E,accessibilityLabel:O})",
    "replace": "U=A?(0,b.jsx)(v.ExternalLink,{href:A,label:E,accessibilityLabel:O}):null"
+  },
+  {
+   "name": "model-picker-component",
+   "find": "function B(s){const n=(0,o.c)(65),{provider:l,serverId:f,visible:m,onClose:h,refresh:v}=s",
+   "replaceFile": "model-picker.js"
+  },
+  {
+   "name": "model-picker-use",
+   "find": "X=(0,z.jsx)(u.AdaptiveTextInput,{initialValue:_,resetKey:J,onChangeText:T,onSubmitEditing:W,placeholder:N,placeholderTextColor:S.colors.foregroundMuted,autoCapitalize:\"none\",autoCorrect:!1,returnKeyType:\"done\",style:Q}),",
+   "replace": "X=(0,z.jsx)(__AhPick,{__p:l,__s:f,__v:m,__t:T,__e:R,__c:S.colors,__f:(0,z.jsx)(u.AdaptiveTextInput,{initialValue:_,resetKey:J,onChangeText:T,onSubmitEditing:W,placeholder:N,placeholderTextColor:S.colors.foregroundMuted,autoCapitalize:\"none\",autoCorrect:!1,returnKeyType:\"done\",style:Q})}),"
   }
- ]
+ ],
+ "rev": 2
 }

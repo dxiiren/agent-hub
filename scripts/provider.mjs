@@ -399,11 +399,23 @@ const USAGE = `usage:
   provider list | models --kind <kind> [--url U] [--key K] | remove <name> [--purge]
   provider api            (JSON on stdin {verb,args}; used by the Settings screen)`;
 
+/** Model ids for the picker of Paseo's "Add custom model" sheet. A hub endpoint provider: its endpoint's /v1/models, fetched here with the stored key (the key never leaves the machine).
+ *  A provider whose models the user names (local-llama): an empty list, and the daemon is NOT asked (asking would start the model server).
+ *  Everything else (Claude, Codex, Qoder, accounts of them, any built-in): { daemon: true } = the page asks the daemon for the model list it already shows as "N models". */
+export async function providerModels(name, p = paths(), o = {}) {
+  const spec = typeof name === 'string' ? own(rd(p.local, {}).extraProviders, name) : undefined;
+  if (!spec) return { daemon: true };
+  const k = kindOf(spec.type);
+  if (k.modelsFrom === 'endpoint') return { models: await discover(spec.type, { url: spec.url, key: spec.key }, o) };
+  return k.modelsFrom === 'none' ? { models: [] } : { daemon: true };
+}
+
 /** The one entry the Settings screen calls: {verb,args} -> JSON. Same functions as the CLI. */
 export async function api({ verb, args = {} }, p = paths(), o = {}) {
   if (verb === 'describe') return describe(p);
   if (verb === 'models') return { models: await discover(kindOf(args.kind ?? args.type).type, { url: args.url ?? args.link, key: args.key, provider: args.provider }, o) };
   if (verb === 'list') return { providers: list(p) };
+  if (verb === 'provider-models') return providerModels(args.provider, p, o);
   if (verb === 'migrate') return migrate(p, { undo: args.undo === true || args.undo === 'true' });
   if (verb === 'add') return await add(args, p, o);
   if (verb === 'edit') return await edit(args.name, args, p, o);

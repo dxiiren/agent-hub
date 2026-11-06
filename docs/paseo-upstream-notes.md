@@ -40,3 +40,17 @@ Problem: the Add provider list is a compile-time constant, so a plugin that adds
 Change: (a) `@getpaseo/plugin` gets `client.addProviderCatalogEntry({ id, title, keywords?, iconSvg?, onSelect(ctx) })`; (b) `useAcpProviderCatalog` merges the plugin entries after the built-in ones and `rankProviderCatalog` also scores `keywords`; (c) `onSelect` replaces the default config patch (a plugin can open its own settings screen, with `ctx.openSettings(screenId, { params })`, or run its own install flow); built-in entries are unchanged; (d) the tile omits the install link when `installLink` is absent. About 40 lines in the web app and one type in `@getpaseo/plugin`; no daemon or protocol change. Tests: catalog merge order and id collisions (built-in wins), ranking by keyword, `onSelect` called instead of `buildAcpProviderConfigPatch`, tile without `installLink`.
 
 Why not a section on the page (the earlier idea above): the catalog entry gives the same discoverability with a smaller surface, and works for any plugin without layout decisions.
+
+## Add custom model: a picker instead of a text box (fork patch rev 2, and the upstream PR)
+
+Evidence (0.15.2 web bundle): the only place the Providers page takes a model id as text is the "Add custom model" sheet (`AddCustomModelSheet`, i18n keys `settings.providers.models.addCustomTitle` / `modelId` / `modelIdPlaceholder`). It writes `{id,label}` into `agents.providers.<id>.additionalModels` through `patchConfig`. The "N models" list above it comes from the daemon (`list_provider_models_request`, client `listProviderModels(provider)`), which for a custom ACP agent only knows the models that agent announces, so an OpenAI-compatible endpoint that serves more models than the one configured has no way to show them.
+
+Fork patch (two more edits in `patches/paseo-0.15.2/web-bundle.json`, component source in `model-picker.js`, revision marker `agent-hub-rev:2`, re-applied automatically over an older revision): the sheet's text input is replaced by `__AhPick`, a select. Its list comes from (1) the plugin RPC `agent-hub-providers.call` verb `provider-models` (an endpoint provider: the daemon-side tool fetches `<base>/models` with the stored key, so the key never reaches the browser; a provider whose models the user names, such as a local model server, gets an empty list and the daemon is not asked, because asking would start it), else (2) the daemon's own `listProviderModels(provider)`, the same catalog the page already shows as "N models" (Claude, Codex, Qoder, OpenCode, Copilot, accounts of them). Models already in the list are left out. The last entry is "Custom model id...", which shows the original text input. A failed load shows the reason, a Retry button and the text input.
+
+### Upstream PR description: model picker in Add custom model
+
+Title: Offer the provider's own model list when adding a custom model.
+
+Problem: adding a model asks for a free-text id even when the provider can list the ids it serves.
+
+Change: (a) `@getpaseo/plugin` gets `client.addProviderModelSource({ provider | match, list(ctx) => Promise<{id,label?}[]> })` so a plugin that owns an endpoint kind can supply ids; (b) the sheet shows a select fed by the first matching plugin source, else `listProviderModels`, minus ids already present, with "Custom model id..." last; (c) load errors show a message and Retry. About 60 lines in the web app and one type; no daemon or protocol change. Tests: source precedence, de-duplication against `additionalModels`, error plus retry, custom entry reveals the text input.

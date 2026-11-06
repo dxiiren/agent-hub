@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { add, remove, list, entries } from '../provider.mjs';
+import { add, remove, list, entries, providerModels } from '../provider.mjs';
 
 const URL1 = 'http://llm.example.test:8000/v1';
 const served = (ids) => async () => ({ ok: true, json: async () => ({ data: ids.map((id) => ({ id })) }) });
@@ -107,4 +107,16 @@ test('a config whose top level is not an object is refused and nothing is writte
     assert.deepEqual(files.map(sha), before, `${key}=${bad}`);
     assert.ok(existsSync(p.local) === (key === 'local'), 'no new file');
   }
+});
+
+test('provider-models: endpoint provider -> its /v1/models (key stays server side), local-llama -> empty, CLI/unknown -> daemon, endpoint down -> error', async () => {
+  const { p } = box();
+  await add({ name: 'qwen-pm', url: URL1, model: 'm1', key: 'sekret' }, p, opts(['m1', 'm2']));
+  const seen = [];
+  const f = async (u, init) => { seen.push([u, init?.headers?.Authorization]); return { ok: true, json: async () => ({ data: [{ id: 'm1' }, { id: 'm2' }] }) }; };
+  assert.deepEqual((await providerModels('qwen-pm', p, { f })).models.map((m) => m.id), ['m1', 'm2']);
+  assert.deepEqual(seen, [[`${URL1}/models`, 'Bearer sekret']]);
+  assert.deepEqual(await providerModels('claude', p, { f }), { daemon: true });
+  assert.deepEqual(await providerModels(undefined, p, { f }), { daemon: true });
+  await assert.rejects(providerModels('qwen-pm', p, { f: async () => ({ ok: false, status: 503 }) }), /endpoint check failed/);
 });

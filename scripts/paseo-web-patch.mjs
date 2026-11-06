@@ -29,7 +29,10 @@ export function findServerDir() {
 
 export function loadSpec(version, dir = join(REPO, 'patches', `paseo-${version}`)) {
   const f = join(dir, 'web-bundle.json');
-  return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : null;
+  if (!existsSync(f)) return null;
+  const spec = JSON.parse(readFileSync(f, 'utf8'));
+  for (const e of spec.edits) if (e.replaceFile) e.replace = readFileSync(join(dirname(f), e.replaceFile), 'utf8').trimEnd(); // long edits live in their own readable file
+  return spec;
 }
 
 const writeBoth = (file, buf) => { writeFileSync(file, buf); writeFileSync(`${file}.gz`, gzipSync(buf)); writeFileSync(`${file}.br`, brotliCompressSync(buf)); };
@@ -44,14 +47,20 @@ export function run(action, { serverDir = findServerDir(), spec, entries = catal
   const ui = join(serverDir, 'dist', 'server', 'web-ui');
   const htmlFile = join(ui, 'index.html');
   if (!existsSync(htmlFile)) return { state: 'skipped', reason: 'web-ui/index.html not found (daemon started with --no-web-ui?)' };
-  const html = readFileSync(htmlFile, 'utf8');
-  const cur = bundleRef(html);
+  let html = readFileSync(htmlFile, 'utf8');
+  let cur = bundleRef(html);
   if (!cur) return { state: 'skipped', reason: 'index.html names no index bundle' };
-  const patchedNow = existsSync(join(ui, cur)) && readFileSync(join(ui, cur), 'utf8').includes(MARK);
+  const orig = join(ui, 'index.html.agent-hub-orig');
+  const text0 = existsSync(join(ui, cur)) ? readFileSync(join(ui, cur), 'utf8') : '';
+  let patchedNow = text0.includes(MARK);
+  // an older patch revision is live: patch again from the untouched original bundle (a new content-hashed file), then drop the stale one
+  let stale;
+  if (action === 'apply' && patchedNow && spec.rev && !text0.includes(`/*agent-hub-rev:${spec.rev}*/`) && existsSync(orig)) {
+    stale = cur; html = readFileSync(orig, 'utf8'); cur = bundleRef(html); patchedNow = false;
+  }
 
   if (action === 'status') return { state: patchedNow ? 'patched' : 'unpatched' };
   if (action === 'restore') {
-    const orig = join(ui, 'index.html.agent-hub-orig');
     if (!patchedNow || !existsSync(orig)) return { state: 'unpatched' };
     writeBoth(htmlFile, readFileSync(orig));
     rmSync(join(ui, 'agent-hub-catalog.json'), { force: true });
@@ -71,9 +80,10 @@ export function run(action, { serverDir = findServerDir(), spec, entries = catal
   const out = Buffer.from(text, 'utf8');
   const name = `${cur.slice(0, cur.lastIndexOf('-') + 1)}${sha(out).slice(0, 32)}.js`;
   writeBoth(join(ui, name), out);
-  copyFileSync(htmlFile, join(ui, 'index.html.agent-hub-orig'));
+  if (!existsSync(orig)) copyFileSync(htmlFile, orig);
   writeFileSync(join(ui, 'agent-hub-catalog.json'), JSON.stringify(entries));
   writeBoth(htmlFile, Buffer.from(html.replace(cur, name), 'utf8'));
+  if (stale) for (const x of ['', '.gz', '.br']) rmSync(join(ui, stale + x), { force: true });
   return { state: 'applied' };
 }
 

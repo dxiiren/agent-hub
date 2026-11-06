@@ -91,3 +91,22 @@ test('the shipped patch matches the installed Paseo web bundle (skipped when tha
   const text = buf.toString('utf8');
   for (const e of s.edits) assert.equal(text.split(e.find).length - 1, 1, e.name);
 });
+
+test('a newer patch revision re-patches from the untouched original and drops the stale bundle; replaceFile edits load from their file', () => {
+  const { ui, dir, snap } = install();
+  const before = snap();
+  run('apply', { serverDir: dir, spec: spec() });
+  const old = readFileSync(join(ui, 'index.html'), 'utf8').match(/_expo\/static\/js\/web\/index-[0-9a-f]+\.js/)[0];
+  const v2 = spec({ rev: 2, edits: [{ name: 'one', find: 'ANCHOR1', replace: '/*agent-hub-catalog*//*agent-hub-rev:2*/Y1' }, { name: 'two', find: 'ANCHOR2', replace: 'Y2' }] });
+  assert.equal(run('apply', { serverDir: dir, spec: v2 }).state, 'applied');
+  const ref = readFileSync(join(ui, 'index.html'), 'utf8').match(/_expo\/static\/js\/web\/index-[0-9a-f]+\.js/)[0];
+  assert.notEqual(ref, old);
+  assert.equal(readFileSync(join(ui, ref), 'utf8'), 'A;/*agent-hub-catalog*//*agent-hub-rev:2*/Y1;B;Y2;C');
+  assert.equal(existsSync(join(ui, old)), false, 'stale patched bundle removed');
+  assert.equal(run('apply', { serverDir: dir, spec: v2 }).state, 'patched', 'same revision again: idempotent');
+  run('restore', { serverDir: dir, spec: v2 });
+  assert.deepEqual(snap(), before);
+  const s = loadSpec('0.15.2');
+  const pick = s.edits.find((e) => e.name === 'model-picker-component');
+  assert.ok(pick.replace.includes('/*agent-hub-rev:' + s.rev + '*/') && pick.replace.endsWith(pick.find), 'component source loaded and ends with the anchor it precedes');
+});
