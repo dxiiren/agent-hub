@@ -4,7 +4,7 @@ title = "agent-hub"
 [extend]
 useDefault = true
 
-# Credential-looking assignments the default generic rule misses (it needs high entropy): password=..., token: "...", secret_key='...'.
+# Credential-looking assignments the default generic rule misses (it needs high entropy): a password, token or key name assigned a value.
 [[rules]]
 id = "agent-hub-assigned-secret"
 description = "assigned password, secret, token, api or private key"
