@@ -2,6 +2,7 @@
 //   node scripts/hub.mjs configure          write the Paseo config, wrappers and secret (idempotent)
 //   node scripts/hub.mjs mcp add|remove     register / remove the agent-hub MCP server in each installed client
 //   node scripts/hub.mjs unconfigure       remove the providers, wrappers and secret that configure wrote
+//   node scripts/hub.mjs provider add|list|remove   add an OpenAI-compatible endpoint as a provider (scripts/provider.mjs)
 //   node scripts/hub.mjs doctor [--deep]    PASS/FAIL per check and per provider; --deep runs one tiny task each
 //   node scripts/hub.mjs update [--paseo]   update every CLI that is behind (Paseo only with --paseo; decision 38)
 // Env: AGENT_HUB_HOME (Paseo home, default ~/.paseo), AGENT_HUB_PORT (default 6767),
@@ -15,6 +16,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { entries as extraEntries } from './provider.mjs';
 
 process.noDeprecation = true; // shell:true is needed only to run .cmd shims; our args are fixed
 const WIN = process.platform === 'win32';
@@ -158,6 +160,7 @@ function providers() {
       env: { LLAMA_SERVER_BIN: cfg.llama, LAPTOP_MODEL_PATH: cfg.laptopModel, QWEN_BIN: qwen, ...(cfg.laptopPort ? { LAPTOP_PORT: cfg.laptopPort } : {}),
         ...(opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') ? { HEAVY_LOCK_GLOB: opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') } : {}) } };
   } else notes.push(vram ? 'laptop model needs LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and qwen' : 'laptop model skipped: no GPU with >= 7.5 GiB VRAM (decision 35)');
+  for (const [n, sp] of Object.entries(local.extraProviders || {})) if (qwen) Object.assign(p, extraEntries(n, sp, qwen)); // added with `provider add`; their -ro twins come with them
   // read-only twins (round 5): the same launcher with --read-only (deny settings for sensitive reads); read-only task types run only on these
   for (const id of ['qwen-code', 'qwen-code-2', 'qwen-laptop']) if (p[id]) p[id + '-ro'] = { ...p[id], label: p[id].label + ' (read-only)', command: [...p[id].command, '--read-only'] };
   return { p, notes };
@@ -336,6 +339,7 @@ function unconfigure() {
   const f = join(HOME, 'config.json'); const c = readJson(f, null);
   if (c?.agents?.providers) {
     for (const k of ['codex', 'claude-clean', 'qoder', 'qwen-code', 'qwen-code-2', 'opencode', 'qwen-laptop', 'qwen-code-ro', 'qwen-code-2-ro', 'qwen-laptop-ro']) delete c.agents.providers[k];
+    for (const n of Object.keys(local.extraProviders || {})) { delete c.agents.providers[n]; delete c.agents.providers[n + '-ro']; }
     delete c.daemon?.auth;
     if (c.daemon?.mcp) { c.daemon.mcp.enabled = false; c.daemon.mcp.injectIntoAgents = false; } // never leave MCP open without auth
     writeJson(f, c);
@@ -349,6 +353,7 @@ if (cmd === 'configure') configure();
 else if (cmd === 'mcp' && (arg === 'add' || arg === 'remove')) mcp(arg);
 else if (cmd === 'unconfigure') unconfigure();
 else if (cmd === 'plugins') plugins();
+else if (cmd === 'provider') process.exit(await (await import('./provider.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'update') (await import('./tools.mjs')).update(process.argv.includes('--paseo'));
 else if (cmd === 'doctor') await doctor(process.argv.includes('--deep'));
-else { console.log('usage: hub.mjs configure | unconfigure | plugins | mcp add|remove | doctor [--deep] | update [--paseo]'); process.exit(2); }
+else { console.log('usage: hub.mjs configure | unconfigure | provider add|list|remove | plugins | mcp add|remove | doctor [--deep] | update [--paseo]'); process.exit(2); }

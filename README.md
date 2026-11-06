@@ -183,6 +183,18 @@ Run `just` with no arguments to list every recipe. The ones you'll use daily:
 | `just claudex` | Launch Claude Code (Sonnet, all permissions) |
 | `just claudeo` / `just claudeh` | Same, on Opus / Haiku |
 
+## Adding a provider (another Qwen Code endpoint)
+
+Paseo's web UI cannot do this. Settings > Providers > "Add provider" lists a fixed catalog of ACP agents (Qwen Code, Qoder, Gemini CLI ...), each added with its stock command: no URL, model or env field, and the provider page only lets you add a custom model id to an existing provider. A catalog "Qwen Code" would also have no endpoint and would overwrite the hub's `qwen-code` entry. So the hub has its own command, which does what the UI cannot:
+
+```
+agent-hub provider add qwen-extra --url <openai-compatible base url> --model <served model id> [--slots 2] [--routes code-edit,summarise]
+agent-hub provider list
+agent-hub provider remove qwen-extra
+```
+
+(`node scripts/hub.mjs provider ...` is the same command.) `add` refuses unless `GET <url>/v1/models` lists the model. It then writes the provider and its read-only `qwen-extra-ro` twin into the Paseo `config.json`, the endpoint into `config/hub.local.json` (`extraProviders`, so `configure` regenerates it), and the slots, the yolo mode and the route chains into the routes file. Names start with `qwen-` (routing derives the read-only twin from that prefix). Nothing is routed to a new provider until you pass `--routes`. Restart the daemon afterwards (`just down && just up`) so Paseo reloads its providers. `--type qwen-code` is the only type today; another OpenAI-compatible launcher is one function in `TYPES` in `scripts/provider.mjs`.
+
 ## Security
 
 Full-access, bypass and yolo modes are used only with `--new-workspace worktree` (a throwaway worktree); `route.mjs` drops them otherwise. The daemon password lives in `<paseo home>/agent-hub-secret` and is never put in the environment agents inherit.
