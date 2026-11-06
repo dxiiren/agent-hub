@@ -115,6 +115,7 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
   if (!preOverride) reconcile(p);
   const k = kindOf(a.kind ?? a.type); const type = k.type; const { model } = a;
   const lc = k.local ? localSpec(a) : undefined; let url = k.local ? `http://127.0.0.1:${lc.port}/v1` : a.url;
+  if (k.own && !String(url ?? '').trim()) throw new Error('Enter the link of the endpoint, e.g. http://host:8000/v1');
   if (k.own) { url = safeUrl(url); if (!url) throw new Error('url must be a plain http(s) base URL like http://host:8000/v1 (host, optional port and path; no credentials, query or special characters)'); }
   let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
   if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
@@ -136,7 +137,7 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
   if (key !== undefined && !/^[!-~]{1,512}$/.test(String(key))) throw new Error('--key must be 1-512 printable characters without spaces');
   if (key && !k.fields.some((x) => x.id === 'key')) throw new Error(`kind ${type} takes no API key (an agent of that kind could read it)`);
   if (label && !/^[^\x00-\x1f"]{1,80}$/.test(label)) throw new Error('--label must be 1-80 printable characters without quotes');
-  if (!safeId(model)) throw new Error('--model must be a plain model id');
+  if (!safeId(model)) throw new Error(model ? 'model must be a plain model id (letters, digits and . _ - : /)' : 'Choose a model first: it is listed once the link works, or pick "Other / custom model id" and type it.');
   const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
   const local = rd(p.local, {}); const first = !Object.keys(local.extraProviders || {}).length;
   if (own(local.extraProviders, name)) throw new Error(`${name} already exists (remove it first, or use edit)`);

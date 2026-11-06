@@ -52,7 +52,9 @@ test('Add with a bad link or a model the endpoint does not serve answers with a 
     const bad = await rpc('add', { kind: 'qwen-code', url: 'http://h/v1;ls', model: 'm' });
     assert.match(bad.error, /plain http\(s\) base URL/);
     const nomodel = await rpc('add', { kind: 'qwen-code', url: `http://127.0.0.1:${port}/v1`, model: '' });
-    assert.ok(nomodel.error, 'a missing model is refused with a message');
+    assert.match(nomodel.error, /Choose a model first/);
+    const nolink = await rpc('add', { kind: 'qwen-code', url: '', model: 'm' });
+    assert.match(nolink.error, /Enter the link/);
     const edit = await rpc('edit', { name: 'no-such-provider', model: 'x' });
     assert.ok(edit.error, 'edit of an unknown provider is refused with a message');
     const rm = await rpc('remove', { name: 'no-such-provider' });
