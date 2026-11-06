@@ -5,7 +5,6 @@
 // Env: LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH, QWEN_BIN (required); HEAVY_LOCK_GLOB, LAPTOP_PORT (8089), LAPTOP_CTX (65536: Qwen Code passed 4/10 hard edits at 64k against 1/10 at 32k; 7.5 GB of the 8 GB card),
 //      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b), LAPTOP_DEVICE (CUDA0; a non-CUDA device skips the NVIDIA guard), LAPTOP_IDLE_MIN (15, read by the reaper).
 // Normally started by a provider of kind `local-llama` (scripts/provider-kinds.mjs), which sets this env.
-import { spawn } from 'node:child_process';
 import { spawnSafe } from '../../plugins/routing/spawn-safe.mjs';
 import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { freemem, tmpdir } from 'node:os';
@@ -13,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
-import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal } from './gpu-guard.mjs';
+import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan } from './gpu-guard.mjs';
 
 const READ_ONLY = takeReadOnlyFlag(process.argv); // legacy "-ro" twin entry: read-only from the start
 const E = process.env;
@@ -65,11 +64,11 @@ async function ensureServer() {
       const g = NV ? smi() : null;
       const why = g ? startRefusal({ pnp: pnpStatus(), smiOk: g.ok, usedMiB: g.usedMiB }, Number(E.LAPTOP_BUSY_MIB || 600)) : '';
       if (why) throw new Error(why);
-      const srv = spawn(E.LLAMA_SERVER_BIN, llamaArgs({ model: E.LAPTOP_MODEL_PATH, ctx: E.LAPTOP_CTX, port: PORT, alias: ALIAS, device: DEVICE }),
-      { detached: true, stdio: 'ignore', windowsHide: true });
-      srv.unref();
-      writeOwn(PORT, { pid: srv.pid, startedAt: Date.now(), lastUsed: Date.now() }); // only this pid is ever stopped by the hub
-      spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'laptop-reaper.mjs'), PORT], { detached: true, stdio: 'ignore', windowsHide: true, env: E }).unref();
+      // outside the launcher's process tree: Paseo's tree kill of an archived/timed-out agent must not take the model server (or its reaper) with it
+      const pid = spawnOrphan(E.LLAMA_SERVER_BIN, llamaArgs({ model: E.LAPTOP_MODEL_PATH, ctx: E.LAPTOP_CTX, port: PORT, alias: ALIAS, device: DEVICE }));
+      if (!pid) throw new Error('llama-server did not start');
+      writeOwn(PORT, { pid, startedAt: Date.now(), lastUsed: Date.now() }); // only this pid is ever stopped by the hub
+      spawnOrphan(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'laptop-reaper.mjs'), PORT]);
     }
     for (let i = 0; i < 90; i++) { if (await up()) return; await sleep(2000); }
     throw new Error('llama-server did not start');

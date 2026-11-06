@@ -45,12 +45,23 @@ export function cpuSeconds(pid) {
   return Number.isNaN(v) ? null : v;
 }
 
+/** Start a process OUTSIDE the caller's process tree and return its pid (null when it did not start). Paseo ends an agent with a tree kill (tree-kill -> `taskkill /T /F`), which walks
+ *  parent-pid links: a llama-server or reaper spawned `detached` by the launcher still has the launcher as parent on Windows and died with it (an archived or timed-out agent
+ *  stopped the hub's server within seconds). A short-lived middle process starts it and exits, so the child's parent is gone and no tree walk reaches it. */
+export function spawnOrphan(cmd, args = []) {
+  const code = "const p=require('node:child_process').spawn(process.argv[1],JSON.parse(process.argv[2]),{detached:true,stdio:'ignore',windowsHide:true});p.on('error',()=>process.exit(1));p.unref();setTimeout(()=>{process.stdout.write(String(p.pid));process.exit(0)},300)";
+  const r = sh(process.execPath, ['-e', code, cmd, JSON.stringify(args)]);
+  return parseInt(r.stdout, 10) || null;
+}
+
 export const stopPid = (pid) => { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } };
 
-/** The llama-server command line: GPU only (every layer offloaded, one device) and NO mmap (`--load-mode none`), so the weights are not kept in system RAM. */
+/** The llama-server command line: GPU only (every layer offloaded, one device) and NO mmap (`--load-mode none`), so the weights are not kept in system RAM.
+ *  `-ot token_embd.weight=<device>` also puts the input-embedding table on the card: llama.cpp keeps it in host RAM even with -ngl 99 (546 MiB "CUDA_Host model buffer"
+ *  for Qwen3.5-9B). Measured 06-11: working set 1404 -> 842 MB, same tokens/s, +546 MiB VRAM. */
 export function llamaArgs({ model, ctx = '65536', port, alias, device = 'CUDA0' }) {
   return ['-m', model, '--jinja', '-ngl', '99', '-c', String(ctx), '-np', '1', '-fa', 'on', '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--reasoning', 'off',
-    '--temp', '0.7', '--top-p', '0.8', '--top-k', '20', '--device', device, '--load-mode', 'none', '--host', '127.0.0.1', '--port', String(port), '--alias', alias, '--metrics', '--cache-ram', '0'];
+    '--temp', '0.7', '--top-p', '0.8', '--top-k', '20', '--device', device, '--load-mode', 'none', '--host', '127.0.0.1', '--port', String(port), '--alias', alias, '--metrics', '--cache-ram', '0', '-ot', `token_embd\.weight=${device}`];
 }
 /** Start verdict: a reason string when the server must NOT be started (GPU missing, nvidia-smi failing, GPU already used by something else), else ''. */
 export function startRefusal({ pnp, smiOk, usedMiB = 0 }, busyMiB = 600) {

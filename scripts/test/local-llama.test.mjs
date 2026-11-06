@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { add, edit, remove, migrate, describe } from '../provider.mjs';
 import { kindOf, discover, LOCAL_FIELD_IDS } from '../provider-kinds.mjs';
-import { llamaArgs, startRefusal, reapStep, writeOwn, listenerPid } from '../../deploy/laptop/gpu-guard.mjs';
+import { llamaArgs, startRefusal, reapStep, writeOwn, listenerPid, spawnOrphan } from '../../deploy/laptop/gpu-guard.mjs';
 
 const DEPLOY = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'laptop');
 const files = (t) => { const bin = join(t, 'llama-server'), gguf = join(t, 'm.gguf'); writeFileSync(bin, ''); writeFileSync(gguf, ''); return { bin, modelFile: gguf }; };
@@ -33,9 +33,24 @@ test('kind schema: own provider with slots and read-only mode, path/number field
 test('the launcher builds exactly the GPU-only, no-mmap llama-server arguments', () => {
   const a = llamaArgs({ model: '/m.gguf', ctx: '4096', port: '8089', alias: 'x', device: 'CUDA0' });
   assert.deepEqual(a, ['-m', '/m.gguf', '--jinja', '-ngl', '99', '-c', '4096', '-np', '1', '-fa', 'on', '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--reasoning', 'off',
-    '--temp', '0.7', '--top-p', '0.8', '--top-k', '20', '--device', 'CUDA0', '--load-mode', 'none', '--host', '127.0.0.1', '--port', '8089', '--alias', 'x', '--metrics', '--cache-ram', '0']);
+    '--temp', '0.7', '--top-p', '0.8', '--top-k', '20', '--device', 'CUDA0', '--load-mode', 'none', '--host', '127.0.0.1', '--port', '8089', '--alias', 'x', '--metrics', '--cache-ram', '0', '-ot', 'token_embd\.weight=CUDA0']);
   assert.ok(a[a.indexOf('--load-mode') + 1] === 'none' && a[a.indexOf('-ngl') + 1] === '99');
   assert.equal(llamaArgs({ model: 'm', port: 1, alias: 'a' }).includes('65536'), true, 'default context');
+});
+
+test('spawnOrphan: the child outlives its starter and is not in the caller process tree (Paseo tree-kills the launcher)', () => {
+  const pid = spawnOrphan(process.execPath, ['-e', 'setTimeout(()=>{},20000)']);
+  try {
+    assert.ok(pid > 0 && pid !== process.pid);
+    process.kill(pid, 0); // alive after the middle process exited
+    const parent = process.platform === 'win32'
+      ? spawnSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`], { encoding: 'utf8' }).stdout
+      : spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).stdout;
+    const ppid = parseInt(parent, 10);
+    assert.notEqual(ppid, process.pid, 'a tree walk from the caller must not reach it');
+    assert.throws(() => process.kill(ppid, 0));
+  } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+  assert.equal(spawnOrphan(join(tmpdir(), 'no-such-binary-xyz'), []), null);
 });
 
 test('start is refused when the GPU is missing or busy, allowed when free', () => {
