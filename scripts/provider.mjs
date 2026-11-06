@@ -113,13 +113,19 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   const routes = rd(p.routes, null); if (!routes) throw new Error(`routes file unreadable: ${p.routes}`);
   const chains = parseRoutes(a.routes);
   const accountDir = account ? resolve(a.accountDir || accountDirOf(type, account)) : undefined;
-  const spec = { type, ...(k.own ? { url } : {}), model, ...(account ? { account, accountDir } : {}), ...(label && k.own ? { label } : {}), ...(key ? { key } : {}), ...(k.twin && !readOnly ? { readOnly: false } : {}) };
+  const spec = { type, ...(k.own ? { url } : {}), model, ...(account ? { account, accountDir } : {}), ...(label && (k.own || account) ? { label } : {}), ...(key ? { key } : {}), ...(k.twin && !readOnly ? { readOnly: false } : {}) };
   const token = chainToken(name, spec);
   for (const { c } of chains) {
     if (!Array.isArray(routes.routes?.[c])) throw new Error(`unknown route type ${c} (known: ${Object.keys(routes.routes || {})})`);
     if (routes.routes[c].includes(token)) throw new Error(`route ${c} already lists ${token}`);
   }
   const hubDir = hubDirOf(p.paseo);
+  if (ownish(k, spec) && type !== 'opencode') { // display names are unique: a taken one is refused, a taken auto-default gets " #2", " #3" ...
+    const taken = new Set(Object.values(cfg.agents?.providers ?? {}).map((x) => String(x?.label ?? '').toLowerCase()));
+    const natural = account ? `${k.label.split(' (')[0]} ${account}` : displayName(k.label.split(' (')[0], url);
+    if (spec.label && taken.has(spec.label.toLowerCase())) throw new Error(`display name "${spec.label}" is already used by another provider; choose a different --label`);
+    if (!spec.label && taken.has(natural.toLowerCase())) { let n = 2; while (taken.has(`${natural} #${n}`.toLowerCase())) n++; spec.label = `${natural} #${n}`; }
+  }
   cfg.agents ??= {}; cfg.agents.providers = { ...cfg.agents.providers, ...entries(name, spec, bin, REPO, hubDir, cfg.agents.providers?.[k.base]?.command) };
   local.extraProviders = { ...local.extraProviders, [name]: spec };
   if (ownish(k, spec)) {

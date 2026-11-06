@@ -99,3 +99,21 @@ test("the module loads when import.meta.url is undefined (Paseo bundles plugins 
     await m.selfHostedReport("none", { env: { PASEO_HOME: tmpdir() } }).catch(() => {}); // must not throw a TypeError from fileURLToPath
   } finally { unlinkSync(tmp); }
 });
+
+test('kindOfProvider: the provider record kind (hub.local.json extraProviders[name].type) wins over the label guess', async () => {
+  const { kindOfProvider } = await import('../server/selfhosted-usage.mjs');
+  const local = { extraProviders: { 'qwen-lab': { type: 'qwen-code' }, 'mine-x': { type: 'mine' } } };
+  assert.equal(kindOfProvider('qwen-lab', 'Lab box', 'http://10.0.0.1:8000/v1', local), 'Qwen Code');
+  assert.equal(kindOfProvider('mine-x', 'Whatever 10.0.0.2', 'http://10.0.0.2/v1', local), 'mine');
+  assert.equal(kindOfProvider('old', 'Qwen Code 10.0.0.3', 'http://10.0.0.3/v1', {}), 'Qwen Code', 'legacy label fallback');
+});
+
+test('two endpoints with the same display name show their provider ids on the card', async () => {
+  _resetForTest();
+  const home = mkdtempSync(join(tmpdir(), "ahub-dup-"));
+  const mk = (n) => ({ extends: "acp", label: "Qwen Code 10.0.0.9", command: ["node", "x.mjs", "q", `http://10.0.0.9:${n}/v1`, "m"] });
+  writeFileSync(join(home, "config.json"), JSON.stringify({ agents: { providers: { "qwen-one": mk(8000), "qwen-two": mk(8001) } } }));
+  const r = await selfHostedReport("qwen-code", { env: { PASEO_HOME: home, AGENT_HUB_USAGE_DIR: home }, f: async () => ({ ok: true, json: async () => ({ data: [{ id: "m" }] }) }), readFeed: () => "" });
+  const labels = r.details.filter((d) => d.id.startsWith("ep-")).map((d) => d.label);
+  assert.deepEqual(labels, ["Qwen Code 10.0.0.9 (qwen-one)", "Qwen Code 10.0.0.9 (qwen-two)"]);
+});

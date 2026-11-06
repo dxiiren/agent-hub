@@ -42,12 +42,16 @@ export default function contribute(server: PluginServerContext) {
     discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
     fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
+  const localPaths = [process.env.AGENT_HUB_LOCAL, process.env.AGENT_HUB_REPO && join(process.env.AGENT_HUB_REPO, "config", "hub.local.json")];
+  try { const cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); for (const p of Object.values<any>(cfg.plugins ?? {})) if (p?.path) localPaths.push(join(p.path, "..", "..", "config", "hub.local.json")); } catch { /* no config */ }
+  let local: any = {};
+  for (const lp of localPaths) { if (!lp) continue; try { local = JSON.parse(readFileSync(lp, "utf8").replace(/^﻿/, "")); break; } catch { /* next */ } }
   // One usage source (one card) per self-hosted provider KIND, e.g. "Qwen Code": totals first, then a row per endpoint.
   // Read from the Paseo config at plugin load: a provider added later shows up after the plugin is reloaded.
   let cfg: any = {};
   try { cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { /* no config: no cards */ }
   const kinds = new Map<string, string>();
-  for (const p of selfHostedProviders(cfg)) kinds.set(kindId(p.kind), p.kind);
+  for (const p of selfHostedProviders(cfg, local)) kinds.set(kindId(p.kind), p.kind);
   for (const [id, kind] of kinds) {
     server.registerUsageSource({
       id: `selfhosted-${id}`,
@@ -58,10 +62,6 @@ export default function contribute(server: PluginServerContext) {
     });
   }
   // One card per CLI kind that has extra accounts (Claude Code, Codex, Qoder): Total + a line per account. Read from hub.local.json at plugin load.
-  const localPaths = [process.env.AGENT_HUB_LOCAL, process.env.AGENT_HUB_REPO && join(process.env.AGENT_HUB_REPO, "config", "hub.local.json")];
-  try { const cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); for (const p of Object.values<any>(cfg.plugins ?? {})) if (p?.path) localPaths.push(join(p.path, "..", "..", "config", "hub.local.json")); } catch { /* no config */ }
-  let local: any = {};
-  for (const lp of localPaths) { if (!lp) continue; try { local = JSON.parse(readFileSync(lp, "utf8").replace(/^﻿/, "")); break; } catch { /* next */ } }
   for (const [kind, g] of Object.entries<any>(accountGroups(local))) {
     server.registerUsageSource({
       id: `accounts-${kind}`,

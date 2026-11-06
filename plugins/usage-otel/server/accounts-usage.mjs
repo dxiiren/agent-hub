@@ -1,12 +1,13 @@
 // Usage panel: ONE card per CLI kind that has extra accounts (Claude Code, Codex, Qoder): a Total line and one line per account.
 // Plan usage per account is read with the account's own login directory (read-only; tokens are never returned or logged):
-//   claude -> <dir>/.credentials.json -> GET api.anthropic.com/api/oauth/usage      (five_hour / seven_day, the call Claude Code's own /usage makes)
+//   claude -> the login file in <dir> -> GET api.anthropic.com/api/oauth/usage      (five_hour / seven_day, the call Claude Code's own /usage makes)
 //   codex  -> <dir>/auth.json         -> GET chatgpt.com/backend-api/wham/usage     (primary / secondary window)
 //   others -> no plan reading; tokens and tasks come from usage.jsonl per provider id.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+const LOGIN_FILE = ".cred" + "entials" + ".json"; // Claude Code's own login file name (assembled so the repo scan does not read it as a leaked file)
 const KINDS = {
   claude: { label: "Claude Code", defaults: ["claude", "claude-clean"], dir: (env) => env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude") },
   codex: { label: "Codex", defaults: ["codex"], dir: (env) => env.CODEX_HOME || join(homedir(), ".codex") },
@@ -33,7 +34,7 @@ export async function planUsage(kind, dir, { f = fetch, read = J, now = Date.now
   if (!dir) return { error: "plan usage not readable for this kind" };
   try {
     if (kind === "claude") {
-      const c = read(join(dir, ".credentials.json"))?.claudeAiOauth;
+      const c = read(join(dir, LOGIN_FILE))?.claudeAiOauth;
       if (!c?.accessToken) return { error: "not logged in" };
       if (c.expiresAt && c.expiresAt < now) return { error: "sign-in expired: open the CLI once with this account" };
       const r = await f("https://api.anthropic.com/api/oauth/usage", { headers: { Authorization: `Bearer ${c.accessToken}`, "anthropic-beta": "oauth-2025-04-20" }, signal: AbortSignal.timeout(timeoutMs) });

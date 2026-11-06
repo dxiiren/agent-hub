@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 // import.meta.url is not set when Paseo bundles the plugin, so resolve the repo config lazily and tolerate its absence
-const localConfigPath = (env) => { if (env.AGENT_HUB_LOCAL) return env.AGENT_HUB_LOCAL; try { return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json"); } catch { return ""; } };
+const localConfigPath = (env) => { if (env.AGENT_HUB_LOCAL) return env.AGENT_HUB_LOCAL; if (env.AGENT_HUB_REPO) return join(env.AGENT_HUB_REPO, "config", "hub.local.json"); try { return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json"); } catch { return ""; } };
 const readJson = (f) => { try { if (!f) return {}; return JSON.parse(readFileSync(f, "utf8").replace(/^﻿/, "")); } catch { return {}; } };
 const nonRo = (s) => s.replace(/-ro$/, "");
 export const paseoHome = (env = process.env) => env.PASEO_HOME ?? join(homedir(), ".paseo");
@@ -26,11 +26,15 @@ export function selfHostedProviders(cfg, local = {}) {
   return out;
 }
 
+/** Display name of the endpoint kinds (the provider record stores the kind id; a custom kind shows its id). */
+const KIND_LABEL = { "qwen-code": "Qwen Code", opencode: "OpenCode" };
 const hostOfUrl = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
 const LOOPBACK = ["127.0.0.1", "localhost", "::1", "[::1]"];
 /** Provider kind label: local config `kinds[name]` wins; else the display label minus its trailing "where it runs" word (the endpoint host, an IP/hostname, or any last word for a loopback endpoint). */
 export function kindOfProvider(name, label, base, local = {}) {
   if (local.kinds?.[name]) return String(local.kinds[name]);
+  const t = local.extraProviders?.[name]?.type; // the provider record's own kind (written by `provider add`): wins over guessing from the label
+  if (t) return KIND_LABEL[t] ?? t;
   const words = label.trim().split(/\s+/);
   const host = hostOfUrl(base), last = words[words.length - 1];
   const where = words.length > 1 && (last === host || /^\d{1,3}(\.\d{1,3}){3}$/.test(last) || /^[\w-]+(\.[\w-]+)+$/.test(last) || LOOPBACK.includes(host));
@@ -105,7 +109,8 @@ export async function selfHostedReport(id, { env = process.env, ttlMs = 60_000, 
   const members = selfHostedProviders(readJson(join(home, "config.json")), local).filter((x) => kindId(x.kind) === id);
   if (!members.length) return { status: "error", error: `provider kind ${id} not configured` };
   const feed = (readFeed ?? (() => { try { return readFileSync(join(env.AGENT_HUB_USAGE_DIR ?? join(home, "usage"), "usage.jsonl"), "utf8"); } catch { return ""; } }))();
-  const items = await Promise.all(members.map(async (pv) => ({ label: pv.label, probe: await probe(pv, { f }), t: tally(feed, pv.name, now()) })));
+  const dup = (l) => members.filter((m) => m.label === l).length > 1; // two lines that would read the same show the provider id too
+  const items = await Promise.all(members.map(async (pv) => ({ label: dup(pv.label) ? `${pv.label} (${pv.name})` : pv.label, probe: await probe(pv, { f }), t: tally(feed, pv.name, now()) })));
   const r = groupReport(items);
   cache.set(id, { r, at: now() });
   return r;

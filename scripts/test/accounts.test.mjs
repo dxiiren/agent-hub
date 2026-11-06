@@ -94,3 +94,18 @@ test('model list: CLI kinds carry the CLI tier/cost text, an account lists its o
   assert.deepEqual(ep.map((x) => x.id), ['q1', 'q2']);
   await assert.rejects(discover('qwen-code', { url: 'http://h.example:8000/v1' }, { f: async () => { throw new Error('ECONNREFUSED'); } }), /endpoint check failed/);
 });
+
+test('display names are unique: a taken label is refused, a taken auto-default gets #2/#3, accounts get their own default', async () => {
+  const { t, p, read } = box();
+  const o = { f: async () => ({ ok: true, json: async () => ({ data: [{ id: 'm' }] }) }), which: () => 'qwen' };
+  const U = 'http://10.1.2.3:8000/v1';
+  await add({ name: 'qwen-a', url: U, model: 'm' }, p, o);
+  await add({ name: 'qwen-b', url: U, model: 'm' }, p, o);
+  await add({ name: 'qwen-c', url: U, model: 'm' }, p, o);
+  const L = () => Object.fromEntries(Object.entries(read('paseo').agents.providers).map(([k, v]) => [k, v.label]));
+  assert.equal(L()['qwen-a'], 'Qwen Code 10.1.2.3'); assert.equal(L()['qwen-b'], 'Qwen Code 10.1.2.3 #2'); assert.equal(L()['qwen-c'], 'Qwen Code 10.1.2.3 #3');
+  await assert.rejects(add({ name: 'qwen-d', url: U, model: 'm', label: 'qwen code 10.1.2.3' }, p, o), /already used by another provider/);
+  await add({ name: 'claude-w', kind: 'claude', account: 'w', accountDir: join(t, 'w'), model: 'm1' }, p, cli(['m1']));
+  await assert.rejects(add({ name: 'claude-w2', kind: 'claude', account: 'w2', accountDir: join(t, 'w2'), model: 'm1', label: 'Claude w' }, p, cli(['m1'])), /already used/);
+  await edit('qwen-b', { slots: '5' }, p, o); assert.equal(L()['qwen-b'], 'Qwen Code 10.1.2.3 #2', 'edit keeps its own name without colliding with itself');
+});
