@@ -9,7 +9,7 @@ const [bin, upstream, fallback] = process.argv.slice(2);
 const key = process.env.HUB_OPENAI_API_KEY;
 const proxy = key ? await startAuthProxy(upstream, key) : null;
 const base = proxy ? proxy.base : upstream;
-const model = await servedModel(base, { fallback });
-const child = spawn(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, '--openai-api-key', 'none', '--model', model],
+const model = await servedModel(base, { fallback, ...(proxy ? { f: (u, o) => fetch(u, { ...o, headers: { ...o?.headers, authorization: `Bearer ${proxy.secret}` } }) } : {}) });
+const child = spawn(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, '--openai-api-key', proxy ? proxy.secret : 'none', '--model', model],
   { stdio: 'inherit', env: scrubKeyEnv(qwenEnv(process.env, readOnly)), shell: /\.(cmd|bat)$/i.test(bin) });
 child.on('exit', (c) => { proxy?.close(); process.exit(c ?? 1); });

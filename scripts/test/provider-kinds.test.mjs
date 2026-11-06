@@ -89,20 +89,32 @@ test('a custom kind from AGENT_HUB_KINDS is offered and builds its launch comman
   const o = JSON.parse(r.stdout); assert.equal(o.has, true); assert.deepEqual(o.cmd, [o.cmd[0], 'run.mjs', URL1, 'm1']); assert.equal(o.ro, false);
 });
 
-test('the endpoint key reaches the upstream only through the launcher proxy and never the agent env', async () => {
-  const { createServer } = await import('node:http');
+test('the key proxy: secret and Host required, path pinned to the upstream base, redirects never followed, real key never leaves', async () => {
+  const { createServer, request } = await import('node:http');
   const { startAuthProxy, scrubKeyEnv } = await import('../../plugins/routing/office.mjs');
-  const seen = []; const up = createServer((req, res) => { seen.push({ url: req.url, auth: req.headers.authorization }); res.setHeader('content-type', 'application/json'); res.end('{"data":[{"id":"m1"}]}'); });
+  const seen = []; const other = []; const evil = createServer((req, res) => { other.push(req.headers.authorization); res.end('evil'); });
+  await new Promise((ok) => evil.listen(0, '127.0.0.1', ok));
+  const up = createServer((req, res) => {
+    seen.push({ url: req.url, auth: req.headers.authorization });
+    if (req.url === '/v1/redirect') { res.writeHead(302, { location: `http://127.0.0.1:${evil.address().port}/steal` }); return res.end(); }
+    res.setHeader('content-type', 'application/json'); res.end('{"data":[{"id":"m1"}]}');
+  });
   await new Promise((ok) => up.listen(0, '127.0.0.1', ok));
   const proxy = await startAuthProxy(`http://127.0.0.1:${up.address().port}/v1`, 'sk-proxy-secret');
+  const port = new URL(proxy.base).port;
+  const raw = (path, headers = {}) => new Promise((ok, no) => { const r = request({ host: '127.0.0.1', port, path, headers: { host: `127.0.0.1:${port}`, ...headers } }, (res) => { let b = ''; res.on('data', (d) => (b += d)); res.on('end', () => ok({ status: res.statusCode, body: b })); }); r.on('error', no); r.end(); });
+  const good = { authorization: `Bearer ${proxy.secret}` };
   try {
-    assert.ok(!proxy.base.includes('sk-proxy-secret'));
-    const r = await fetch(`${proxy.base}/models`); assert.deepEqual(await r.json(), { data: [{ id: 'm1' }] });
+    assert.ok(!proxy.base.includes('sk-proxy-secret') && proxy.secret !== 'sk-proxy-secret');
+    const ok = await raw('/v1/models', good); assert.equal(ok.status, 200); assert.deepEqual(JSON.parse(ok.body), { data: [{ id: 'm1' }] });
     assert.deepEqual(seen, [{ url: '/v1/models', auth: 'Bearer sk-proxy-secret' }]);
-    const bad = await fetch(`${proxy.base}/models`, { headers: { authorization: 'Bearer attacker' } }); await bad.text();
-    assert.equal(seen[1].auth, 'Bearer sk-proxy-secret', 'a caller-supplied Authorization is replaced');
-  } finally { proxy.close(); up.close(); }
-  const env = scrubKeyEnv({ HUB_OPENAI_API_KEY: 'k', OPENAI_API_KEY: 'k', PATH: 'p' }); assert.deepEqual(env, { PATH: 'p' });
+    assert.equal((await raw('/v1/models')).status, 401); assert.equal((await raw('/v1/models', { authorization: 'Bearer nope' })).status, 401);
+    assert.equal((await raw('/v1/models', { ...good, host: 'evil.example' })).status, 403);
+    for (const p of ['//127.0.0.1/v1/models', '//evil.example/x', 'http://evil.example/', '/../etc/passwd', '/v1/../other', '/v2/models']) assert.ok([400].includes((await raw(p, good)).status), p);
+    assert.equal(seen.length, 1, 'nothing forbidden reached the upstream');
+    const red = await raw('/v1/redirect', good); assert.equal(red.status, 302); assert.deepEqual(other, [], 'the redirect target never received the key');
+  } finally { proxy.close(); up.close(); evil.close(); }
+  assert.deepEqual(scrubKeyEnv({ HUB_OPENAI_API_KEY: 'k', OPENAI_API_KEY: 'k', PATH: 'p' }), { PATH: 'p' });
 });
 
 test('a kind without a key field refuses a key (opencode)', async () => {

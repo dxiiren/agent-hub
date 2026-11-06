@@ -60,25 +60,37 @@ export const takeReadOnlyFlag = (argv) => { const i = argv.indexOf("--read-only"
 export const scrubKeyEnv = (env) => { const e = { ...env }; delete e.HUB_OPENAI_API_KEY; delete e.OPENAI_API_KEY; return e; };
 
 /**
- * Local auth proxy: the agent talks to 127.0.0.1:<port>, this launcher adds the Bearer key and forwards to the one upstream origin.
- * The key lives only in this process, never in the agent's env, argv or any file the agent could read. Returns { base, close }.
+ * Local auth proxy: the agent talks to 127.0.0.1:<port> with a random per-launch secret as its "key"; this launcher swaps in the real
+ * Bearer key and forwards to the one upstream origin and base path. The real key lives only in this process. Requests are refused unless
+ * Host is this proxy (DNS rebinding), Authorization is exactly the secret, and the path stays under the upstream base; redirects are never followed.
+ * Returns { base, secret, close }.
  */
 export async function startAuthProxy(upstreamBase, key, f = fetch) {
   const { createServer } = await import("node:http");
+  const { randomBytes } = await import("node:crypto");
   const u = new URL(upstreamBase);
+  const basePath = u.pathname.replace(/\/+$/, "");
+  const secret = randomBytes(24).toString("hex");
+  let port = 0;
+  const deny = (res, code, msg) => { res.writeHead(code, { "content-type": "text/plain" }); res.end(msg); };
   const srv = createServer(async (req, res) => {
     try {
+      if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) return deny(res, 403, "bad host");
+      if (req.headers.authorization !== `Bearer ${secret}`) return deny(res, 401, "bad credentials");
+      if (!req.url.startsWith("/") || req.url.startsWith("//")) return deny(res, 400, "bad path");
+      const t = new URL(req.url, u.origin);
+      if (t.origin !== u.origin || !(t.pathname === basePath || t.pathname.startsWith(basePath + "/"))) return deny(res, 400, "path outside the upstream base");
       const chunks = []; for await (const c of req) chunks.push(c);
       const headers = {}; for (const [k, v] of Object.entries(req.headers)) if (!["host", "authorization", "content-length", "connection"].includes(k)) headers[k] = v;
       headers.authorization = `Bearer ${key}`;
-      const body = chunks.length ? Buffer.concat(chunks) : undefined;
-      const r = await f(u.origin + req.url, { method: req.method, headers, body: ["GET", "HEAD"].includes(req.method) ? undefined : body });
+      const r = await f(t.href, { method: req.method, headers, redirect: "manual", body: ["GET", "HEAD"].includes(req.method) || !chunks.length ? undefined : Buffer.concat(chunks) });
       const out = {}; r.headers.forEach((v, k) => { if (!["content-encoding", "content-length", "transfer-encoding", "connection"].includes(k)) out[k] = v; });
       res.writeHead(r.status, out);
       if (r.body) for await (const c of r.body) res.write(c);
       res.end();
-    } catch (e) { if (!res.headersSent) res.writeHead(502); res.end(String(e?.message ?? e).replace(key, "***")); }
+    } catch (e) { if (!res.headersSent) res.writeHead(502); res.end(String(e?.message ?? e).split(key).join("***")); }
   });
   await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
-  return { base: `http://127.0.0.1:${srv.address().port}${u.pathname.replace(/\/$/, "")}`, close: () => srv.close() };
+  port = srv.address().port;
+  return { base: `http://127.0.0.1:${port}${basePath}`, secret, close: () => srv.close() };
 }
