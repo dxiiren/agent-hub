@@ -11,14 +11,15 @@ import { fileURLToPath } from "node:url";
 const SECRET_KEY = String.raw`(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)\w*['"]? ?`;
 // value: quoted 8+ non-space chars holding a digit or punctuation (the closing quote is not required: a long or unterminated value still matches on its first 8) or 16+ plain chars | unquoted 8+ with a digit/punctuation and no brackets/parens/'=', so `token = tokens[i]`, `password_field = input` and `token = parse_the_user_token` stay clean.
 const PUNCT = String.raw`[\d!@#$%^&*+]`;
-const VAL = String.raw`[^ '"\[\]()<>{},;=]`;
+const VAL = String.raw`[^ '"\[\]()<>{},;=]`; // first value char: not '=' (keeps `token = tokens[i]` out)
+const VAL_REST = String.raw`[^ '"\[\]()<>{},;]`; // later chars may be '=' (base64 padding, `a1=bc...` passwords); the lookahead stays on VAL (no '=') so `k=k=k=...` stays linear
 /**
  * THE secret list (gate diff, file bytes, reply scan all use hasSecret below).
  * Case-insensitive: AKIA, PEM headers, a secret/password key, Bearer, sk- all match in any case.
  * The JWT is anchored on its first dot with a positive lookbehind for the header (a JWT glued to preceding word characters after line-joining still matches, and no start is tried inside a long run).
  */
 export const SECRET_RE = new RegExp(
-  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN[A-Z ]*PRIVATE ?KEY(?: ?BLOCK)?-----|(?<=eyJ[A-Za-z0-9_-]{8,})\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer ?[A-Za-z0-9\-._~+/]{20,}|(?<=` + SECRET_KEY + String.raw`)[:=] ?(?:(?<=secret\w*['"]? ?[:=] ?)['"]?(?=[A-Za-z0-9/+=]{0,39}[\d/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=(])|['"](?=[^'" ]*` + PUNCT + String.raw`)[^'" ]{8,}|['"][A-Za-z0-9_\-\/+]{16,}|['"]?(?=` + VAL + String.raw`*` + PUNCT + String.raw`)` + VAL + String.raw`{8,}))`, "i");
+  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN[A-Z ]*PRIVATE ?KEY(?: ?BLOCK)?-----|(?<=eyJ[A-Za-z0-9_-]{8,})\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer ?[A-Za-z0-9\-._~+/]{20,}|(?<=` + SECRET_KEY + String.raw`)[:=] ?(?:(?<=secret\w*['"]? ?[:=] ?)['"]?(?=[A-Za-z0-9/+=]{0,39}[\d/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=(])|['"](?=[^'" ]*` + PUNCT + String.raw`)[^'" ]{8,}|['"][A-Za-z0-9_\-\/+]{16,}|['"]?(?=` + VAL + String.raw`*` + PUNCT + String.raw`)` + VAL + VAL_REST + String.raw`{7,}))`, "i");
 const LINES = /\r\n|\n|\r/;
 const norm = (l) => l.replace(/\s+/g, " ").trim();
 const WINDOW = 16384, STEP = 8192; // shortcut: a secret longer than STEP (8 KB) split across windows could be missed; none of the listed forms is that long

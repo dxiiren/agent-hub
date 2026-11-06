@@ -15,6 +15,8 @@ const SECRETS = {
   awsSecret: "aws_secret_access_" + "key=" + "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
   pwd: "pass" + "word = " + "\"Sup3r$ecret!Passw0rd#2026\"",
   pwdUnquoted: "DB_PASS" + "WORD=" + "hunter2hunter2hunter2",
+  pwdEqInside: "pass" + "word=" + "a1=bcdefghijk",
+  apiKeyPadded: "api_" + "key=" + "base64abc==XYZ1",
   apiKey: "api_" + "key: " + "abcdefghijklmnopqrstuv9",
   pem: "-----BEGIN " + "RSA PRIVATE KEY" + "-----",
   pgp: "-----BEGIN " + "PGP PRIVATE KEY BLOCK" + "-----",
