@@ -18,3 +18,6 @@ export function writeJsonKeepEol(p, o) {
   try { const old = readFileSync(p, "utf8"); if (old.includes(CRLF)) t = t.split(LF).join(CRLF); if (old.startsWith(BOM)) t = BOM + t; } catch { /* new file: LF, no BOM */ }
   writeFileSync(p, t);
 }
+
+/** o[k] only when k is an OWN key (never Object.prototype's constructor, toString, hasOwnProperty, __proto__ ...); config objects are indexed by user-chosen names. */
+export const own = (o, k) => (o != null && typeof o === "object" && Object.hasOwn(o, k) ? o[k] : undefined);

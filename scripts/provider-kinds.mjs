@@ -1,10 +1,10 @@
 // The provider kinds `agent-hub provider add/edit` and the Paseo Settings screen offer. ONE schema: the CLI validates with it, the UI draws its form from it.
 // Add a kind = add an entry here (fields, how to list its models, how its Paseo entry is built). Nothing personal or company-specific lives in this file.
-import { spawnSync } from 'node:child_process';
+import { spawnSyncSafe } from '../plugins/routing/spawn-safe.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { modelsUrl } from '../plugins/routing/office.mjs';
+import { modelsUrl, safeUrl } from '../plugins/routing/office.mjs';
 
 const KEY_ENV = 'HUB_OPENAI_API_KEY'; // read by deploy/office/office-agent.mjs, which keeps it in a local auth proxy and strips it from the agent's env; never argv
 const ENDPOINT_FIELDS = [
@@ -59,6 +59,7 @@ export const KINDS = {
 //   launch = the ACP agent command ({node} {repo} {url} {model} are substituted; the key arrives in env HUB_OPENAI_API_KEY),
 //   or "base": "<installed provider id>" to only add route tokens "<base>/<model>" (modelsFrom "cli" then lists `paseo provider models <base>`).
 function loadCustom() {
+  if (process.env.AGENT_HUB_NO_LOCAL === '1' && !process.env.AGENT_HUB_KINDS) return;
   const f = process.env.AGENT_HUB_KINDS || join(dirname(fileURLToPath(import.meta.url)), '..', 'config', 'provider-kinds.local.json');
   let j; try { j = JSON.parse(readFileSync(f, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') console.error(`provider-kinds: ${f} ignored (${e.message})`); return; }
   for (const [id, c] of Object.entries(j)) {
@@ -69,7 +70,7 @@ function loadCustom() {
       nameRe: new RegExp(`^${id}-[a-z0-9]+(-[a-z0-9]+)*$`), nameHelp: `must start with "${id}-"` };
   }
 }
-export const RESERVED = new Set(['qoder', 'codex', 'claude', 'claude-clean', 'opencode']);
+export const RESERVED = new Set(['qoder', 'codex', 'claude', 'claude-clean', 'opencode', 'constructor', 'prototype', '__proto__']); // the last three are Object.prototype keys
 
 export function kindOf(t = 'qwen-code') {
   const type = Object.keys(KINDS).find((k) => k === t || KINDS[k].aliases?.includes(t));
@@ -84,7 +85,7 @@ export async function discover(type, { url, key, provider } = {}, { f = fetch, r
   const k = kindOf(type);
   if (k.modelsFrom === 'none') return []; // the user names the model (local-llama)
   if (k.modelsFrom === 'endpoint') {
-    if (!/^https?:\/\/[^\s"]+$/.test(url || '')) throw new Error('url must be an http(s) base URL');
+    url = safeUrl(url); if (!url) throw new Error('url must be a plain http(s) base URL (no credentials, query or special characters)');
     let body;
     try { const r = await f(modelsUrl(url), { signal: AbortSignal.timeout(8000), headers: key ? { Authorization: `Bearer ${key}` } : {} }); if (!r.ok) throw new Error(`HTTP ${r.status}`); body = await r.json(); }
     catch (e) { throw new Error(`endpoint check failed: GET ${modelsUrl(url)} -> ${e.message}`); }
@@ -99,7 +100,7 @@ export async function discover(type, { url, key, provider } = {}, { f = fetch, r
   if (!Array.isArray(l) || !l.length) throw new Error(`${k.base} model list failed: \`paseo provider models ${k.base}\` listed nothing. Fix: install ${k.label.split(' ')[0]}, sign in (for an extra account run its login command once), and make sure the daemon is running (\`just up\`).`);
   return l.map((m) => ({ id: m.id, label: m.model || m.id, ...(m.description ? { hint: m.description } : {}) }));
 }
-function defaultRun(cmd, args) { return spawnSync(cmd, args, { encoding: 'utf8', shell: process.platform === 'win32', timeout: 60000 }); }
+function defaultRun(cmd, args) { return spawnSyncSafe(cmd, args, { encoding: 'utf8', timeout: 60000 }); }
 
 /** True when `model` is one the kind lists (id or display name, case-insensitive) or a latest-alias the router resolves. */
 export const modelListed = (model, models) => /^latest(-|$)/.test(model) || models.some((m) => [m.id, m.label].some((x) => String(x).toLowerCase() === String(model).replace(/@latest$/, '').toLowerCase() || x === model));

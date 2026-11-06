@@ -18,8 +18,8 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrate } from './provider.mjs';
+import { spawnSyncSafe } from '../plugins/routing/spawn-safe.mjs';
 
-process.noDeprecation = true; // shell:true is needed only to run .cmd shims; our args are fixed
 const WIN = process.platform === 'win32';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = resolve(process.env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
@@ -30,14 +30,11 @@ const SECRET_FILE = join(HOME, 'agent-hub-secret');
 const HUB_DIR = join(HOME, 'hub');
 const NAME = 'agent-hub';
 
-const local = (() => { try { return readJsonStrict(join(REPO, 'config', 'hub.local.json'), {}); } catch { return {}; } })(); // read-only here
+const local = (() => { if (process.env.AGENT_HUB_NO_LOCAL === '1') return {}; try { return readJsonStrict(join(REPO, 'config', 'hub.local.json'), {}); } catch { return {}; } })(); // read-only here
 const opt = (env, key) => process.env[env] || local[key] || '';
 
-// A .cmd shim must go through cmd.exe, which re-splits arguments: quote every argument that has a space or a shell character.
-const q = (a) => (/[\s"&|<>^%]/.test(a) ? '"' + String(a).split('"').join('""') + '"' : String(a));
-const run = (cmd, args, o = {}) => (WIN && /[.](cmd|bat)$/i.test(cmd)
-  ? spawnSync([q(cmd), ...args.map(q)].join(' '), { encoding: 'utf8', ...o, shell: true })
-  : spawnSync(cmd, args, { encoding: 'utf8', shell: false, ...o }));
+// A .cmd shim is resolved to `node <entry>` and run without a shell (plugins/routing/spawn-safe.mjs); a shim that cannot be resolved is refused.
+const run = (cmd, args, o = {}) => spawnSyncSafe(cmd, args, { encoding: 'utf8', ...o });
 const out = (r) => `${r.stdout || ''}${r.stderr || ''}`.trim();
 const ok = (m) => console.log(`[OK] ${m}`);
 const skip = (m) => console.log(`[SKIP] ${m}`);
@@ -73,7 +70,7 @@ function secret() {
 }
 
 function bcrypt() {
-  const g = run('npm', ['root', '-g'], { shell: WIN }).stdout?.trim();
+  const g = run('npm', ['root', '-g']).stdout?.trim();
   for (const p of [g && join(g, '@getpaseo', 'cli', 'node_modules', 'bcryptjs'), g && join(g, 'bcryptjs'), 'bcryptjs']) {
     try { return createRequire(import.meta.url)(p); } catch { /* try next */ }
   }
@@ -147,7 +144,7 @@ function mcp(action) {
 }
 
 // ---------- doctor
-const paseo = (args, o = {}) => run(WIN ? 'paseo.cmd' : 'paseo', ['--home', HOME, ...args], { shell: WIN, timeout: args[0] === 'logs' ? 30_000 : 300_000, killSignal: 'SIGKILL', ...o }); // bounded: the deep run's own wait is 240 s
+const paseo = (args, o = {}) => run('paseo', ['--home', HOME, ...args], { timeout: args[0] === 'logs' ? 30_000 : 300_000, killSignal: 'SIGKILL', ...o }); // bounded: the deep run's own wait is 240 s
 let fails = 0;
 const row = (good, label, detail = '') => { console.log(`${good ? 'PASS' : 'FAIL'}  ${label}${detail ? '  ' + detail : ''}`); if (!good) fails++; };
 async function http(path, headers = {}, body) {
@@ -213,7 +210,7 @@ async function doctor(deep) {
   }
   try { // latest aliases: show what they resolve to now, warn on a pinned older model
     const { resolveCached, stalePins } = await import('../plugins/routing/resolve.mjs');
-    const rt = JSON.parse(readFileSync(join(REPO, 'config', 'routes', existsSync(join(REPO, 'config', 'routes', 'routes.local.json')) ? 'routes.local.json' : 'routes.template.json'), 'utf8'));
+    const rt = JSON.parse(readFileSync(join(REPO, 'config', 'routes', process.env.AGENT_HUB_NO_LOCAL !== '1' && existsSync(join(REPO, 'config', 'routes', 'routes.local.json')) ? 'routes.local.json' : 'routes.template.json'), 'utf8'));
     const lp = (a) => { const j = JSON.parse(paseo(['--json', ...a]).stdout || '[]'); return j; };
     const aliases = [...new Set(Object.values(rt.routes || {}).flat())].filter((e) => /\/(latest|.*@latest)/.test(e));
     for (const a of aliases) { try { console.log(`INFO  ${a} -> ${resolveCached(a, (x) => lp(x))}`); } catch (e) { console.log(`WARN  ${a} does not resolve: ${e.message}`); } }

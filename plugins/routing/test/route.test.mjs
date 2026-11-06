@@ -596,9 +596,9 @@ test("--provider qoder/efficient on a read-only type is refused fast, nothing is
   assert.ok(!p.calls.some((c) => c[0] === "run"));
   assert.ok(readOnlyEnforced("qwen-laptop") && readOnlyEnforced("claude-clean") && !readOnlyEnforced("qoder") && !readOnlyEnforced("claude"));
 });
-test("no read-only chain in routes.template.json / routes.local.json holds an unenforced provider", () => {
+test("no read-only chain in routes.template.json holds an unenforced provider", () => {
   const dir = fupR5(new URL("../../../config/routes/", import.meta.url));
-  for (const f of ["routes.template.json", "routes.local.json"]) {
+  for (const f of ["routes.template.json"]) { // the shipped file only: a developer's routes.local.json is theirs, tests never read it
     const fp = dir + f; if (!exR5(fp)) continue;
     const r = JSON.parse(rfsR5(fp, "utf8"));
     for (const t of r.readOnlyTypes ?? ["summarise", "review"]) for (const e of r.routes[t] ?? []) {

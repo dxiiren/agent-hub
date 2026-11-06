@@ -10,9 +10,9 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { safeId } from '../plugins/routing/office.mjs';
+import { safeId, safeUrl } from '../plugins/routing/office.mjs';
 import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
-import { writeJsonKeepEol, readJsonStrict } from '../plugins/routing/jsonfile.mjs';
+import { writeJsonKeepEol, readJsonStrict, own } from '../plugins/routing/jsonfile.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const NAME_RE = KINDS['qwen-code'].nameRe; // any lower-case id
@@ -41,7 +41,7 @@ export function paths(env = process.env) {
   const home = resolve(env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
   const routesDir = join(REPO, 'config', 'routes');
   return { local: env.AGENT_HUB_LOCAL || join(REPO, 'config', 'hub.local.json'), paseo: join(home, 'config.json'),
-    routes: env.AGENT_HUB_ROUTES || (existsSync(join(routesDir, 'routes.local.json')) ? join(routesDir, 'routes.local.json') : join(routesDir, 'routes.template.json')) };
+    routes: env.AGENT_HUB_ROUTES || (env.AGENT_HUB_NO_LOCAL !== '1' && existsSync(join(routesDir, 'routes.local.json')) ? join(routesDir, 'routes.local.json') : join(routesDir, 'routes.template.json')) };
 }
 const rd = readJsonStrict; // BOM-safe; missing file = default; unparsable = throws, so add/remove never overwrite a config they could not read
 const wr = writeJsonKeepEol; // keeps the file's own line endings
@@ -108,7 +108,8 @@ async function verifyKind(k, { url, model, key, bin, modelFile }, { f = fetch, r
 export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run, preOverride, skipVerify } = {}) {
   if (!preOverride) reconcile(p);
   const k = kindOf(a.kind ?? a.type); const type = k.type; const { model } = a;
-  const lc = k.local ? localSpec(a) : undefined; const url = k.local ? `http://127.0.0.1:${lc.port}/v1` : a.url;
+  const lc = k.local ? localSpec(a) : undefined; let url = k.local ? `http://127.0.0.1:${lc.port}/v1` : a.url;
+  if (k.own) { url = safeUrl(url); if (!url) throw new Error('--url must be a plain http(s) base URL (host, optional port and path; no credentials, query or special characters)'); }
   let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
   if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
   const readOnly = !(a.readOnly === false || a.readOnly === 'false' || a.readOnly === 'off');
@@ -122,17 +123,16 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   } else if (a.accountDir) throw new Error('--account-dir needs --account');
   if (!k.nameRe.test(name || '') || name.endsWith('-ro') || RESERVED.has(name)) throw new Error(`name must match ${k.nameRe} (${k.nameHelp}; not ending -ro, not one of ${[...RESERVED]})`);
   if (k.own) {
-    if (!/^https?:\/\/[^\s"]+$/.test(url || '')) throw new Error('--url must be an http(s) base URL');
     if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');
   }
   if (key && !k.fields.some((x) => x.id === 'key')) throw new Error(`kind ${type} takes no API key (an agent of that kind could read it)`);
-  if (label && !/^[^ -"]{1,80}$/.test(label)) throw new Error('--label must be 1-80 printable characters without quotes');
+  if (label && !/^[^\x00-\x1f"]{1,80}$/.test(label)) throw new Error('--label must be 1-80 printable characters without quotes');
   if (!safeId(model)) throw new Error('--model must be a plain model id');
   const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
   const local = rd(p.local, {}); const first = !Object.keys(local.extraProviders || {}).length;
-  if (local.extraProviders?.[name]) throw new Error(`${name} already exists (remove it first, or use edit)`);
+  if (own(local.extraProviders, name)) throw new Error(`${name} already exists (remove it first, or use edit)`);
   const cfg = rd(p.paseo, { version: 1 });
-  if ((k.own || account) && cfg.agents?.providers?.[name]) throw new Error(`${name} is already a provider in the Paseo config (not added by this tool)`);
+  if ((k.own || account) && own(cfg.agents?.providers, name)) throw new Error(`${name} is already a provider in the Paseo config (not added by this tool)`);
   if (!skipVerify) await verifyKind(k, { url, model, key, ...lc }, { f, run });
   const bin = type === 'qwen-code' || k.local ? which('qwen') : null; if ((type === 'qwen-code' || k.local) && !bin) throw new Error('qwen CLI not found on PATH');
   const routes = rd(p.routes, null); if (!routes) throw new Error(`routes file unreadable: ${p.routes}`);
@@ -141,7 +141,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   const spec = { type, ...(k.own ? { url } : {}), model, ...lc, ...(account ? { account, accountDir } : {}), ...(label && (k.own || account) ? { label } : {}), ...(key ? { key } : {}), ...(k.twin && !readOnly ? { readOnly: false } : {}) };
   const token = chainToken(name, spec);
   for (const { c } of chains) {
-    if (!Array.isArray(routes.routes?.[c])) throw new Error(`unknown route type ${c} (known: ${Object.keys(routes.routes || {})})`);
+    if (!Array.isArray(own(routes.routes, c))) throw new Error(`unknown route type ${c} (known: ${Object.keys(routes.routes || {})})`);
     if (routes.routes[c].includes(token)) throw new Error(`route ${c} already lists ${token}`);
   }
   const hubDir = hubDirOf(p.paseo);
@@ -169,8 +169,12 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   return { name, kind: type, slots: ownish(k, spec) ? slots : undefined, routes: chains.map((x) => x.c), needsRestart: ownish(k, spec), ...(account ? { account, accountDir, login: loginCommand(k, accountDir) } : {}) };
 }
 
+/** The routes file as it was before the first added provider (from the undo base), or null. */
+function baseRoutes(p) {
+  try { const b = JSON.parse(readFileSync(basePath(p), 'utf8')).routes; return b ? JSON.parse(Buffer.from(b, 'base64').toString('utf8').replace(/^\uFEFF/, '')) : null; } catch { return null; }
+}
 function removeManual(name, p, local = rd(p.local, {})) {
-  const spec = local.extraProviders[name]; const k = kindOf(spec.type); const token = chainToken(name, spec);
+  const spec = own(local.extraProviders, name); const k = kindOf(spec.type); const token = chainToken(name, spec);
   delete local.extraProviders[name]; if (!Object.keys(local.extraProviders).length) delete local.extraProviders;
   const routes = rd(p.routes, {});
   delete routes.slots?.[name]; delete routes.modes?.[name]; delete routes.readOnlyModes?.[name];
@@ -178,6 +182,7 @@ function removeManual(name, p, local = rd(p.local, {})) {
   // add() materialised the built-in defaults and an empty readOnlyModes: drop what is back to its default so the file returns to its pre-add form
   if (routes.readOnlyEnforced && routes.readOnlyEnforced.length === READ_ONLY_ENFORCED.length && READ_ONLY_ENFORCED.every((x) => routes.readOnlyEnforced.includes(x))) delete routes.readOnlyEnforced;
   if (routes.readOnlyModes && !Object.keys(routes.readOnlyModes).length) delete routes.readOnlyModes;
+  const orig = baseRoutes(p) ?? {}; for (const key of ['slots', 'modes']) if (routes[key] && !Object.keys(routes[key]).length && !(key in orig)) delete routes[key]; // add() created the container
   if (routes.twins) { routes.twins = routes.twins.filter((x) => x !== name); if (!routes.twins.length) delete routes.twins; }
   for (const c of Object.keys(routes.routes || {})) routes.routes[c] = routes.routes[c].filter((x) => (ownish(k, spec) ? x.split('/')[0] !== name : x !== token));
   const cfg = rd(p.paseo, {});
@@ -202,15 +207,15 @@ function restoreBase(p) {
 }
 export function remove(name, p = paths(), { purge } = {}) {
   const local = rd(p.local, {});
-  if (!local.extraProviders?.[name]) throw new Error(`${name} is not an added provider (list: ${Object.keys(local.extraProviders || {}).join(', ') || 'none'})`);
-  const spec = local.extraProviders[name];
+  if (!own(local.extraProviders, name)) throw new Error(`${name} is not an added provider (list: ${Object.keys(local.extraProviders || {}).join(', ') || 'none'})`);
+  const spec = own(local.extraProviders, name);
   if (purge && spec.accountDir && spec.accountDir.split(/[\\/]/).filter(Boolean).length >= 3) { try { rmSync(spec.accountDir, { recursive: true, force: true }); } catch { /* best effort */ } } // the account's login lives there; only with --purge
   if (restoreSnapshot(name, p)) { if (spec.type === 'opencode') rmSync(join(hubDirOf(p.paseo), `opencode-${name}.json`), { force: true }); if (!Object.keys(rd(p.local, {}).extraProviders || {}).length) rmSync(basePath(p), { force: true }); return; } // untouched since add: byte-identical to before
   removeManual(name, p, local);
 }
 /** Change slots, model, url, key, routes (with positions) or the read-only twin of an added provider. Kind and name are fixed. Undo still returns to the state before the ORIGINAL add. */
 export async function edit(name, ch, p = paths(), o = {}) {
-  const local = rd(p.local, {}); const spec = local.extraProviders?.[name];
+  const local = rd(p.local, {}); const spec = own(local.extraProviders, name);
   if (!spec) throw new Error(`${name} is not an added provider`);
   const cur = list(p).find((x) => x.name === name); const token = chainToken(name, spec);
   const routes = rd(p.routes, {});
@@ -267,7 +272,7 @@ function migrateQwen(p, { undo } = {}) {
   const twins = Object.keys(prov).filter((id) => id.endsWith('-ro') && prov[id.slice(0, -3)]);
   const spec = (id, e) => {
     const c = e.command ?? []; const i = c.findIndex((x) => /office-agent[.]mjs$/.test(String(x)));
-    if (i >= 0 && c[i + 2] && safeId(c[i + 3])) return { type: 'qwen-code', url: c[i + 2], model: c[i + 3], ...(e.label ? { label: e.label } : {}) };
+    if (i >= 0 && safeUrl(c[i + 2]) && safeId(c[i + 3])) return { type: 'qwen-code', url: safeUrl(c[i + 2]), model: c[i + 3], ...(e.label ? { label: e.label } : {}) };
     if (c.some((x) => /laptop-agent[.]mjs$/.test(String(x)))) return { type: 'qwen-code', url: `http://127.0.0.1:${e.env?.LAPTOP_PORT || '8089'}/v1`, model: e.env?.LAPTOP_ALIAS || 'qwen35-9b', ...(e.label ? { label: e.label } : {}) };
     return null;
   };
@@ -339,9 +344,9 @@ export function migrate(p = paths(), { undo, env } = {}) {
 export const list = (p = paths()) => {
   reconcile(p);
   const routes = rd(p.routes, {});
-  return Object.entries(rd(p.local, {}).extraProviders || {}).map(([name, s]) => { const { key, ...rest } = s; const own = ownish(kindOf(s.type), s); const token = chainToken(name, s);
-    return { name, ...rest, ...(key ? { keySet: true } : {}), slots: routes.slots?.[name],
-      routes: Object.entries(routes.routes || {}).filter(([, v]) => v.some((x) => (own ? x.split('/')[0] === name : x === token))).map(([c]) => c) }; });
+  return Object.entries(rd(p.local, {}).extraProviders || {}).map(([name, s]) => { const { key, ...rest } = s; const isOwn = ownish(kindOf(s.type), s); const token = chainToken(name, s);
+    return { name, ...rest, ...(key ? { keySet: true } : {}), slots: own(routes.slots, name),
+      routes: Object.entries(routes.routes || {}).filter(([, v]) => v.some((x) => (isOwn ? x.split('/')[0] === name : x === token))).map(([c]) => c) }; });
 };
 
 /** What the Settings screen needs to draw its form: kinds with fields, the route types and the current providers. */

@@ -42,7 +42,7 @@ PATTERNS: list[tuple[str, str, bool]] = [
     (r"xox[baprs]-[0-9A-Za-z\-]{10,}", "Slack token", False),
     (r"\b[0-9]{8,10}:[A-Za-z0-9_\-]{35}\b", "Telegram bot token", False),
     (r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----", "private key", False),
-    (r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", "JWT", False),
+    (r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", "JWT", False),
     (
         r"(?i)(?:mysql|postgres(?:ql)?|mongodb)://[^\s'\")]+:[^\s'\")]+@",
         "DB URL with password",

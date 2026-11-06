@@ -74,7 +74,7 @@ export function resolveEntry(entry, paseo, env = process.env) {
   return `qoder/${hit.id}`;
 }
 
-const localCfg = () => { try { return JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "config", "hub.local.json"), "utf8")); } catch { return {}; } };
+const localCfg = () => { if (process.env.AGENT_HUB_NO_LOCAL === "1") return {}; try { return JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "config", "hub.local.json"), "utf8")); } catch { return {}; } };
 
 /** Cached resolve: a failure (provider list down) falls back to the last cached value, else the alias fails the entry. */
 export function resolveCached(entry, paseo, env = process.env, now = Date.now()) {

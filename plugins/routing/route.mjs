@@ -14,6 +14,7 @@ import { runGate, gateOpts, EMPTY_TREE, hasSecret } from "../gate/server/gate.mj
 import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
 import { batchAllowed } from "./readguard.mjs";
+import { own } from "./jsonfile.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -31,7 +32,7 @@ export function paseoCommand(env = process.env) {
 
 export function loadRoutes(env = process.env) {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "routes");
-  for (const p of [env.AGENT_HUB_ROUTES, join(root, "routes.local.json"), join(root, "routes.template.json")])
+  for (const p of [env.AGENT_HUB_ROUTES, env.AGENT_HUB_NO_LOCAL === "1" ? null : join(root, "routes.local.json"), join(root, "routes.template.json")]) // AGENT_HUB_NO_LOCAL=1 (tests): never the developer's own file
     if (p && existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
   throw new Error("no routing file (set AGENT_HUB_ROUTES)");
 }
@@ -98,10 +99,10 @@ export const readOnlyEnforced = (prov, routes = {}) => (routes.readOnlyEnforced 
 const SAFE_MODES = { claude: ["plan"], "claude-clean": ["plan"], opencode: ["plan"], qoder: ["dontAsk"], copilot: [READ_ONLY_MODES.copilot] };
 /** The one read-only mode a read-only task may use on `prov`, or undefined (= refuse). Qwen-style providers (the hub's ACP proxy launcher: the three built-in ids and every user-added one) always get "read-only", whatever readOnlyModes says; a user-added id whose recorded mode is not "read-only" (stale "plan") is refused until `provider migrate` fixes it. */
 export const readOnlyMode = (prov, routes = {}) => {
-  if (READ_ONLY_MODES[prov] === "read-only") return "read-only";
-  const safe = SAFE_MODES[prov];
-  if (safe) { const m = routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov]; return safe.includes(m) ? m : undefined; }
-  return routes.readOnlyModes?.[prov] === "read-only" ? "read-only" : undefined; // unknown kind: only the proxy's own mode counts
+  if (own(READ_ONLY_MODES, prov) === "read-only") return "read-only";
+  const safe = own(SAFE_MODES, prov);
+  if (safe) { const m = own(routes.readOnlyModes, prov) ?? own(READ_ONLY_MODES, prov); return safe.includes(m) ? m : undefined; }
+  return own(routes.readOnlyModes, prov) === "read-only" ? "read-only" : undefined; // unknown kind: only the proxy's own mode counts
 };
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
 export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
@@ -306,7 +307,7 @@ export function inputError(o) {
  */
 export function runRoute(o, paseo, routes, gate = runGate) {
   const bad = inputError(o); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
-  const chain = o.provider ? [o.provider] : routes.routes?.[o.type];
+  const chain = o.provider ? [o.provider] : own(routes.routes, o.type);
   if (!chain) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   if (!chain.length) return { used: null, trace: [{ error: `no provider configured for ${o.type}: add one in Settings > Providers` }] };
   const slots = routes.slots ?? {};
@@ -345,7 +346,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (installed && !installed.has(base(prov))) { trace.push({ provider: prov, skip: "provider not configured: add it in Settings > Providers" }); continue; }
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
-    if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
+    if (busy >= (own(slots, base(prov)) ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${own(slots, base(prov))}` }); continue; }
     // RAM admission (09:10-09:14 hang: 15 tasks, <1 GB free): wait with backoff for free RAM before creating an agent; give up on this entry at waitTimeout. Only when the caller passes freeMem (main() does; unit tests that do not, never read the real machine).
     if (o.freeMem) {
       const floor = routes.minFreeRamGbByProvider?.[base(prov)] ?? routes.minFreeRamGb ?? 2;
@@ -361,7 +362,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
     if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "provider has no verified read-only mode (read-only task types never run on it; for a Qwen provider run `agent-hub provider migrate`)" }); continue; }
     if (ro && !readOnlyEnforced(base(prov), routes)) { trace.push({ provider: prov, skip: "no enforced sensitive-read guard for this provider (read-only task types never run on it)" }); continue; }
-    const mode = ro ? readOnlyMode(base(prov), routes) : o.mode ?? routes.modes?.[base(prov)] ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
+    const mode = ro ? readOnlyMode(base(prov), routes) : o.mode ?? own(routes.modes, base(prov)) ?? routes.mode; // per-provider default: codex full-access, claude bypassPermissions ...
     if (o.worktree) {
       // The task's start commit and gate request must exist BEFORE the agent can act, and must not come from state the agent can write at turn end. So the route creates the worktree itself, from the pinned base commit, and registers the request under its path before `run`: the hook finds it by the agent's cwd. No request = the hook fails closed.
       if (!o.base) o.base = headSha(o.cwd);

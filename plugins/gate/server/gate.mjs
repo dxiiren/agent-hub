@@ -86,7 +86,7 @@ export function rx(src) {
 export function loadRoutes(env = process.env) {
   let root = null;
   try { root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "routes"); } catch { /* bundled: env only */ }
-  for (const p of [env.AGENT_HUB_ROUTES, root && join(root, "routes.local.json"), root && join(root, "routes.template.json")]) {
+  for (const p of [env.AGENT_HUB_ROUTES, root && !(env.AGENT_HUB_NO_LOCAL === "1") && join(root, "routes.local.json"), root && join(root, "routes.template.json")]) {
     if (p && existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
   }
   return {};

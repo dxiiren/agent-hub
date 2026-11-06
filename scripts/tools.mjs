@@ -1,5 +1,5 @@
 // CLI inventory for `just doctor` (installed vs latest published, read only) and `just update`. Never runs in the background.
-import { spawnSync } from 'node:child_process';
+import { spawnSyncSafe } from '../plugins/routing/spawn-safe.mjs';
 
 // update: argv run by `just update`. Paseo is excluded unless --paseo (decision 38: the fork is rebased per release).
 export const TOOLS = [
@@ -27,7 +27,7 @@ export const verdict = (installed, latest) => {
 };
 
 const WIN = process.platform === 'win32';
-const sh = (cmd, args) => spawnSync(WIN ? 'cmd.exe' : cmd, WIN ? ['/c', cmd, ...args] : args, { encoding: 'utf8', timeout: 30000 });
+const sh = (cmd, args) => spawnSyncSafe(cmd, args, { encoding: 'utf8', timeout: 30000 }); // a Windows .cmd shim runs as node <entry>, no shell
 export function inventory(tools = TOOLS) {
   return tools.map((t) => {
     const installed = parseVersion(sh(t.bin, ['--version']).stdout);

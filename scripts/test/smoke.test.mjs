@@ -18,9 +18,9 @@ const BAD = /ReferenceError|SyntaxError|TypeError|Cannot find module|ERR_MODULE_
 const f = (p) => join(ROOT, ...p.split('/'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** A `qwen` stand-in the launchers can spawn (a .cmd on Windows, an executable shell script elsewhere). */
+/** A `qwen` stand-in the launchers can spawn (an npm-style .cmd shim on Windows, which the launchers run as node <entry> without a shell; an executable shell script elsewhere). */
 function fakeBin(dir, name = 'qwen') {
-  if (WIN) { const p = join(dir, name + '.cmd'); writeFileSync(p, `@node "${FAKE}" %*\r\n`); return p; }
+  if (WIN) { const p = join(dir, name + '.cmd'); writeFileSync(p, `@ECHO off\r\n"%_prog%" "%dp0%\\${FAKE}" %*\r\n`); return p; }
   const p = join(dir, name); writeFileSync(p, `#!/bin/sh\nexec node "${FAKE}" "$@"\n`, { mode: 0o755 }); return p;
 }
 /** Fake llama-server: /health and /v1/models on a free port. */

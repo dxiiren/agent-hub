@@ -2,7 +2,7 @@
 Prints Prometheus text (default) or JSON (--json). Use the same XDG dirs the OpenCode provider runs with
 (env AGENT_HUB_OC_XDG_CONFIG / _DATA / _CACHE). `opencode export` is slow: cache the output if you serve it to a scraper.
 Usage: opencode_export.py [--json] [--dev NAME]"""
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 
 
 def totals(sessions):
@@ -26,7 +26,13 @@ def prom(tot, dev):
                    for (p, m), a in sorted(tot.items()) for ty, v in a.items())
 
 
+SAFE_ARG = re.compile(r"^[A-Za-z0-9_.:/@=,+-]+$")  # shell=True is only for the Windows .cmd shim: no argument may carry a cmd.exe metacharacter
+
+
 def oc(*args):
+    for a in args:
+        if not SAFE_ARG.match(str(a)):
+            raise ValueError("unsafe opencode argument refused")
     env = dict(os.environ)
     for src, dst in (("AGENT_HUB_OC_XDG_CONFIG", "XDG_CONFIG_HOME"), ("AGENT_HUB_OC_XDG_DATA", "XDG_DATA_HOME"), ("AGENT_HUB_OC_XDG_CACHE", "XDG_CACHE_HOME")):
         if os.environ.get(src):

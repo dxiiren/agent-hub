@@ -3,7 +3,7 @@
 // caller's whole one. An agent can run `env`; tokens, API keys and passwords in the shell that started the hub must not be in it.
 // Agent CLIs keep their own logins in their config dirs (~/.codex, ~/.claude, qodercli login ...), which need no environment variable.
 // Usage: node scripts/daemon-env.mjs <paseo-binary> <paseo args...>     Extras: AGENT_HUB_ENV_ALLOW (comma list) or "daemonEnvAllow" in config/hub.local.json.
-import { spawn } from "node:child_process";
+import { spawnSafe } from "./../plugins/routing/spawn-safe.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -51,7 +51,7 @@ export function buildDaemonEnv(env, extras = []) {
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 export function localExtras(env = process.env) {
   let cfg = [];
-  try { cfg = JSON.parse(readFileSync(join(REPO, "config", "hub.local.json"), "utf8")).daemonEnvAllow ?? []; } catch { /* no local config */ }
+  if (env.AGENT_HUB_NO_LOCAL !== "1") try { cfg = JSON.parse(readFileSync(join(REPO, "config", "hub.local.json"), "utf8")).daemonEnvAllow ?? []; } catch { /* no local config */ }
   return [...parseExtras(cfg), ...parseExtras(env.AGENT_HUB_ENV_ALLOW)];
 }
 
@@ -59,10 +59,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const [bin, ...args] = process.argv.slice(2);
   if (!bin) { console.error("usage: daemon-env.mjs <paseo-binary> <args...>"); process.exit(2); }
   const env = buildDaemonEnv(process.env, localExtras());
-  const q = (s) => `"${s}"`; // .cmd shims on Windows need a shell; every part is quoted
-  const child = process.platform === "win32" && /\.(cmd|bat)$/i.test(bin)
-    ? spawn(`${q(bin)} ${args.map(q).join(" ")}`, { env, stdio: "inherit", shell: true })
-    : spawn(bin, args, { env, stdio: "inherit" });
+  let child; try { child = spawnSafe(bin, args, { env, stdio: "inherit" }); } catch (e) { console.error(`[FAIL] ${e.message}`); process.exit(1); } // .cmd shims run as node <entry>, never through a shell
   child.on("exit", (c, s) => process.exit(c ?? (s ? 1 : 0)));
   child.on("error", (e) => { console.error(`[FAIL] ${e.message}`); process.exit(1); });
 }

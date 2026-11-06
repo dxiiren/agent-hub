@@ -6,11 +6,12 @@
 //      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b), LAPTOP_DEVICE (CUDA0; a non-CUDA device skips the NVIDIA guard), LAPTOP_IDLE_MIN (15, read by the reaper).
 // Normally started by a provider of kind `local-llama` (scripts/provider-kinds.mjs), which sets this env.
 import { spawn } from 'node:child_process';
+import { spawnSafe } from '../../plugins/routing/spawn-safe.mjs';
 import { closeSync, existsSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { freemem, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
-import { firstId, qwenEnv, takeReadOnlyFlag } from '../../plugins/routing/office.mjs';
+import { firstId, qwenEnv, takeReadOnlyFlag, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
 import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal } from './gpu-guard.mjs';
 
@@ -78,8 +79,7 @@ async function ensureServer() {
 // Use the model id llama-server actually serves (GET /v1/models) when it is already up; else the alias it will be started with.
 let model = ALIAS;
 if (await up()) { try { model = await checkServed(); } catch (e) { refuse(e.message); } }
-const win = /\.(cmd|bat)$/i.test(E.QWEN_BIN);
-const spawnQwen = (ro) => spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], env: qwenEnv(E, ro), shell: win });
+const spawnQwen = (ro) => spawnSafe(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], env: scrubKeyEnv(qwenEnv(E, ro)) });
 // ACP proxy (offers the mode "read-only", restarts qwen with the deny settings when it is chosen); the model server starts only when the first prompt arrives.
 const refuseOn = (e) => { process.stderr.write('LAPTOP-REFUSED: ' + e.message + String.fromCharCode(10)); proxy.kill(); process.exit(3); };
 const proxy = modeProxy({ spawnAgent: spawnQwen, initialReadOnly: READ_ONLY,

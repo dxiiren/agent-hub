@@ -11,7 +11,7 @@ import { existsSync, readFileSync, writeFileSync, copyFileSync, rmSync } from 'n
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncSafe } from '../plugins/routing/spawn-safe.mjs';
 import { catalogEntries } from './catalog-entries.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,7 +21,7 @@ const sha = (b) => createHash('sha256').update(b).digest('hex');
 /** The installed @getpaseo/server directory (npm global root, or $PASEO_SERVER_DIR for tests/odd installs). */
 export function findServerDir() {
   if (process.env.PASEO_SERVER_DIR) return process.env.PASEO_SERVER_DIR;
-  const r = spawnSync('npm', ['root', '-g'], { encoding: 'utf8', shell: process.platform === 'win32' });
+  const r = spawnSyncSafe('npm', ['root', '-g'], { encoding: 'utf8' });
   const root = (r.stdout || '').trim();
   const c = [join(root, '@getpaseo', 'cli', 'node_modules', '@getpaseo', 'server'), join(root, '@getpaseo', 'server')];
   return c.find((d) => existsSync(join(d, 'package.json')));
