@@ -63,7 +63,14 @@ export function parseRoutes(s) {
   });
 }
 
-export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run, preOverride } = {}) {
+/** Network / CLI checks of an add or edit: the endpoint answers and lists the model, or the CLI offers it. Done BEFORE any file is touched. */
+async function verifyKind(k, { url, model, key }, { f = fetch, run } = {}) {
+  if (k.own) return checkEndpoint(url, model, f, key);
+  const models = await discover(k.type, {}, run ? { run } : {});
+  if (!modelListed(model, models)) throw new Error(`model "${model}" is not offered by the ${k.base} CLI (offered: ${models.map((m) => m.id).join(', ')})`);
+}
+
+export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run, preOverride, skipVerify } = {}) {
   const k = kindOf(a.kind ?? a.type); const type = k.type; const { name, model, url } = a; const key = a.key || undefined;
   const readOnly = !(a.readOnly === false || a.readOnly === 'false' || a.readOnly === 'off');
   const slots = Number(a.slots ?? 2);
@@ -79,8 +86,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   if (local.extraProviders?.[name]) throw new Error(`${name} already exists (remove it first, or use edit)`);
   const cfg = rd(p.paseo, { version: 1 });
   if (k.own && cfg.agents?.providers?.[name]) throw new Error(`${name} is already a provider in the Paseo config (not added by this tool)`);
-  if (k.own) await checkEndpoint(url, model, f, key);
-  else { const models = await discover(type, {}, run ? { run } : {}); if (!modelListed(model, models)) throw new Error(`model "${model}" is not offered by the ${k.base} CLI (offered: ${models.map((m) => m.id).join(', ')})`); }
+  if (!skipVerify) await verifyKind(k, { url, model, key }, { f, run });
   const bin = type === 'qwen-code' ? which('qwen') : null; if (type === 'qwen-code' && !bin) throw new Error('qwen CLI not found on PATH');
   const routes = rd(p.routes, null); if (!routes) throw new Error(`routes file unreadable: ${p.routes}`);
   const chains = parseRoutes(a.routes);
@@ -158,7 +164,9 @@ export async function edit(name, ch, p = paths(), o = {}) {
   const preOverride = untouched ? Object.fromEntries(FILES.map((x) => [x, u[x].pre === null ? null : Buffer.from(u[x].pre, 'base64')])) : undefined;
   const merged = { name, kind: spec.type, url: spec.url, model: spec.model, key: spec.key, readOnly: spec.readOnly, slots: cur.slots, routes: curRoutes, ...Object.fromEntries(Object.entries(ch).filter(([k, v]) => v !== undefined && v !== '' && !['name', 'kind', 'type'].includes(k))) };
   const ocf = join(hubDirOf(p.paseo), `opencode-${name}.json`), ocBefore = bytes(ocf), undoBefore = bytes(undoPath(p, name)), baseBefore = bytes(basePath(p));
-  try { removeManual(name, p); return await add(merged, p, { ...o, preOverride }); }
+  // checks first and no network inside the write window: a crash between remove and add can no longer lose the provider
+  await verifyKind(kindOf(spec.type), merged, o);
+  try { removeManual(name, p); return await add(merged, p, { ...o, preOverride, skipVerify: true }); }
   catch (e) { for (const x of FILES) { if (before[x] === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], before[x]); } if (ocBefore) writeFileSync(ocf, ocBefore); if (undoBefore) writeFileSync(undoPath(p, name), undoBefore); if (baseBefore) writeFileSync(basePath(p), baseBefore); throw e; }
 }
 /** Restore each file whose bytes still equal what add() left; true when every file was restored. */
