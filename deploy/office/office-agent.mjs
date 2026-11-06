@@ -12,4 +12,4 @@ const base = proxy ? proxy.base : upstream;
 const model = await servedModel(base, { fallback, ...(proxy ? { f: (u, o) => fetch(u, { ...o, headers: { ...o?.headers, authorization: `Bearer ${proxy.secret}` } }) } : {}) });
 const child = spawn(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, '--openai-api-key', proxy ? proxy.secret : 'none', '--model', model],
   { stdio: 'inherit', env: scrubKeyEnv(qwenEnv(process.env, readOnly)), shell: /\.(cmd|bat)$/i.test(bin) });
-child.on('exit', (c) => { proxy?.close(); process.exit(c ?? 1); });
+child.on('exit', (c) => { proxy?.close(); process.exitCode = c ?? 1; }); // no process.exit: exiting with the proxy server mid-close trips a libuv assertion on Windows
