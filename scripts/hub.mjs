@@ -187,6 +187,7 @@ async function reapLaptop(now) {
 async function doctor(deep) {
   { const o = (await import('../plugins/routing/orphans.mjs')).reapAgentOrphans(); if (o.length) ok(`stopped ${o.length} orphaned agent shell snapshot process(es)`); }
   for (const x of await reapLaptop(false)) ok(`stopped an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`);
+  try { const { cleanDoctorLeftovers } = await import('../plugins/routing/cleanup.mjs'); const d = cleanDoctorLeftovers({ paseo: (a) => { try { return JSON.parse(paseo([...a, '--json']).stdout || '[]'); } catch { return []; } } }); if (d.dirs || d.projects) ok(`removed ${d.dirs} leftover hub-doctor folder(s) and ${d.projects} project(s) of earlier runs`); } catch { /* best effort */ }
   try { // the secret scanner: the gate and the reply scan fail closed without it
     const g = await import('../plugins/gate/server/gate.mjs');
     row(true, 'secret scanner gitleaks', g.checkScanner() + ' (pinned ' + g.GITLEAKS_VERSION + ')');

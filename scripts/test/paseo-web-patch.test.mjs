@@ -160,3 +160,8 @@ test('the switch read-back edit refetches the plugin list again after the daemon
   vm.runInContext(`const o={};let je;o.x=0;${r.replace(/^je=/, 'je=')};je("ok").then(()=>{})`, ctx);
   return new Promise((ok) => setImmediate(() => { assert.deepEqual(calls, ['fetch', 't1200', 't3500']); ok(); }));
 });
+
+test('the schedule hint uses a plain DOM element: that module exports no Text (React error #130 took the whole Schedules page down live)', () => {
+  const r = edit('schedule-missing-use').replace;
+  assert.ok(r.includes('jsx)("div"') && !/t\.Text/.test(r));
+});
