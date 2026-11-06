@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDaemonEnv, parseExtras } from '../daemon-env.mjs';
 
-const secrets = { GITEA_TOKEN: 't', GITHUB_MCP_PAT: 't', OPENAI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k', DB_PASSWORD: 'p', AWS_SECRET_ACCESS_KEY: 's', GOOGLE_APPLICATION_CREDENTIALS: 'c', NPM_AUTH: 'a', PASEO_PASSWORD: 'p', AGENT_HUB_SECRET_FILE: 'f', SSH_AUTH_SOCK: 's', MY_PRIVATE_THING: 'x' };
+const secrets = { GITEA_TOKEN: 't', GITHUB_MCP_PAT: 't', OPENAI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k', DB_PASSWORD: 'p', AWS_SECRET_ACCESS_KEY: 's', GOOGLE_APPLICATION_CREDENTIALS: 'c', NPM_AUTH: 'a', PASEO_PASSWORD: 'p', AGENT_HUB_SECRET_FILE: 'f', SSH_AUTH_SOCK: 's', MY_PRIVATE_THING: 'x', AGENT_HUB_DB_PWD: 'p', X_JWT: 'j', SESSION_COOKIE: 'c', SENTRY_DSN: 'd', DATABASE_URL: 'postgres://u:p@h/db', PASEO_SECRET_FOO: 's', PASEO_UNLISTED: 'u', AGENT_HUB_PASSWORD: 'p' };
 const basics = { PATH: 'p', Path: 'p2', SystemRoot: 'C:/Windows', TEMP: 't', HOME: '/h', USERPROFILE: 'u', APPDATA: 'a', LOCALAPPDATA: 'l', ProgramFiles: 'pf', 'ProgramFiles(x86)': 'pf86', COMPUTERNAME: 'c', PROCESSOR_ARCHITECTURE: 'x', LC_ALL: 'C', LANG: 'en', XDG_CONFIG_HOME: '/x', TZ: 'z', SHELL: '/bin/sh', TERM: 'xterm', PASEO_HOME: '/p', AGENT_HUB_MCP: 'http://127.0.0.1:6767/mcp/agents', AGENT_HUB_PORT: '6767', CODEX_HOME: '/c' };
 
 test('credential-looking variables are dropped, OS and hub variables kept (win/mac/linux names)', () => {
@@ -27,4 +27,11 @@ test('the launcher runs the command with the scrubbed environment', async () => 
     { encoding: 'utf8', env: { ...process.env, GITEA_TOKEN: 't', MY_API_KEY: 'k', AGENT_HUB_ENV_ALLOW: 'KEPT_VAR', KEPT_VAR: '1' } });
   const keys = JSON.parse(r.stdout.trim().split('\n').pop());
   assert.ok(keys.includes('KEPT_VAR') && !keys.includes('GITEA_TOKEN') && !keys.includes('MY_API_KEY'), r.stdout + r.stderr);
+});
+
+test('extras: a URL with user:pass@ is always dropped, credential-looking extras need the exact name, PWD is the cwd not a password', () => {
+  const env = { PWD: '/w', DATABASE_URL: 'postgres://u:p@h/db', HTTP_PROXY: 'http://proxy:3128', MY_TOKEN: 't', PROXY_USER_PASS: 'x' };
+  assert.deepEqual(Object.keys(buildDaemonEnv(env)), ['PWD']);
+  assert.deepEqual(Object.keys(buildDaemonEnv(env, 'PWD,DATABASE_URL,HTTP_PROXY,MY_TOKEN')).sort(), ['HTTP_PROXY', 'MY_TOKEN', 'PWD']);
+  assert.deepEqual(Object.keys(buildDaemonEnv({ MY_TOKEN: 't', MY_OTHER: 'o', MY_THING_PASS: 'p' }, 'MY_*')), ['MY_OTHER']);
 });
