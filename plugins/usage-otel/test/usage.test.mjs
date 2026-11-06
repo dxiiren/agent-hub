@@ -103,9 +103,18 @@ test("qoder summary: cached within ttl, slow poll answered from stale cache, no 
   let n = 0, t = 0;
   const poll = () => { n++; return n === 2 ? new Promise((r) => setTimeout(() => r({ v: 2 }), 80)) : Promise.resolve({ v: n }); };
   const o = { poll, now: () => t, waitMs: 20 };
-  assert.deepEqual(await qoderSummary(o), { v: 1 }); assert.deepEqual(await qoderSummary(o), { v: 1 }); assert.equal(n, 1);
-  t = 400_000; assert.deepEqual(await qoderSummary(o), { v: 1 }); // 2nd poll is slow: stale value, poll keeps running
-  await new Promise((r) => setTimeout(r, 120)); t = 400_001; assert.deepEqual(await qoderSummary(o), { v: 2 }); assert.equal(n, 2);
-  _resetForTest(); await assert.rejects(qoderSummary({ poll: () => new Promise(() => {}), now: () => 0, waitMs: 10 }), /still running/);
+  assert.deepEqual(await qoderSummary({ ...o, store: mem }), { v: 1 }); assert.deepEqual(await qoderSummary({ ...o, store: mem }), { v: 1 }); assert.equal(n, 1);
+  t = 400_000; assert.deepEqual(await qoderSummary({ ...o, store: mem }), { v: 1 }); // 2nd poll is slow: stale value, poll keeps running
+  await new Promise((r) => setTimeout(r, 120)); t = 400_001; assert.deepEqual(await qoderSummary({ ...o, store: mem }), { v: 2 }); assert.equal(n, 2);
+  _resetForTest(); await assert.rejects(qoderSummary({ poll: () => new Promise(() => {}), now: () => 0, waitMs: 10, store: { read: () => null, write() {} } }), /still running/);
+  _resetForTest();
+});
+
+const mem = { v: null, read() { return this.v; }, write(x) { this.v = x; } };
+test("after a daemon restart the Qoder card shows the last saved numbers while the slow first poll runs", async () => {
+  _resetForTest();
+  const saved = { s: { credits_used: 1, credits_remaining: 9 }, at: 0 };
+  const r = await qoderSummary({ poll: () => new Promise(() => {}), now: () => 10_000_000, waitMs: 10, store: { read: () => saved, write() {} } });
+  assert.deepEqual(r, saved.s);
   _resetForTest();
 });
