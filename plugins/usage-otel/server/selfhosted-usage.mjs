@@ -4,8 +4,9 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const readJson = (f) => { try { return JSON.parse(readFileSync(f, "utf8").replace(/^﻿/, "")); } catch { return {}; } };
+// import.meta.url is not set when Paseo bundles the plugin, so resolve the repo config lazily and tolerate its absence
+const localConfigPath = (env) => { if (env.AGENT_HUB_LOCAL) return env.AGENT_HUB_LOCAL; try { return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "config", "hub.local.json"); } catch { return ""; } };
+const readJson = (f) => { try { if (!f) return {}; return JSON.parse(readFileSync(f, "utf8").replace(/^﻿/, "")); } catch { return {}; } };
 const nonRo = (s) => s.replace(/-ro$/, "");
 export const paseoHome = (env = process.env) => env.PASEO_HOME ?? join(homedir(), ".paseo");
 
@@ -80,7 +81,7 @@ export async function selfHostedReport(name, { env = process.env, ttlMs = 60_000
   const hit = cache.get(name);
   if (hit && now() - hit.at < ttlMs) return hit.r;
   const home = paseoHome(env);
-  const local = readJson(env.AGENT_HUB_LOCAL ?? join(HERE, "..", "..", "..", "config", "hub.local.json"));
+  const local = readJson(localConfigPath(env));
   const pv = selfHostedProviders(readJson(join(home, "config.json")), local).find((x) => x.name === name);
   if (!pv) return { status: "error", error: `provider ${name} not configured` };
   const feed = (readFeed ?? (() => { try { return readFileSync(join(env.AGENT_HUB_USAGE_DIR ?? join(home, "usage"), "usage.jsonl"), "utf8"); } catch { return ""; } }))();
