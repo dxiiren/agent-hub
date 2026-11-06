@@ -10,9 +10,10 @@ import { freemem, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag } from '../../plugins/routing/office.mjs';
+import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
 import { judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable } from './gpu-guard.mjs';
 
-const READ_ONLY = takeReadOnlyFlag(process.argv); // the "-ro" twin provider: sensitive reads denied by the CLI
+const READ_ONLY = takeReadOnlyFlag(process.argv); // legacy "-ro" twin entry: read-only from the start
 const E = process.env;
 const PORT = E.LAPTOP_PORT || '8089';
 const ALIAS = E.LAPTOP_ALIAS || 'qwen35-9b';
@@ -78,9 +79,14 @@ async function ensureServer() {
 let model = ALIAS;
 if (await up()) { try { model = await checkServed(); } catch (e) { refuse(e.message); } }
 const win = /\.(cmd|bat)$/i.test(E.QWEN_BIN);
-const child = spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], env: qwenEnv(E, READ_ONLY), shell: win });
-child.stdout.on('data', (d) => { process.stdout.write(d); const n = String(d).split('"stopReason"').length - 1; if (n) { inflight = Math.max(0, inflight - n); touch(); } });
-child.on('exit', (c) => { clearInflight(PORT); process.exit(c ?? 1); });
+const spawnQwen = (ro) => spawn(E.QWEN_BIN, ['--acp', '--auth-type', 'openai', '--openai-base-url', `http://127.0.0.1:${PORT}/v1`, '--openai-api-key', 'none', '--model', model, ...process.argv.slice(2)], { stdio: ['pipe', 'pipe', 'inherit'], env: qwenEnv(E, ro), shell: win });
+// ACP proxy (offers the mode "read-only", restarts qwen with the deny settings when it is chosen); the model server starts only when the first prompt arrives.
+const refuseOn = (e) => { process.stderr.write('LAPTOP-REFUSED: ' + e.message + String.fromCharCode(10)); proxy.kill(); process.exit(3); };
+const proxy = modeProxy({ spawnAgent: spawnQwen, initialReadOnly: READ_ONLY,
+  beforeForward: async (l) => { if (l.includes('"session/prompt"')) { inflight++; markInflight(PORT); try { await ensureServer(); } catch (e) { refuseOn(e); } touch(); } },
+  onAgentLine: (d) => { const n = String(d).split('"stopReason"').length - 1; if (n) { inflight = Math.max(0, inflight - n); touch(); } } });
+const child = { kill: () => proxy.kill() };
+proxy.done.then((c) => { clearInflight(PORT); process.exit(c ?? 1); });
 // Keep-warm clock: a turn longer than LAPTOP_IDLE_MIN must not look idle to the reaper, so refresh lastUsed while a prompt is in flight and when it ends.
 let inflight = 0;
 setInterval(() => { if (inflight > 0) touch(); }, 30000).unref();
@@ -107,13 +113,4 @@ setInterval(() => {
     child.kill(); process.exit(3);
   }
 }, Number(E.LAPTOP_WATCHDOG_MS || 15000)).unref();
-// ACP is newline-delimited JSON-RPC: hold session/prompt until the model server answers /health.
-let chain = Promise.resolve(); let buf = '';
-const NL = String.fromCharCode(10);
-process.stdin.on('data', (d) => {
-  buf += d; const lines = buf.split(NL); buf = lines.pop();
-  for (const l of lines) chain = chain.then(async () => { if (l.includes('"session/prompt"')) { inflight++; markInflight(PORT); await ensureServer(); touch(); } child.stdin.write(l + NL); })
-    .catch((e) => { process.stderr.write('LAPTOP-REFUSED: ' + e.message + NL); child.kill(); process.exit(3); });
-});
-process.stdin.on('end', () => chain.then(() => child.stdin.end()));
 process.on('exit', () => clearInflight(PORT));

@@ -53,9 +53,10 @@ export function resolveEntry(entry, paseo, env = process.env) {
     return `codex/${pick.id}`;
   }
   if (kind === "claude") {
-    const pick = newest(parseClaude(ids("claude-clean")), fam);
+    const clean = newest(parseClaude(ids("claude-clean")), fam); // the clean-MCP claude when the user has added one, else the plain claude provider
+    const pick = clean ?? newest(parseClaude(ids("claude")), fam);
     if (!pick) throw new Error(`no claude model for ${entry}`);
-    return `claude-clean/${pick.id}`;
+    return `${clean ? "claude-clean" : "claude"}/${pick.id}`;
   }
   if (kind === "opencode") { // the office server's own model id; opencode.json is pointed at it before the task starts
     const base = env.OFFICE_QWEN_URL ?? localCfg().officeQwenUrl;

@@ -17,8 +17,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { entries as extraEntries } from './provider.mjs';
-import { displayName } from './provider-kinds.mjs';
+import { migrate } from './provider.mjs';
 
 process.noDeprecation = true; // shell:true is needed only to run .cmd shims; our args are fixed
 const WIN = process.platform === 'win32';
@@ -33,15 +32,6 @@ const NAME = 'agent-hub';
 
 const local = (() => { try { return readJsonStrict(join(REPO, 'config', 'hub.local.json'), {}); } catch { return {}; } })(); // read-only here
 const opt = (env, key) => process.env[env] || local[key] || '';
-const cfg = {
-  officeUrl: opt('OFFICE_QWEN_URL', 'officeQwenUrl'),
-  officeModel: opt('OFFICE_QWEN_MODEL', 'officeQwenModel') || 'Qwen3.8-27B',
-  llama: opt('LLAMA_SERVER_BIN', 'llamaServer'),
-  laptopModel: opt('LAPTOP_MODEL_PATH', 'laptopModel'),
-  laptopPort: opt('LAPTOP_PORT', 'laptopPort'),
-  officeUrl2: opt('OFFICE_QWEN_URL_2', 'officeQwenUrl2'),
-  officeModel2: opt('OFFICE_QWEN_MODEL_2', 'officeQwenModel2'),
-};
 
 // A .cmd shim must go through cmd.exe, which re-splits arguments: quote every argument that has a space or a shell character.
 const q = (a) => (/[\s"&|<>^%]/.test(a) ? '"' + String(a).split('"').join('""') + '"' : String(a));
@@ -90,84 +80,6 @@ function bcrypt() {
   throw new Error('bcryptjs not found; install Paseo first (npm i -g @getpaseo/cli@0.15.2)');
 }
 
-// ---------- GPU fit (decision 35): the 9B model needs about 6.3 GB, so the card must have >= 7.5 GiB total
-function gpuFits() {
-  const r = run('nvidia-smi', ['--query-gpu=memory.total', '--format=csv,noheader,nounits']);
-  const mib = parseInt((r.stdout || '').split(/\s/)[0], 10);
-  return r.status === 0 && mib >= Number(process.env.LAPTOP_MIN_VRAM_MIB || 7500) ? mib : 0;
-}
-
-// ---------- providers
-function providers() {
-  const p = {}; const notes = [];
-  if (which('codex')) {
-    p.codex = { models: [
-      { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', isDefault: true },
-      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }] }; // never gpt-6-astra: the list replaces runtime discovery
-  } else notes.push('codex not installed');
-
-  mkdirSync(HUB_DIR, { recursive: true });
-  const empty = join(HUB_DIR, 'empty-mcp.json'); writeJson(empty, { mcpServers: {} });
-  const claude = which('claude');
-  if (claude) {
-    const ro = join(HUB_DIR, 'claude-readonly-settings.json'); { const t = JSON.parse(readFileSync(join(REPO, 'config', 'claude-clean', 'readonly-settings.template.json'), 'utf8')); const h = HOME.split(String.fromCharCode(92)).join('/'); t.permissions.deny.push(`Read(//${h}/agent-hub-secret)`, `Read(//${h}/config.json)`, `Read(//${h}/hub/**)`); writeJson(ro, t); } // the real PASEO_HOME, not only ~/.paseo
-    const wrap = join(HUB_DIR, WIN ? 'claude-clean.cmd' : 'claude-clean.sh');
-    const js = join(REPO, 'scripts', 'claude-wrap.mjs');
-    writeFileSync(wrap, WIN
-      ? `@echo off\r\n"${process.execPath}" "${js}" "${claude}" "${empty}" "${ro}" %*\r\n`
-      : `#!/bin/sh\nexec "${process.execPath}" "${js}" "${claude}" "${empty}" "${ro}" "$@"\n`);
-    if (!WIN) chmodSync(wrap, 0o755);
-    p['claude-clean'] = { extends: 'claude', label: 'Claude (clean MCP)', command: [wrap] };
-  } else notes.push('claude not installed');
-
-  // qodercli --acp ignores --strict-mcp-config and --setting-sources, so it loads the user's MCP servers (one swing-mcp JVM per task).
-  // A private config dir with no MCP servers, sharing only the login (.auth), is the one switch that works.
-  const qoderHome = () => {
-    const d = join(HUB_DIR, 'qoder-home'); mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, 'settings.json'), JSON.stringify({ general: { defaultPermissionMode: 'auto' } })); // headless: without auto the first shell call waits for a permission nobody answers
-    const auth = join(d, '.auth');
-    if (!existsSync(auth)) { try { symlinkSync(join(homedir(), '.qoder', '.auth'), auth, 'junction'); } catch (e) { console.log(`[WARN] qoder login link failed: ${e.message}`); } }
-    return d;
-  };
-  // qodercli 1.1.83 (auto-updated 05-11) ignores the selected tier model over ACP: every task is served "auto" with no usage/credits. 1.1.81 honours it, so prefer that binary when it sits next to qodercli.
-  const qBase = which('qodercli'), qPin = qBase && join(dirname(qBase), `qodercli-${process.env.AGENT_HUB_QODER_PIN || '1.1.81'}${extname(qBase)}`);
-  const qoder = qPin && existsSync(qPin) ? qPin : qBase;
-  if (qoder) p.qoder = { extends: 'acp', label: 'Qoder (no user MCP)', command: [qoder, '--acp', '--config-dir', qoderHome()] }; else notes.push('qodercli not installed');
-
-  const qwen = which('qwen');
-  if (qwen && cfg.officeUrl) {
-    p['qwen-code'] = { extends: 'acp', label: displayName('Qwen Code', cfg.officeUrl), command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl, cfg.officeModel] }; // model id re-read from /v1/models at spawn; officeModel is the fallback
-  } else notes.push('qwen-code needs the qwen CLI and OFFICE_QWEN_URL');
-
-  if (qwen && cfg.officeUrl2 && cfg.officeModel2) { // optional second office host (a free tier when the first is loaded)
-    p['qwen-code-2'] = { extends: 'acp', label: displayName('Qwen Code', cfg.officeUrl2), command: [process.execPath, join(REPO, 'deploy', 'office', 'office-agent.mjs'), qwen, cfg.officeUrl2, cfg.officeModel2] };
-  }
-
-  const oc = which('opencode');
-  if (oc && cfg.officeUrl) {
-    mkdirSync(join(HUB_DIR, 'xdg'), { recursive: true });
-    const f = join(HUB_DIR, 'opencode.json');
-    writeJson(f, { $schema: 'https://opencode.ai/config.json', model: `office/${cfg.officeModel}`, autoupdate: false, share: 'disabled',
-      provider: { office: { npm: '@ai-sdk/openai-compatible', name: 'office-qwen', options: { baseURL: cfg.officeUrl, apiKey: 'none' },
-        models: { [cfg.officeModel]: { name: cfg.officeModel, tool_call: true, limit: { context: 131072, output: 8192 } } } } } });
-    p.opencode = { env: { OPENCODE_CONFIG: f, OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_TELEMETRY: '1',
-      OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', XDG_CONFIG_HOME: join(HUB_DIR, 'xdg') },
-      models: [{ id: `office/${cfg.officeModel}`, label: `Office ${cfg.officeModel}`, isDefault: true }] };
-  } else notes.push('opencode needs the opencode CLI and OFFICE_QWEN_URL');
-
-  const vram = gpuFits();
-  if (vram && qwen && cfg.llama && cfg.laptopModel) {
-    p['qwen-laptop'] = { extends: 'acp', label: 'Qwen Code laptop',
-      command: [process.execPath, join(REPO, 'deploy', 'laptop', 'laptop-agent.mjs')],
-      env: { LLAMA_SERVER_BIN: cfg.llama, LAPTOP_MODEL_PATH: cfg.laptopModel, QWEN_BIN: qwen, ...(cfg.laptopPort ? { LAPTOP_PORT: cfg.laptopPort } : {}),
-        ...(opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') ? { HEAVY_LOCK_GLOB: opt('HEAVY_LOCK_GLOB', 'heavyLockGlob') } : {}) } };
-  } else notes.push(vram ? 'laptop model needs LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH and qwen' : 'laptop model skipped: no GPU with >= 7.5 GiB VRAM (decision 35)');
-  for (const [n, sp] of Object.entries(local.extraProviders || {})) if (qwen || sp.type !== 'qwen-code') Object.assign(p, extraEntries(n, sp, qwen, REPO, HUB_DIR)); // added with `provider add`; their -ro twins come with them
-  // read-only twins (round 5): the same launcher with --read-only (deny settings for sensitive reads); read-only task types run only on these
-  for (const id of ['qwen-code', 'qwen-code-2', 'qwen-laptop']) if (p[id]) p[id + '-ro'] = { ...p[id], label: p[id].label + ' (read-only)', command: [...p[id].command, '--read-only'] };
-  return { p, notes };
-}
-
 function configure() {
   const s = secret();
   const bc = bcrypt();
@@ -184,12 +96,11 @@ function configure() {
   // (cost 12, the `paseo daemon set-password` default, ~470 ms), so 6 clients polling get_agent_status saturate it and the hub looks
   // unreachable. The secret is 192 random bits, so the minimum cost (4, ~5 ms) loses nothing. Re-hash an existing higher-cost hash too.
   if (!h || !bc.compareSync(s, h) || Number(h.slice(4, 6)) > BCRYPT_COST) c.daemon.auth = { ...c.daemon.auth, password: bc.hashSync(s, BCRYPT_COST) };
-  const { p, notes } = providers();
-  c.agents ??= {}; c.agents.providers = { ...c.agents.providers, ...p };
   writeJson(f, c);
   ok(`config written: ${f} (listen 127.0.0.1:${PORT}, injectIntoAgents=true, password hash set)`);
-  for (const k of Object.keys(p)) ok(`provider registered: ${k}`);
-  for (const n of notes) skip(n);
+  // No presets: this installer registers no provider. Paseo detects the CLIs it knows by itself; every other one (Qwen Code, Qoder, accounts...) is added by the user
+  // in Settings > Providers or with `agent-hub provider add`. An older install's seeded Qwen entries become ordinary user-added ones (undo: provider migrate --undo).
+  const m = migrate(); if (m.changed) ok(`older preset providers are now ordinary user-added ones: ${m.adopted.join(', ') || '-'}; read-only twins removed: ${m.removedTwins.join(', ') || '-'}`);
 }
 
 // ---------- MCP registration (MCP first, decision 37). Backup once, add only agent-hub, removable.

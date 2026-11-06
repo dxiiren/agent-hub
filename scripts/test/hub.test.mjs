@@ -18,7 +18,7 @@ function sandbox() {
     if (WIN) writeFileSync(join(bin, n + '.cmd'), `@echo %* >> "${log}"\r\n`);
     else { writeFileSync(join(bin, n), `#!/bin/sh\necho "$@" >> "${log}"\n`, { mode: 0o755 }); }
   }
-  const env = { ...process.env, PATH: bin + delimiter + process.env.PATH, AGENT_HUB_HOME: join(t, 'home'), AGENT_HUB_CLIENT_ROOT: join(t, 'root') };
+  const env = { ...process.env, PATH: bin + delimiter + process.env.PATH, AGENT_HUB_HOME: join(t, 'home'), AGENT_HUB_CLIENT_ROOT: join(t, 'root'), AGENT_HUB_LOCAL: join(t, 'hub.local.json'), AGENT_HUB_ROUTES: join(t, 'routes.json') };
   return { t, log, env, hub: (...a) => spawnSync(process.execPath, [HUB, ...a], { env, encoding: 'utf8' }) };
 }
 const files = (t) => ['root/claude/.claude.json', 'root/qoder/.qoder/settings.json', 'root/qwen/.qwen/settings.json', 'root/codex/config.toml', 'root/opencode/opencode.json', 'home/agent-hub-secret'].map((f) => join(t, f));
@@ -52,21 +52,23 @@ test('unconfigure disables MCP when it removes auth', () => {
   assert.equal(c.daemon.mcp.injectIntoAgents, false);
 });
 
-test('configure: qoder runs from a private config dir with no MCP servers', () => {
+test('configure: a fresh install has NO providers (no presets, no read-only twins), even with every CLI installed', () => {
   const s = sandbox();
   const r = s.hub('configure'); assert.equal(r.status, 0, r.stdout + r.stderr);
-  const q = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents.providers.qoder.command;
-  const i = q.indexOf('--config-dir');
-  assert.ok(q.includes('--acp') && i > 0);
-  assert.deepEqual(JSON.parse(readFileSync(join(q[i + 1], 'settings.json'), 'utf8')), { general: { defaultPermissionMode: 'auto' } });
+  const c = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8'));
+  assert.deepEqual(Object.keys(c.agents?.providers ?? {}), [], 'nothing seeded');
+  assert.ok(!/provider registered/.test(r.stdout));
+  assert.equal(s.hub('configure').status, 0); // idempotent
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents?.providers ?? {}), []);
 });
 
-test('configure: qoder uses the pinned qodercli-1.1.81 binary when it sits next to qodercli', () => {
-  const s = sandbox(); const bin = join(s.t, 'bin'); const ext = WIN ? '.cmd' : '';
-  copyFileSync(join(bin, 'qodercli' + ext), join(bin, 'qodercli-1.1.81' + ext));
+test('configure: an older installs seeded Qwen entries become ordinary user-added providers, the -ro twins go (idempotent)', () => {
+  const s = sandbox(); mkdirSync(join(s.t, 'home'), { recursive: true });
+  const e = (url) => ({ extends: 'acp', label: 'Qwen Code x', command: ['node', '/r/deploy/office/office-agent.mjs', 'qwen', url, 'm1'] });
+  writeFileSync(join(s.t, 'home/config.json'), JSON.stringify({ version: 1, agents: { providers: { 'qwen-code': e('http://h:1/v1'), 'qwen-code-ro': { ...e('http://h:1/v1'), command: [...e('http://h:1/v1').command, '--read-only'] } } } }));
   const r = s.hub('configure'); assert.equal(r.status, 0, r.stdout + r.stderr);
-  const q = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents.providers.qoder.command;
-  assert.ok(basename(q[0]).startsWith('qodercli-1.1.81'), q[0]);
+  const c = JSON.parse(readFileSync(join(s.t, 'home/config.json'), 'utf8')).agents.providers;
+  assert.deepEqual(Object.keys(c), ['qwen-code']);
 });
 
 test('configure: daemon password hash uses the cheap bcrypt cost, and re-hashes a costly one (every MCP call pays this cost)', () => {

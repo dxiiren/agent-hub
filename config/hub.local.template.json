@@ -1,9 +1,4 @@
 {
   "daemonEnvAllow": [],
-  "_comment": "Copy to config/hub.local.json (git-ignored) or set the same values as environment variables. All keys are optional: a provider whose input is missing is skipped.",
-  "officeQwenUrl": "<OFFICE_QWEN_URL>",
-  "officeQwenModel": "<OFFICE_QWEN_MODEL>",
-  "llamaServer": "<LLAMA_SERVER_BIN>",
-  "laptopModel": "<LAPTOP_MODEL_PATH>",
-  "heavyLockGlob": "<HEAVY_LOCK_GLOB>"
+  "_comment": "Copy to config/hub.local.json (git-ignored). Providers are not configured here: add them in Settings > Providers or with `agent-hub provider add` (they are then recorded here under extraProviders)."
 }

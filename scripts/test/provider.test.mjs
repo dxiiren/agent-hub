@@ -18,17 +18,17 @@ function box() {
 }
 const opts = (ids = ['m1']) => ({ f: served(ids), which: () => 'qwen' });
 
-test('add writes provider + ro twin, local config, slots, modes and routes; list and remove undo it', async () => {
+test('add writes ONE provider (no read-only twin), local config, slots, modes and routes; list and remove undo it', async () => {
   const { p, read } = box();
   await add({ name: 'qwen-extra', url: URL1, model: 'm1', slots: '3', routes: 'summarise,code-edit' }, p, opts());
   const prov = read('paseo').agents.providers;
   assert.ok(prov.codex, 'existing providers kept');
   assert.deepEqual(prov['qwen-extra'].command.slice(-3), ['qwen', URL1, 'm1']);
   assert.equal(prov['qwen-extra'].extends, 'acp');
-  assert.deepEqual(prov['qwen-extra-ro'].command, [...prov['qwen-extra'].command, '--read-only']);
+  assert.ok(!Object.keys(prov).some((k) => k.endsWith('-ro')), 'no -ro twin entries');
   assert.deepEqual(read('local').extraProviders['qwen-extra'], { type: 'qwen-code', url: URL1, model: 'm1' });
   const r = read('routes');
-  assert.ok(r.readOnlyEnforced.includes('qwen-extra') && r.readOnlyEnforced.includes('qwen-laptop')); assert.equal(r.readOnlyModes['qwen-extra'], 'plan');
+  assert.ok(r.readOnlyEnforced.includes('qwen-extra') && r.readOnlyEnforced.includes('qwen-laptop')); assert.equal(r.readOnlyModes['qwen-extra'], 'read-only');
   assert.equal(r.slots['qwen-extra'], 3); assert.equal(r.modes['qwen-extra'], 'yolo');
   assert.deepEqual(r.routes.summarise, ['qwen-laptop', 'qwen-extra']); assert.deepEqual(r.routes['code-edit'], ['codex/latest-terra', 'qwen-extra']);
   assert.deepEqual(list(p), [{ name: 'qwen-extra', type: 'qwen-code', url: URL1, model: 'm1', slots: 3, routes: ['summarise', 'code-edit'] }]);
@@ -74,7 +74,7 @@ test('refuses bad names, duplicates, unknown routes and types', async () => {
 test('entries is what configure regenerates from hub.local.json', () => {
   const e = entries('qwen-x', { type: 'qwen-code', url: URL1, model: 'm1' }, 'qwen', '/repo');
   assert.equal(e['qwen-x'].command[1].replace(/\\/g, '/'), '/repo/deploy/office/office-agent.mjs');
-  assert.ok(e['qwen-x-ro'].label.endsWith('(read-only)'));
+  assert.deepEqual(Object.keys(e), ['qwen-x']);
 });
 
 test('remove restores the exact bytes (CRLF, explicit defaults, empty keys) and undoes by key with the same EOL when the files changed since', async () => {

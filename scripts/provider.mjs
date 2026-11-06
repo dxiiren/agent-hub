@@ -1,7 +1,7 @@
 // One command to add, list and remove an OpenAI-compatible model endpoint as a hub provider (Paseo's UI catalog cannot take a URL, model or env).
 //   node scripts/hub.mjs provider add <name> --type qwen-code --url <base-url> --model <id> [--slots N] [--routes code-edit,summarise]
 //   node scripts/hub.mjs provider list | remove <name>        (also: agent-hub provider ...)
-// Writes config/hub.local.json (extraProviders), the routes file (slots, modes, route chains) and the Paseo config.json entries (<name> and the read-only <name>-ro twin).
+// Writes config/hub.local.json (extraProviders), the routes file (slots, modes, route chains) and the Paseo config.json entries (<name>).
 // Restart the daemon afterwards (`just down && just up`) so Paseo reloads its providers.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { KINDS, RESERVED, KEY_ENV, kindOf, chainToken, discover, modelListed, hubDirOf, displayName, hasAccounts, loginCommand } from './provider-kinds.mjs';
@@ -15,7 +15,7 @@ import { READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
 import { writeJsonKeepEol, readJsonStrict } from '../plugins/routing/jsonfile.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const NAME_RE = KINDS['qwen-code'].nameRe; // any lower-case id; routing finds the read-only twin of a non-"qwen" name through routes.twins (roTwin in route.mjs)
+export const NAME_RE = KINDS['qwen-code'].nameRe; // any lower-case id
 /** An id from a display name ("Lab box #2" -> "lab-box-2"). */
 export const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').replace(/^[^a-z]+/, '');
 // A type = how to launch it. Add a type here (one function) to support another OpenAI-compatible launcher.
@@ -27,7 +27,7 @@ const launchCommand = (k, repo, s) => k.launch.map((t) => String(t).replace(/\{(
 export function paths(env = process.env) {
   const home = resolve(env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
   const routesDir = join(REPO, 'config', 'routes');
-  return { local: join(REPO, 'config', 'hub.local.json'), paseo: join(home, 'config.json'),
+  return { local: env.AGENT_HUB_LOCAL || join(REPO, 'config', 'hub.local.json'), paseo: join(home, 'config.json'),
     routes: env.AGENT_HUB_ROUTES || (existsSync(join(routesDir, 'routes.local.json')) ? join(routesDir, 'routes.local.json') : join(routesDir, 'routes.template.json')) };
 }
 const rd = readJsonStrict; // BOM-safe; missing file = default; unparsable = throws, so add/remove never overwrite a config they could not read
@@ -50,7 +50,7 @@ export async function checkEndpoint(url, model, f = fetch, key) {
   if (!ids.includes(model)) throw new Error(`endpoint check failed: model "${model}" not served (served: ${ids.join(', ') || 'none'})`);
 }
 
-/** Paseo provider entries for one extra provider (empty for CLI kinds: they only add a route token). Own kinds: the entry, plus a read-only twin when the kind has one and spec.readOnly is not false. */
+/** Paseo provider entries for one extra provider (empty for CLI kinds: they only add a route token). Own kinds: the entry. */
 export function entries(name, spec, qwenBin, repo = REPO, hubDir, baseCommand) {
   const k = kindOf(spec.type);
   if (spec.account) { // a CLI kind with its own login directory: its own Paseo provider, so the account's env/flag is per provider and never global
@@ -66,7 +66,7 @@ export function entries(name, spec, qwenBin, repo = REPO, hubDir, baseCommand) {
   const label = spec.label || displayName(k.label.split(' (')[0], spec.url);
   if (k.type === 'opencode') return { [name]: { extends: 'opencode', label, env: { OPENCODE_CONFIG: join(hubDir, `opencode-${name}.json`), OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_TELEMETRY: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', XDG_CONFIG_HOME: join(hubDir, 'xdg') }, models: [{ id: `${name}/${spec.model}`, label: spec.model, isDefault: true }] } };
   const e = { extends: 'acp', label, command: k.launch ? launchCommand(k, repo, spec) : TYPES[k.type].command(repo, spec, qwenBin), ...(env ? { env } : {}) };
-  return { [name]: e, ...(k.twin && spec.readOnly !== false ? { [name + '-ro']: { ...e, label: e.label + ' (read-only)', command: [...e.command, '--read-only'] } } : {}) };
+  return { [name]: e }; // one entry per endpoint: the launcher offers the session mode "read-only" itself (acp-proxy.mjs)
 }
 const opencodeFile = (name, spec) => ({ $schema: 'https://opencode.ai/config.json', model: `${name}/${spec.model}`, autoupdate: false, share: 'disabled',
   provider: { [name]: { npm: '@ai-sdk/openai-compatible', name, options: { baseURL: spec.url, apiKey: 'none' }, models: { [spec.model]: { name: spec.model, tool_call: true, limit: { context: 131072, output: 8192 } } } } } });
@@ -134,8 +134,8 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   local.extraProviders = { ...local.extraProviders, [name]: spec };
   if (ownish(k, spec)) {
     routes.slots = { ...routes.slots, [name]: slots }; routes.modes = { ...routes.modes, [name]: 'yolo' };
-    // the -ro twin runs the same launcher with the sensitive-read deny settings, so summarise/review may run on it (route.mjs refuses read-only types on unlisted providers)
-    if (k.own && k.twin && readOnly) { if (!/^qwen/.test(name)) routes.twins = [...new Set([...(routes.twins ?? []), name])]; routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), name])]; routes.readOnlyModes = { ...routes.readOnlyModes, [name]: 'plan' }; }
+    // the launcher restarts qwen with the sensitive-read deny settings when the session mode "read-only" is chosen, so summarise/review may run on it (route.mjs refuses read-only types on unlisted providers)
+    if (k.own && k.twin && readOnly) { routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), name])]; routes.readOnlyModes = { ...routes.readOnlyModes, [name]: 'read-only' }; }
   }
   for (const { c, pos } of chains) { const l = routes.routes[c]; l.splice(pos ? Math.min(pos - 1, l.length) : l.length, 0, token); }
   if (type === 'opencode') { mkdirSync(join(hubDir, 'xdg'), { recursive: true }); writeJsonKeepEol(join(hubDir, `opencode-${name}.json`), opencodeFile(name, spec)); }
@@ -214,6 +214,52 @@ function restoreSnapshot(name, p) {
   return false;
 }
 
+/**
+ * One-time, idempotent move to "no presets, no twins": the Qwen entries an older hub seeded (qwen-code, qwen-code-2, qwen-laptop) become ordinary
+ * user-added providers (recorded in hub.local.json extraProviders, so Remove works), the "-ro" twins are deleted, and read-only routing uses the
+ * session mode "read-only" of the base id. Their Paseo entries are kept byte for byte. The three files' exact previous bytes are saved in
+ * hub.local.undo-migrate-qwen.json; `migrate({ undo: true })` puts them back while nothing changed since.
+ */
+export function migrate(p = paths(), { undo } = {}) {
+  const mu = join(dirname(p.local), 'hub.local.undo-migrate-qwen.json');
+  if (undo) {
+    let u; try { u = JSON.parse(readFileSync(mu, 'utf8')); } catch { return { undone: false, reason: 'no migration record' }; }
+    const stale = FILES.filter((x) => sha(bytes(p[x])) !== u[x].post);
+    if (stale.length) return { undone: false, reason: `changed since the migration: ${stale.join(', ')}` };
+    for (const x of FILES) { if (u[x].pre === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], Buffer.from(u[x].pre, 'base64')); }
+    rmSync(mu, { force: true }); return { undone: true };
+  }
+  const cfg = rd(p.paseo, null); const prov = cfg?.agents?.providers; if (!prov) return { changed: false };
+  const local = rd(p.local, {}); const routes = /routes[.]template[.]json$/.test(p.routes) ? null : rd(p.routes, null); // the shipped template is never rewritten
+  const twins = Object.keys(prov).filter((id) => id.endsWith('-ro') && prov[id.slice(0, -3)]);
+  const spec = (id, e) => {
+    const c = e.command ?? []; const i = c.findIndex((x) => /office-agent[.]mjs$/.test(String(x)));
+    if (i >= 0 && c[i + 2] && safeId(c[i + 3])) return { type: 'qwen-code', url: c[i + 2], model: c[i + 3], ...(e.label ? { label: e.label } : {}) };
+    if (c.some((x) => /laptop-agent[.]mjs$/.test(String(x)))) return { type: 'qwen-code', url: `http://127.0.0.1:${e.env?.LAPTOP_PORT || '8089'}/v1`, model: e.env?.LAPTOP_ALIAS || 'qwen35-9b', ...(e.label ? { label: e.label } : {}) };
+    return null;
+  };
+  const adopt = ['qwen-code', 'qwen-code-2', 'qwen-laptop'].filter((id) => prov[id] && !local.extraProviders?.[id]).map((id) => [id, spec(id, prov[id])]).filter(([, sp]) => sp);
+  const stale = twins.length || routes?.twins;
+  if (!adopt.length && !stale) return { changed: false };
+  const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
+  for (const [id, sp] of adopt) local.extraProviders = { ...local.extraProviders, [id]: sp };
+  for (const t of twins) delete prov[t];
+  if (routes) {
+    const names = new Set([...adopt.map(([id]) => id), ...twins.map((t) => t.slice(0, -3))]);
+    delete routes.twins;
+    if (names.size) {
+      routes.readOnlyEnforced = [...new Set([...(routes.readOnlyEnforced ?? READ_ONLY_ENFORCED), ...names])];
+      routes.readOnlyModes = { ...routes.readOnlyModes, ...Object.fromEntries([...names].map((n) => [n, 'read-only'])) };
+    }
+    for (const c of Object.keys(routes.routes ?? {})) routes.routes[c] = routes.routes[c].filter((x) => !String(x).split('/')[0].endsWith('-ro'));
+    wr(p.routes, routes);
+  }
+  wr(p.local, local); wr(p.paseo, cfg);
+  const snap = Object.fromEntries(FILES.map((x) => [x, { pre: pre[x]?.toString('base64') ?? null, post: sha(bytes(p[x])) }]));
+  if (!existsSync(mu)) writeFileSync(mu, JSON.stringify(snap));
+  return { changed: true, adopted: adopt.map(([id]) => id), removedTwins: twins };
+}
+
 /** Added providers for display. The API key is never returned, only keySet. */
 export const list = (p = paths()) => {
   const routes = rd(p.routes, {});
@@ -245,6 +291,7 @@ export async function api({ verb, args = {} }, p = paths(), o = {}) {
   if (verb === 'describe') return describe(p);
   if (verb === 'models') return { models: await discover(kindOf(args.kind ?? args.type).type, { url: args.url ?? args.link, key: args.key, provider: args.provider }, o) };
   if (verb === 'list') return { providers: list(p) };
+  if (verb === 'migrate') return migrate(p, { undo: args.undo === true || args.undo === 'true' });
   if (verb === 'add') return await add(args, p, o);
   if (verb === 'edit') return await edit(args.name, args, p, o);
   if (verb === 'remove') { remove(args.name, p, { purge: args.purge === true || args.purge === 'true' }); return { removed: args.name }; }
@@ -276,6 +323,7 @@ export async function main(argv) {
       console.log(r.needsRestart ? 'Restart the daemon so Paseo reloads its providers: just down && just up' : 'No restart needed: the route entry is read at dispatch.');
     } else if (cmd === 'remove') { remove(pos[0], paths(), { purge: "purge" in o }); console.log(`[OK] provider ${pos[0]} removed. Restart the daemon if it had its own Paseo provider: just down && just up`); }
     else if (cmd === 'list') { const l = list(); console.log(l.length ? l.map((x) => `${x.name}  ${x.type}  ${x.model}  ${x.url ?? '-'}  ${x.keySet ? 'key set  ' : ''}slots ${x.slots ?? '-'}  routes ${x.routes.join(',') || '-'}`).join('\n') : '(no added providers)'); }
+    else if (cmd === 'migrate') { const r = migrate(paths(), { undo: 'undo' in o }); console.log(JSON.stringify(r)); }
     else if (cmd === 'kinds') console.log(describe().kinds.map((k) => `${k.type}  ${k.label}  fields: ${k.fields.map((f) => f.id).join(', ')}`).join('\n'));
     else if (cmd === 'models') console.log((await discover(kindOf(o.kind).type, { url: o.url, key: o.key, provider: o.provider }, bins)).map((m) => `${m.id}${m.hint ? `  (${m.label} - ${m.hint})` : ''}`).join('\n'));
     else { console.log(USAGE); return 2; }

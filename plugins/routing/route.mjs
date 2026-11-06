@@ -87,13 +87,11 @@ export const unsafeMode = (m) => /full-?access|bypass|yolo/i.test(m ?? "");
 // Read-only task types never get an unsafe mode outside a worktree (same rule as every type): a "summarise" prompt must not be able to edit files. They run in the provider's default mode, and a post-check fails the task if the folder changed.
 export const readOnlyType = (type, routes = {}) => (routes.readOnlyTypes ?? ["summarise", "review"]).includes(type);
 /** Provider -> its most read-only mode id (from list_providers; checked 05-11). Codex has NONE (its Paseo modes are Default Permissions, Auto-review, Full Access: all can write in the folder), so it is left out and a read-only type skips it. Qoder "dontAsk" was proven live on 06-11: Write and shell refused, Read outside the task folder refused. Override per provider with routes.readOnlyModes. */
-export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", qoder: "dontAsk", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
+export const READ_ONLY_MODES = { claude: "plan", "claude-clean": "plan", opencode: "plan", "qwen-code": "read-only", "qwen-code-2": "read-only", "qwen-laptop": "read-only", qoder: "dontAsk", copilot: "https://agentclientprotocol.com/protocol/session-modes#plan" };
 /** Provider ids this hub knows: slot keys, every route entry's id, and the built-in read-only-mode table. */
 export const knownProviders = (routes = {}) => new Set(["codex", ...Object.keys(routes.slots ?? {}), ...Object.keys(READ_ONLY_MODES), ...Object.values(routes.routes ?? {}).flat().map(base)]);
 /** Providers on which a read-only task may run: sensitive reads are ENFORCEABLY refused (claude-clean = PreToolUse read hook, Qwen = readguard). Qoder, plain claude, opencode, copilot and codex have no such enforcement (an in-cwd .env was read through qoder/efficient), so read-only types never run on them. Override with routes.readOnlyEnforced. */
 export const READ_ONLY_ENFORCED = ["claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop"];
-/** "qwen-laptop" / "qwen-code-2/x" -> "qwen-laptop-ro" / "qwen-code-2-ro/x" (read-only twin provider with the deny settings); other providers unchanged. */
-export const roTwin = (prov, routes = {}) => (/^qwen/.test(prov) || (routes.twins ?? []).includes(prov.split("/")[0]) ? prov.replace(/^([^/]+)/, "$1-ro") : prov); // twins: names not starting "qwen" that were added with a read-only twin
 export const readOnlyEnforced = (prov, routes = {}) => (routes.readOnlyEnforced ?? READ_ONLY_ENFORCED).includes(prov);
 export const readOnlyMode = (prov, routes = {}) => routes.readOnlyModes?.[prov] ?? READ_ONLY_MODES[prov];
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
@@ -300,7 +298,8 @@ export function inputError(o) {
 export function runRoute(o, paseo, routes, gate = runGate) {
   const bad = inputError(o); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
   const chain = o.provider ? [o.provider] : routes.routes?.[o.type];
-  if (!chain?.length) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
+  if (!chain) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
+  if (!chain.length) return { used: null, trace: [{ error: `no provider configured for ${o.type}: add one in Settings > Providers` }] };
   const slots = routes.slots ?? {};
   const trace = [];
   if (o.provider && readOnlyType(o.type, routes)) {
@@ -329,11 +328,14 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   };
   const done = (r, wt) => { retire(r.agentId, wt); return r; };
   let partial = null; let ramLeftMs;
+  // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
+  const installed = (() => { try { const r = paseo(["provider", "ls"]); const ids = (Array.isArray(r) ? r : r?.providers ?? []).map((x) => x?.provider ?? x?.id ?? x?.name).filter(Boolean); return ids.length ? new Set(ids) : null; } catch { return null; } })();
   for (const entry of chain) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
+    if (installed && !installed.has(base(prov))) { trace.push({ provider: prov, skip: "provider not configured: add it in Settings > Providers" }); continue; }
     const rows = paseo(["ls"]);
-    const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && [base(prov), base(prov) + "-ro"].includes(a.provider)).length;
+    const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
     // RAM admission (09:10-09:14 hang: 15 tasks, <1 GB free): wait with backoff for free RAM before creating an agent; give up on this entry at waitTimeout. Only when the caller passes freeMem (main() does; unit tests that do not, never read the real machine).
     if (o.freeMem) {
@@ -345,10 +347,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     }
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     let wt = null; // this entry's route-created worktree
-    const ro0 = readOnlyType(o.type, routes);
-    // Qwen read-only twin: plan mode lets Qwen read an in-cwd .env with no permission request, so a read-only task runs on "<id>-ro", the same launcher started with --read-only, which points QWEN_CODE_SYSTEM_SETTINGS_PATH at config/qwen/system-settings-readonly.json (sensitive-read deny). Nothing is ever written under the task cwd.
-    const launch = ro0 ? roTwin(prov, routes) : prov;
-    const args = ["run", "--cwd", o.cwd, "--provider", launch, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
+    // Qwen read-only: the launcher (acp-proxy.mjs) offers the session mode "read-only"; choosing it restarts qwen with the deny settings (config/qwen/system-settings-readonly.json). Nothing is ever written under the task cwd.
+    const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
     if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "no read-only mode for this provider (read-only task types never run on it)" }); continue; }
     if (ro && !readOnlyEnforced(base(prov), routes)) { trace.push({ provider: prov, skip: "no enforced sensitive-read guard for this provider (read-only task types never run on it)" }); continue; }
@@ -407,6 +407,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
     if (j.agentId || wt) retire(j.agentId, wt); // a timed-out agent must not keep running while the next entry works
   }
+  if (!partial && trace.length && trace.every((t) => /^provider not configured/.test(t.skip ?? ""))) trace.push({ error: `no provider configured for ${o.type}: add one in Settings > Providers` });
   return partial ? { used: null, status: "permission", partial, trace } : { used: null, trace };
 }
 

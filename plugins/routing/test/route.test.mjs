@@ -7,7 +7,7 @@ const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-
 const routes = { readOnlyEnforced: ALL, readOnlyModes: { codex: "auto", qwen: "plan" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
 const fake = (script) => {
   const calls = [];
-  const f = (args) => { calls.push(args); return args[0] === "worktree" && args[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : args[0] === "ls" ? (script.ls ?? []) : args[0] === "stop" ? {} : script.run(args); };
+  const f = (args) => { calls.push(args); return args[0] === "worktree" && args[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : args[0] === "ls" ? (script.ls ?? []) : args[0] === "stop" ? {} : args[0] === "provider" ? (script.providers ?? {}) : script.run(args); };
   f.calls = calls; return f;
 };
 const o = { type: "edit", prompt: "p", cwd: "/r", session: "S1", dev: "d", client: "claude", answerRetryMs: 0 };
@@ -142,7 +142,7 @@ test("doctor version comparison", () => {
 
 test("DAEMON_UNREACHABLE on start is retried up to 3 times with backoff, then succeeds", () => {
   let n = 0; const waits = [];
-  const raw = (args) => (args[0] === "ls" ? [] : ["logs", "stop", "archive", "project"].includes(args[0]) ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
+  const raw = (args) => (args[0] === "ls" ? [] : ["logs", "stop", "archive", "project", "provider"].includes(args[0]) ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
   const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms), jitter: () => 0 }), routes);
   assert.equal(r.used, "codex/a"); assert.equal(n, 3); assert.deepEqual(waits, [2000, 4000]);
 });
@@ -287,7 +287,7 @@ test("markActive writes a per-route marker and the slot total; the returned fn r
 });
 
 test("read-only types use each provider's read-only mode, in or out of a worktree, ignoring caller and routes modes", () => {
-  const prov = { claude: "plan", "claude-clean": "plan", "qwen-code": "plan", "qwen-code-2": "plan", "qwen-laptop": "plan", opencode: "plan", qoder: "dontAsk" };
+  const prov = { claude: "plan", "claude-clean": "plan", "qwen-code": "read-only", "qwen-code-2": "read-only", "qwen-laptop": "read-only", opencode: "plan", qoder: "dontAsk" };
   assert.deepEqual(Object.fromEntries(Object.entries(prov).map(([k]) => [k, READ_ONLY_MODES[k]])), prov);
   assert.equal(READ_ONLY_MODES.codex, undefined);
   for (const [p, m] of Object.entries(prov)) for (const worktree of [false, true]) {
@@ -578,7 +578,7 @@ test("codex has no read-only mode: a read-only type skips it, an edit type still
   const runs = [];
   const p = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { status: "completed", agentId: "Z" }; } return a[0] === "worktree" && a[1] === "create" ? { name: "wt-x", worktreePath: "/wt/x" } : a[0] === "ls" ? [] : {}; };
   const r = runRoute({ type: "summarise", prompt: "x", cwd: process.cwd() }, p, rt);
-  assert.deepEqual(runs, ["qwen-code-ro/b"]); assert.match(JSON.stringify(r.trace), /no read-only mode/);
+  assert.deepEqual(runs, ["qwen-code/b"]); assert.match(JSON.stringify(r.trace), /no read-only mode/);
   runs.length = 0; runRoute({ type: "edit", prompt: "x", cwd: process.cwd(), worktree: true, base: "a".repeat(40) }, p, rt);
   assert.deepEqual(runs, ["codex/a"]);
 });
@@ -608,16 +608,14 @@ test("no read-only chain in routes.template.json / routes.local.json holds an un
   }
 });
 
-import { roTwin } from "../route.mjs";
 import { qwenEnv, takeReadOnlyFlag, QWEN_SYSTEM_SETTINGS, QWEN_SYSTEM_SETTINGS_RO } from "../office.mjs";
-test("read-only tasks launch Qwen on its -ro twin provider; edit tasks and other providers are untouched; nothing is written under cwd", async () => {
-  assert.equal(roTwin("qwen-laptop"), "qwen-laptop-ro"); assert.equal(roTwin("qwen-code-2/x"), "qwen-code-2-ro/x"); assert.equal(roTwin("claude-clean/h"), "claude-clean/h");
+test("read-only tasks run on the SAME Qwen provider in session mode read-only (no -ro twin); edit tasks use the routes mode; nothing is written under cwd", async () => {
   const { mkdtempSync, readdirSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
-  const d = mkdtempSync(join(tmpdir(), "ro-")); const used = [];
-  const p = fake({ run: (a) => { if (a[0] === "run") used.push(a[a.indexOf("--provider") + 1]); return { status: "completed", agentId: "A" }; } });
+  const d = mkdtempSync(join(tmpdir(), "ro-")); const used = []; const modes = [];
+  const p = fake({ run: (a) => { if (a[0] === "run") { used.push(a[a.indexOf("--provider") + 1]); modes.push(a.includes("--mode") ? a[a.indexOf("--mode") + 1] : null); } return { status: "completed", agentId: "A" }; } });
   runRoute({ ...o, type: "summarise", cwd: d, provider: "qwen-code" }, p, { slots: {}, routes: { summarise: [] } });
   runRoute({ ...o, type: "code-edit", cwd: d, provider: "qwen-code" }, p, { slots: {}, routes: { "code-edit": [] } });
-  assert.deepEqual(used, ["qwen-code-ro", "qwen-code"]); assert.deepEqual(readdirSync(d), []);
+  assert.deepEqual(used, ["qwen-code", "qwen-code"]); assert.deepEqual(modes, ["read-only", null]); assert.deepEqual(readdirSync(d), []);
 });
 test("the Qwen deny settings env var is set only for the read-only launcher", () => {
   const a = ["x", "--read-only", "y"]; assert.equal(takeReadOnlyFlag(a), true); assert.deepEqual(a, ["x", "y"]); assert.equal(takeReadOnlyFlag(a), false);

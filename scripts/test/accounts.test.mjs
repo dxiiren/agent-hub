@@ -110,7 +110,7 @@ test('display names are unique: a taken label is refused, a taken auto-default g
   await edit('qwen-b', { slots: '5' }, p, o); assert.equal(L()['qwen-b'], 'Qwen Code 10.1.2.3 #2', 'edit keeps its own name without colliding with itself');
 });
 
-test('names: any lower-case id is accepted; empty name is made from the display name (unique); a non-"qwen" name still gets its read-only twin routed', async () => {
+test('names: any lower-case id is accepted; empty name is made from the display name (unique); a non-"qwen" name is read-only capable through its own id', async () => {
   const { p, read } = box();
   const o = { f: async () => ({ ok: true, json: async () => ({ data: [{ id: 'm' }] }) }), which: () => 'qwen' };
   assert.equal(slug('Lab box #2'), 'lab-box-2');
@@ -120,10 +120,9 @@ test('names: any lower-case id is accepted; empty name is made from the display 
   assert.equal(r2.name, 'lab-box-2');
   const r3 = await add({ url: 'http://10.1.2.3:8002/v1', model: 'm', label: 'Lab box' + ' x' }, p, o);
   assert.equal(r3.name, 'lab-box-x');
-  assert.ok(read('paseo').agents.providers['lab-box-ro'], 'twin exists'); assert.deepEqual(read('routes').twins, ['lab-box', 'lab-box-2', 'lab-box-x']);
-  const { roTwin } = await import('../../plugins/routing/route.mjs');
-  assert.equal(roTwin('lab-box', read('routes')), 'lab-box-ro'); assert.equal(roTwin('lab-box', {}), 'lab-box');
-  remove('lab-box', p); remove('lab-box-2', p); remove('lab-box-x', p); assert.equal(read('routes').twins, undefined);
+  assert.ok(!Object.keys(read('paseo').agents.providers).some((k) => k.endsWith('-ro')), 'no twin entries'); assert.equal(read('routes').twins, undefined);
+  assert.equal(read('routes').readOnlyModes['lab-box'], 'read-only'); assert.ok(read('routes').readOnlyEnforced.includes('lab-box'));
+  remove('lab-box', p); remove('lab-box-2', p); remove('lab-box-x', p); assert.equal(read('routes').readOnlyModes, undefined);
 });
 
 test('load-models path: UI verb -> backend -> GET <base>/v1/models fills the list; failure returns the reason and what to fix', async () => {
