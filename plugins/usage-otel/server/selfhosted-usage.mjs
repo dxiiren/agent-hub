@@ -10,7 +10,7 @@ const readJson = (f) => { try { if (!f) return {}; return JSON.parse(readFileSyn
 const nonRo = (s) => s.replace(/-ro$/, "");
 export const paseoHome = (env = process.env) => env.PASEO_HOME ?? join(homedir(), ".paseo");
 
-/** Providers with an HTTP endpoint, read from the Paseo config (never hard-coded): [{name, base, key?, metricsUrl?}]. Read-only twins (-ro) are folded into their base. */
+/** Providers with an HTTP endpoint, read from the Paseo config (never hard-coded): [{name, label, kind, base, key?, metricsUrl?}]. Read-only twins (-ro) are folded into their base. */
 export function selfHostedProviders(cfg, local = {}) {
   const all = cfg?.agents?.providers ?? {};
   const out = [];
@@ -20,10 +20,23 @@ export function selfHostedProviders(cfg, local = {}) {
     let base = cmd.find((a) => /^https?:\/\//i.test(a));
     if (!base && p?.env?.LAPTOP_PORT) base = `http://127.0.0.1:${p.env.LAPTOP_PORT}/v1`; // the hub's laptop llama.cpp launcher serves on a local port
     if (!base) continue;
-    out.push({ name, label: String(p?.label || name), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: local.metricsUrls?.[name] });
+    const label = String(p?.label || name);
+    out.push({ name, label, kind: kindOfProvider(name, label, base, local), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: local.metricsUrls?.[name] });
   }
   return out;
 }
+
+const hostOfUrl = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
+const LOOPBACK = ["127.0.0.1", "localhost", "::1", "[::1]"];
+/** Provider kind label: local config `kinds[name]` wins; else the display label minus its trailing "where it runs" word (the endpoint host, an IP/hostname, or any last word for a loopback endpoint). */
+export function kindOfProvider(name, label, base, local = {}) {
+  if (local.kinds?.[name]) return String(local.kinds[name]);
+  const words = label.trim().split(/\s+/);
+  const host = hostOfUrl(base), last = words[words.length - 1];
+  const where = words.length > 1 && (last === host || /^\d{1,3}(\.\d{1,3}){3}$/.test(last) || /^[\w-]+(\.[\w-]+)+$/.test(last) || LOOPBACK.includes(host));
+  return where ? words.slice(0, -1).join(" ") : label;
+}
+export const kindId = (kind) => kind.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "kind";
 
 export const modelsUrl = (base) => base.replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/models";
 
@@ -51,16 +64,23 @@ export function parseMetrics(text) {
 
 const fmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 
-/** Probe result + tallies -> Paseo UsageReport. Pure. probe = {up, model?, error?, metrics?}. No plan percentage is invented. */
-export function toReport(p, t) {
+const tone = (up, total) => (up === total ? "ok" : up === 0 ? "danger" : "warning");
+const line = (t) => `${fmt(t.in)} in / ${fmt(t.out)} out, ${t.n} tasks`;
+/** Endpoints of one kind -> ONE Paseo UsageReport: a status row, TOTAL rows, then one row per endpoint (Paseo's UsageDetail has no collapse/children, so they are plain rows).
+ *  items = [{label, probe:{up, model?, error?, metrics?}, t:tally}]. Pure. No plan percentage is invented. */
+export function groupReport(items) {
+  const up = items.filter((i) => i.probe.up).length, n = items.length, sum = (k) => items.reduce((a, i) => ({ in: a.in + i.t[k].in, out: a.out + i.t[k].out, n: a.n + i.t[k].n }), { in: 0, out: 0, n: 0 });
   const details = [
-    { id: "status", label: "Endpoint", value: p.up ? "up" : `down${p.error ? ` (${p.error})` : ""}`, tone: p.up ? "ok" : "danger" },
-    ...(p.up && p.model ? [{ id: "model", label: "Model", value: p.model }] : []),
-    { id: "today", label: "Today", value: `${fmt(t.today.in)} in / ${fmt(t.today.out)} out, ${t.today.n} tasks` },
-    { id: "week", label: "Last 7 days", value: `${fmt(t.week.in)} in / ${fmt(t.week.out)} out, ${t.week.n} tasks` },
-    ...(p.metrics ? [{ id: "load", label: "Requests", value: `${p.metrics.running ?? "?"} running, ${p.metrics.queued ?? "?"} queued` }] : []),
+    { id: "status", label: "Endpoints", value: `${up} of ${n} up`, tone: tone(up, n) },
+    { id: "total-today", label: "Total today", value: line(sum("today")) },
+    { id: "total-week", label: "Total last 7 days", value: line(sum("week")) },
+    ...items.map((i, k) => ({
+      id: `ep-${k}`, label: i.label,
+      value: [i.probe.up ? "up" : `down${i.probe.error ? ` (${i.probe.error})` : ""}`, i.probe.up && i.probe.model, i.probe.metrics && `${i.probe.metrics.running ?? "?"} running, ${i.probe.metrics.queued ?? "?"} queued`, `today ${line(i.t.today)}`].filter(Boolean).join(" · "),
+      tone: i.probe.up ? "ok" : "danger",
+    })),
   ];
-  return { status: "available", planLabel: p.up ? "self-hosted, up" : "self-hosted, down", windows: [], details };
+  return { status: "available", planLabel: `${n} endpoint${n === 1 ? "" : "s"}, ${up} up`, windows: [], details };
 }
 
 /** GET <base>/models (and the optional metrics URL) with a short timeout. Never throws; the key is sent as a Bearer token and never returned. */
@@ -76,17 +96,18 @@ export async function probe(pv, { f = fetch, timeoutMs = 4000 } = {}) {
 }
 
 const cache = new Map();
-/** Cached (default 60 s) report for one provider name; config and usage feed are re-read on a miss. */
-export async function selfHostedReport(name, { env = process.env, ttlMs = 60_000, now = Date.now, f = fetch, readFeed } = {}) {
-  const hit = cache.get(name);
+/** Cached (default 60 s) report for one provider KIND (kindId); config and usage feed are re-read on a miss. */
+export async function selfHostedReport(id, { env = process.env, ttlMs = 60_000, now = Date.now, f = fetch, readFeed } = {}) {
+  const hit = cache.get(id);
   if (hit && now() - hit.at < ttlMs) return hit.r;
   const home = paseoHome(env);
   const local = readJson(localConfigPath(env));
-  const pv = selfHostedProviders(readJson(join(home, "config.json")), local).find((x) => x.name === name);
-  if (!pv) return { status: "error", error: `provider ${name} not configured` };
+  const members = selfHostedProviders(readJson(join(home, "config.json")), local).filter((x) => kindId(x.kind) === id);
+  if (!members.length) return { status: "error", error: `provider kind ${id} not configured` };
   const feed = (readFeed ?? (() => { try { return readFileSync(join(env.AGENT_HUB_USAGE_DIR ?? join(home, "usage"), "usage.jsonl"), "utf8"); } catch { return ""; } }))();
-  const r = toReport(await probe(pv, { f }), tally(feed, name, now()));
-  cache.set(name, { r, at: now() });
+  const items = await Promise.all(members.map(async (pv) => ({ label: pv.label, probe: await probe(pv, { f }), t: tally(feed, pv.name, now()) })));
+  const r = groupReport(items);
+  cache.set(id, { r, at: now() });
   return r;
 }
 export const _resetForTest = () => cache.clear();

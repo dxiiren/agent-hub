@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { selfHostedProviders, tally, parseMetrics, toReport, probe, selfHostedReport, _resetForTest } from "../server/selfhosted-usage.mjs";
+import { selfHostedProviders, tally, parseMetrics, groupReport, kindOfProvider, kindId, probe, selfHostedReport, _resetForTest } from "../server/selfhosted-usage.mjs";
 
 const cfg = { agents: { providers: {
   "qwen-a": { command: ["node", "x.mjs", "qwen", "http://h:1/v1", "m"], env: { HUB_OPENAI_API_KEY: "SECRET" } },
@@ -35,13 +35,32 @@ test("metrics parsed for vllm, sglang, llama.cpp; null when absent", () => {
   assert.deepEqual(parseMetrics("sglang:num_running_reqs 1\nsglang:num_queue_reqs 0"), { running: 1, queued: 0 });
   assert.equal(parseMetrics("foo 1"), null);
 });
-test("toReport: up is ok, down is danger, no plan windows", () => {
-  const t = tally("", "x");
-  const up = toReport({ up: true, model: "M", metrics: { running: 1, queued: 0 } }, t);
-  assert.equal(up.details[0].tone, "ok"); assert.deepEqual(up.windows, []);
-  assert.ok(up.details.some((d) => d.id === "load") && up.details.some((d) => d.value === "M"));
-  const dn = toReport({ up: false, error: "ECONNREFUSED" }, t);
-  assert.equal(dn.details[0].tone, "danger"); assert.ok(!dn.details.some((d) => d.id === "model"));
+const T = (i, o, n) => ({ in: i, out: o, n });
+const item = (label, probe, today = T(0, 0, 0), week = today) => ({ label, probe, t: { today, week } });
+test("groupReport: totals across endpoints, one row per endpoint, tone ok / warning / danger", () => {
+  const up = item("Qwen Code a", { up: true, model: "M", metrics: { running: 1, queued: 0 } }, T(1500, 20, 2), T(3000, 40, 5));
+  const dn = item("Qwen Code b", { up: false, error: "ECONNREFUSED" }, T(500, 5, 1), T(500, 5, 1));
+  const r = groupReport([up, dn]), d = Object.fromEntries(r.details.map((x) => [x.id, x]));
+  assert.equal(r.planLabel, "2 endpoints, 1 up"); assert.deepEqual(r.windows, []);
+  assert.deepEqual([d.status.value, d.status.tone], ["1 of 2 up", "warning"]);
+  assert.equal(d["total-today"].value, "2.0k in / 25 out, 3 tasks");
+  assert.equal(d["total-week"].value, "3.5k in / 45 out, 6 tasks");
+  assert.deepEqual([d["ep-0"].tone, d["ep-1"].tone], ["ok", "danger"]);
+  assert.ok(d["ep-0"].value.includes("M") && d["ep-0"].value.includes("1 running") && d["ep-1"].value.startsWith("down (ECONNREFUSED)"));
+  assert.equal(groupReport([dn]).details[0].tone, "danger");
+  assert.equal(groupReport([up, up]).details[0].tone, "ok");
+});
+test("groupReport: a single endpoint still gets a full card", () => {
+  const r = groupReport([item("Solo", { up: true }, T(1, 1, 1))]);
+  assert.equal(r.planLabel, "1 endpoint, 1 up"); assert.equal(r.details.length, 4);
+});
+test("kind: local config override, else label minus its trailing where-it-runs word", () => {
+  assert.equal(kindOfProvider("a", "Qwen Code 10.0.0.5", "http://10.0.0.5:1/v1"), "Qwen Code");
+  assert.equal(kindOfProvider("a", "Qwen Code box.lan", "http://box.lan:1/v1"), "Qwen Code");
+  assert.equal(kindOfProvider("a", "Qwen Code laptop", "http://127.0.0.1:8080/v1"), "Qwen Code");
+  assert.equal(kindOfProvider("a", "Qwen Code", "http://h:1/v1"), "Qwen Code");
+  assert.equal(kindOfProvider("a", "Whatever x", "http://h:1/v1", { kinds: { a: "My Kind" } }), "My Kind");
+  assert.equal(kindId("Qwen Code"), "qwen-code");
 });
 test("probe + cache against a local stub; key is sent but never in the report", async () => {
   let hits = 0, auth;
@@ -58,11 +77,11 @@ test("probe + cache against a local stub; key is sent but never in the report", 
   const r1 = await selfHostedReport("qwen-s", { env, readFeed: feed });
   await selfHostedReport("qwen-s", { env, readFeed: feed });
   assert.equal(hits, 1, "second call served from cache");
-  assert.ok(!JSON.stringify(r1).includes("SECRET")); assert.ok(r1.details.some((d) => d.value.startsWith("1.5k in")));
+  assert.ok(!JSON.stringify(r1).includes("SECRET")); assert.ok(r1.details.some((d) => d.id === "total-today" && d.value.startsWith("1.5k in")));
   await new Promise((r) => srv.close(r));
   _resetForTest();
   const down = await selfHostedReport("qwen-s", { env, readFeed: feed });
-  assert.equal(down.details[0].tone, "danger");
+  assert.equal(down.details[0].tone, "danger"); assert.equal(down.planLabel, "1 endpoint, 0 up");
 });
 
 test("card label is the provider's configured display name, falling back to the id", () => {

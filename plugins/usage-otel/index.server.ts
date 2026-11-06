@@ -5,7 +5,7 @@ import { fillRecord, qoderCredits, qoderSession, qwenSession } from "./server/si
 import { join } from "node:path";
 import { z } from "zod";
 import { qoderSummary, toReport } from "./server/qoder-usage.mjs";
-import { paseoHome, selfHostedProviders, selfHostedReport } from "./server/selfhosted-usage.mjs";
+import { paseoHome, selfHostedProviders, selfHostedReport, kindId } from "./server/selfhosted-usage.mjs";
 import { readFileSync } from "node:fs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
@@ -41,17 +41,19 @@ export default function contribute(server: PluginServerContext) {
     discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
     fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
-  // One usage source per self-hosted OpenAI-compatible provider, so the card title is the provider's configured display name.
+  // One usage source (one card) per self-hosted provider KIND, e.g. "Qwen Code": totals first, then a row per endpoint.
   // Read from the Paseo config at plugin load: a provider added later shows up after the plugin is reloaded.
   let cfg: any = {};
   try { cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { /* no config: no cards */ }
-  for (const p of selfHostedProviders(cfg)) {
+  const kinds = new Map<string, string>();
+  for (const p of selfHostedProviders(cfg)) kinds.set(kindId(p.kind), p.kind);
+  for (const [id, kind] of kinds) {
     server.registerUsageSource({
-      id: `selfhosted-${p.name}`,
-      label: p.label,
-      input: z.object({ name: z.string() }),
-      discover: async () => [{ key: p.name, label: p.name, harness: "Self-hosted", input: { name: p.name } }],
-      fetch: async (input: { name: string }) => { try { return await selfHostedReport(input.name); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+      id: `selfhosted-${id}`,
+      label: kind,
+      input: z.object({ id: z.string() }),
+      discover: async () => [{ key: id, label: kind, harness: "Self-hosted", input: { id } }],
+      fetch: async (input: { id: string }) => { try { return await selfHostedReport(input.id); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
     });
   }
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
