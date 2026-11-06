@@ -20,6 +20,8 @@ if ($env:AGENT_HUB_NO_USAGE_STACK -ne '1') { Start-Process powershell.exe -Windo
 $paseo = (Get-Command paseo.cmd -ErrorAction SilentlyContinue).Source
 if (-not $paseo) { $paseo = (Get-Command paseo -ErrorAction Stop).Source }
 # Own hidden console + new process group: a stray CTRL_C_EVENT aimed at another console group (e.g. os.kill(pid, 0) on Windows) cannot reach the daemon.
-$p = Start-Process -FilePath $paseo -ArgumentList @('daemon','run','--home',$Home_) -WindowStyle Hidden -PassThru
+# Through scripts/daemon-env.mjs: the daemon and every agent it starts get an allow-listed environment (no tokens, keys or passwords of the launching shell).
+$node = (Get-Command node.exe -ErrorAction Stop).Source
+$p = Start-Process -FilePath $node -ArgumentList @((Join-Path $Repo 'scripts\daemon-env.mjs'),$paseo,'daemon','run','--home',$Home_) -WindowStyle Hidden -PassThru
 $p.WaitForExit()
 exit $p.ExitCode

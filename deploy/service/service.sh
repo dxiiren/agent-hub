@@ -4,11 +4,12 @@ set -u
 ACTION="${1:-}"
 UNIT=agent-hub
 HOME_DIR="${AGENT_HUB_HOME:-$HOME/.paseo}"
+LAUNCH="$(cd "$(dirname "$0")/../.." && pwd)/scripts/daemon-env.mjs" # allow-listed environment for the daemon and its agents
 DIR="$HOME/.config/systemd/user"
 have() { command -v "$1" >/dev/null 2>&1; }
 if ! have systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
   case "$ACTION" in
-    start) paseo daemon start --home "$HOME_DIR"; exit $? ;;
+    start) node "$LAUNCH" "$(command -v paseo)" daemon start --home "$HOME_DIR"; exit $? ;;
     stop) paseo daemon stop --home "$HOME_DIR"; exit $? ;;
     status) paseo daemon status --home "$HOME_DIR"; exit $? ;;
     *) echo "[SKIP] no systemd user session here (container or non-systemd host): the daemon runs via 'just up'"; exit 0 ;;
@@ -24,7 +25,7 @@ Description=Agent Hub (Paseo daemon)
 After=network-online.target
 
 [Service]
-ExecStart=$PASEO daemon run --home $HOME_DIR
+ExecStart=$(command -v node) $LAUNCH $PASEO daemon run --home $HOME_DIR
 Restart=on-failure
 RestartSec=5
 

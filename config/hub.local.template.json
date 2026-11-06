@@ -1,4 +1,5 @@
 {
+  "daemonEnvAllow": [],
   "_comment": "Copy to config/hub.local.json (git-ignored) or set the same values as environment variables. All keys are optional: a provider whose input is missing is skipped.",
   "officeQwenUrl": "<OFFICE_QWEN_URL>",
   "officeQwenModel": "<OFFICE_QWEN_MODEL>",

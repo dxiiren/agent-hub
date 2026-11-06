@@ -9,9 +9,9 @@ if (-not $paseo) { $paseo = (Get-Command paseo -ErrorAction Stop).Source }
 if ($env:AGENT_HUB_PASEO) { $paseo = $env:AGENT_HUB_PASEO }  # test hook: a fake paseo
 # Run paseo without letting its stderr lines become terminating errors (PS 5.1 + EAP Stop turns native stderr into
 # NativeCommandError, so `just down` failed with exit 1 although the daemon stopped).
-function Invoke-Paseo { param([string[]]$PaseoArgs)
+function Invoke-Paseo { param([string[]]$PaseoArgs, [switch]$Scrub)
   $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  try { & $paseo @PaseoArgs 2>&1 | ForEach-Object { "$_" } | Out-Host; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
+  try { if ($Scrub) { & node (Join-Path $PSScriptRoot '..\..\scripts\daemon-env.mjs') $paseo @PaseoArgs 2>&1 | ForEach-Object { "$_" } | Out-Host } else { & $paseo @PaseoArgs 2>&1 | ForEach-Object { "$_" } | Out-Host }; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
   if ($code -and $code -ne 0) { Write-Host "[WARN] paseo $($PaseoArgs -join ' ') exited $code" }
 }
 # The usage UI must survive a reboot: bring Docker Desktop and the usage stack up (hidden, non-blocking, skipped in tests).
@@ -29,7 +29,7 @@ switch ($Action) {
     Write-Host "[OK] task '$Task' registered (logon + every minute, IgnoreNew)"
   }
   'uninstall' { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue; Invoke-Paseo @('daemon','stop','--home',$Home_); Unregister-ScheduledTask -TaskName $Task -Confirm:$false; Write-Host "[OK] task '$Task' removed" } else { Write-Host "[OK] task '$Task' not present" } }
-  'start'     { Start-UsageStack; if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[OK] task '$Task' started" } else { Invoke-Paseo @('daemon','start','--home',$Home_) } }
+  'start'     { Start-UsageStack; if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[OK] task '$Task' started" } else { Invoke-Paseo @('daemon','start','--home',$Home_) -Scrub } }
   'stop'      { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $Task | Out-Null; Stop-ScheduledTask -TaskName $Task }; Invoke-Paseo @('daemon','stop','--home',$Home_) }  # disabled so the 1-minute trigger cannot revive it; start re-enables
   'status'    { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Get-ScheduledTask -TaskName $Task | Get-ScheduledTaskInfo | Format-List TaskName, LastRunTime, LastTaskResult }; Invoke-Paseo @('daemon','status','--home',$Home_) }
 }
