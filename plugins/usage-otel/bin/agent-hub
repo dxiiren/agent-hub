@@ -5,6 +5,7 @@ case "$1" in
   doctor) shift; exec node "$d/../../../scripts/hub.mjs" doctor "$@" ;;
   provider) shift; exec node "$d/../../../scripts/hub.mjs" provider "$@" ;;
   route) shift; exec node "$d/../../routing/route.mjs" "$@" ;;
+  cleanup) shift; exec node "$d/../../routing/cleanup.mjs" "$@" ;;
   reply) exec node "$d/../../routing/route.mjs" "$@" ;;
-  *) echo 'usage: agent-hub usage --session ID [--json] | agent-hub doctor [--deep] | agent-hub provider add|list|remove | agent-hub route TYPE "prompt" [opts] | agent-hub reply AGENTID "text"' >&2; exit 2 ;;
+  *) echo 'usage: agent-hub usage --session ID [--json] | agent-hub doctor [--deep] | agent-hub provider add|list|remove | agent-hub route TYPE "prompt" [opts] | agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] | agent-hub reply AGENTID "text"' >&2; exit 2 ;;
 esac

@@ -44,5 +44,21 @@ class Pollers(unittest.TestCase):
         self.assertIn('credits_remaining{provider="qoder",dev="d"} 2707', qp.prom(s, "d"))
 
 
+
+class ProcTree(unittest.TestCase):
+    def test_kill_descendants_ends_children_and_grandchildren(self):
+        import subprocess, time
+        import proctree
+        code = "import subprocess,sys,time;g=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);print(g.pid,flush=True);time.sleep(60)"
+        c = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        gpid = int(c.stdout.readline())
+        pids = proctree.kill_descendants()
+        self.assertIn(c.pid, pids)
+        self.assertIn(gpid, pids)
+        c.wait(timeout=10)
+        time.sleep(0.5)
+        self.assertNotIn(gpid, proctree.descendants() + [p for v in proctree._children_map().values() for p in v])
+
+
 if __name__ == "__main__":
     unittest.main()

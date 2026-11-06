@@ -60,6 +60,10 @@ update *flags:
 doctor *flags:
     node scripts/hub.mjs doctor {{flags}}
 
+# Archive finished/idle agents agent-hub created (--older-than 30m, --dry-run); --all also other users' finished agents.
+cleanup *flags:
+    node plugins/routing/cleanup.mjs {{flags}}
+
 # Register the agent-hub MCP server in every installed client (backs up first; only the agent-hub entry).
 mcp-add:
     node scripts/hub.mjs mcp add

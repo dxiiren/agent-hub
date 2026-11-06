@@ -1,5 +1,5 @@
 // Qoder row for the Paseo web UI Usage panel (plugin usage source). Data = the account quota qoder_poll.py already reads (no new meter).
-import { execFile } from "node:child_process";
+import { execFileTree } from "./exec-tree.mjs";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -24,7 +24,7 @@ export function toReport(s) {
 /** Run qoder_poll.py (about 3 s) and return its JSON summary; rejects on failure. Slow on a loaded laptop (3 s idle, 30 s+ busy), so use qoderSummary() for the panel. */
 export function pollQoder(env = process.env) {
   const dir = env.AGENT_HUB_POLLER_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", "pollers");
-  return new Promise((res, rej) => execFile(env.AGENT_HUB_PYTHON ?? "python", [join(dir, "qoder_poll.py")], { encoding: "utf8", timeout: 90_000 }, (e, out) => {
+  return new Promise((res, rej) => execFileTree(env.AGENT_HUB_PYTHON ?? "python", [join(dir, "qoder_poll.py")], { env, timeout: 90_000 }, (e, out) => {
     try { res(JSON.parse(out)); } catch { rej(e ?? new Error("qoder_poll.py printed no JSON")); }
   }));
 }

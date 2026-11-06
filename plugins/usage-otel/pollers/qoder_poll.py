@@ -2,6 +2,8 @@
 Needs `pip install qoder-agent-sdk`. Optional per-day credits: set AGENT_HUB_QCREDITS_CMD to a command printing {"groups": {"YYYY-MM-DD": {"credits": N}}}.
 Usage: qoder_poll.py [--prom] [--dev NAME]"""
 import asyncio, json, os, shlex, subprocess, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import proctree
 from datetime import datetime, timezone
 
 
@@ -11,7 +13,10 @@ def fetch_usage():
     async def go():
         async with QoderSDKClient(QoderAgentOptions(auth={"type": "qodercli"})) as c:
             return await c.get_usage_info()
-    return asyncio.run(go()) or {}
+    try:
+        return asyncio.run(go()) or {}
+    finally:
+        proctree.kill_descendants()  # the SDK's bundled qodercli must not outlive the poll, also on error/timeout/signal
 
 
 def reset_iso(ms):
@@ -44,6 +49,7 @@ def main(argv):
             groups = json.loads(subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=60).stdout)["groups"]
         except Exception:
             groups = None
+    proctree.die_on_signal()
     s = summarize(fetch_usage(), groups)
     dev = argv[argv.index("--dev") + 1] if "--dev" in argv else os.environ.get("AGENT_HUB_DEV", "")
     sys.stdout.write(prom(s, dev) if "--prom" in argv else json.dumps(s) + "\n")

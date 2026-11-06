@@ -19,6 +19,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrate } from './provider.mjs';
 import { spawnSyncSafe } from '../plugins/routing/spawn-safe.mjs';
+import { DOCTOR_LABEL } from '../plugins/routing/cleanup.mjs';
 
 const WIN = process.platform === 'win32';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -173,6 +174,7 @@ async function latestChecks(conf) {
   const rows = inventory(); console.log('\nTOOL         INSTALLED  LATEST     STATE\n' + table(rows));
   for (const r of rows) if (r.verdict === 'UPDATE') console.log(`NOTE  ${r.name} is behind: \`just update${r.pinned ? ' --paseo' : ''}\``);
 }
+const retire = (id) => { paseo(['stop', id]); paseo(['archive', id]); };
 async function doctor(deep) {
   try { // the secret scanner: the gate and the reply scan fail closed without it
     const g = await import('../plugins/gate/server/gate.mjs');
@@ -219,21 +221,28 @@ async function doctor(deep) {
   await latestChecks(readJson(join(HOME, 'config.json'), {}));
   if (deep) {
     const dir = mkdtempSync(join(tmpdir(), 'hub-doctor-'));
+    const made = new Set(); // every agent this run created, archived by id in the finally below
+    try {
     const model = { codex: 'codex/gpt-6.1-terra', 'claude-clean': 'claude-clean/claude-haiku-5-5' };
     for (const id of want.filter((x) => !(x.startsWith('qwen-laptop') && refused) && !/unavail|disabled/i.test(list.find((e) => (e.provider || e.id || e.name) === x)?.status || '') && // a provider the daemon reports unavailable or disabled (no CLI on this machine) is not a failure
        (!process.env.AGENT_HUB_ONLY || x === process.env.AGENT_HUB_ONLY))) {
       // a model may add a word to a one-word reply: up to 3 tries, the check itself stays strict
       let r, j, aid, good = false;
       for (let attempt = 0; attempt < 3 && !good; attempt++) {
-        if (aid) paseo(['delete', aid]);
-        r = paseo(['run', '--provider', model[id] || id, '--cwd', dir, '--wait-timeout', '240s', '--json', '--', 'Reply with exactly the word OK and do nothing else.']);
+        if (aid) retire(aid);
+        r = paseo(['run', '--label', DOCTOR_LABEL, '--provider', model[id] || id, '--cwd', dir, '--wait-timeout', '240s', '--json', '--', 'Reply with exactly the word OK and do nothing else.']);
         j = {}; try { j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))); } catch { /* keep raw */ }
-        aid = j.agentId || j.id;
+        aid = j.agentId || j.id; if (aid) made.add(aid);
         const reply = aid ? paseo(['logs', aid]).stdout || '' : '';
         good = j.status === 'completed' && reply.split(String.fromCharCode(10)).some((l) => l.trim() === 'OK'); // the agent's own line, not the prompt echo
       }
       row(good, `provider ${id}: live task`, good ? 'replied OK' : `status ${j.status || 'none'}; ${out(r).slice(0, 120).replace(/\s+/g, ' ')}`);
-      if (aid) paseo(['delete', aid]);
+      if (aid) retire(aid);
+    }
+    } finally {
+      for (const a of made) retire(a);
+      try { const { cleanup } = await import('../plugins/routing/cleanup.mjs'); cleanup({ paseo: (a) => { try { return JSON.parse(paseo([...a, '--json']).stdout || '[]'); } catch { return []; } }, routes: {} }); } catch { /* the by-id archive above is the primary path */ } // backstop: a run that timed out before returning its id
+      rmSync(dir, { recursive: true, force: true });
     }
   }
   console.log(fails ? `\n${fails} check(s) FAILED` : '\nall checks PASSED');
