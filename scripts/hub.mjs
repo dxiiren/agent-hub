@@ -223,7 +223,8 @@ async function doctor(deep) {
   if (deep) {
     const dir = mkdtempSync(join(tmpdir(), 'hub-doctor-'));
     const model = { codex: 'codex/gpt-6.1-terra', 'claude-clean': 'claude-clean/claude-haiku-5-5' };
-    for (const id of want.filter((x) => !(x.startsWith('qwen-laptop') && refused) && (!process.env.AGENT_HUB_ONLY || x === process.env.AGENT_HUB_ONLY))) {
+    for (const id of want.filter((x) => !(x.startsWith('qwen-laptop') && refused) && !/unavail|disabled/i.test(list.find((e) => (e.provider || e.id || e.name) === x)?.status || '') && // a provider the daemon reports unavailable or disabled (no CLI on this machine) is not a failure
+       (!process.env.AGENT_HUB_ONLY || x === process.env.AGENT_HUB_ONLY))) {
       // a model may add a word to a one-word reply: up to 3 tries, the check itself stays strict
       let r, j, aid, good = false;
       for (let attempt = 0; attempt < 3 && !good; attempt++) {
