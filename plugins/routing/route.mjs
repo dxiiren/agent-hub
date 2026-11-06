@@ -203,13 +203,21 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
   };
   const done = (r, wt) => { retire(r.agentId, wt); return r; };
-  let partial = null;
+  let partial = null; let ramLeftMs;
   for (const entry of chain) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && [base(prov), base(prov) + "-ro"].includes(a.provider)).length;
     if (busy >= (slots[base(prov)] ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${slots[base(prov)]}` }); continue; }
+    // RAM admission (09:10-09:14 hang: 15 tasks, <1 GB free): wait with backoff for free RAM before creating an agent; give up on this entry at waitTimeout. Only when the caller passes freeMem (main() does; unit tests that do not, never read the real machine).
+    if (o.freeMem) {
+      const floor = routes.minFreeRamGbByProvider?.[base(prov)] ?? routes.minFreeRamGb ?? 2;
+      const sleep = o.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
+      ramLeftMs ??= toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m") * 1000;
+      let wait = 2000; while (o.freeMem() < floor && ramLeftMs > 0) { sleep(wait); ramLeftMs -= wait; wait = Math.min(wait * 2, 30000); }
+      if (o.freeMem() < floor) { trace.push({ provider: prov, skip: `low RAM: ${o.freeMem().toFixed(1)} GB free, floor ${floor} GB` }); continue; }
+    }
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     let wt = null; // this entry's route-created worktree
     const ro0 = readOnlyType(o.type, routes);
@@ -272,6 +280,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
 export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage", "active")) {
   try {
     mkdirSync(dir, { recursive: true });
+    for (const n of readdirSync(dir)) { // sweep markers of killed routes (the reader ignores them after 30 min anyway)
+      if (!n.startsWith("t-")) continue;
+      try { if (Date.now() - statSync(join(dir, n)).mtimeMs > 30 * 60 * 1000) rmSync(join(dir, n), { force: true }); } catch { /* best effort */ }
+    }
     writeFileSync(join(dir, "total.json"), JSON.stringify({ total: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0) }));
     const f = join(dir, `t-${process.pid}-${Date.now()}.json`);
     writeFileSync(f, JSON.stringify({ provider: provider ?? null }));
@@ -296,7 +308,7 @@ function main(argv) {
   try { res = runRoute({
     type, prompt, provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev: opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username,
-    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"),
+    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), freeMem: () => os.freemem() / 2 ** 30,
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;

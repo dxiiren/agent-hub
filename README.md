@@ -20,7 +20,7 @@ Agent Hub configures and extends the [Paseo](https://github.com/getpaseo/paseo) 
 | --- | --- |
 | ![Paseo web UI: workspace list with two finished demo tasks and the agent reply for the fix-percent task](docs/images/agents.png) | ![Paseo web UI diff view of a finished task: a three-line fix to calc.py](docs/images/task-result.png) |
 
-| `just doctor` | Statusline `hub` line |
+| `just doctor` (add `--deep` to run one tiny task on every provider) | Statusline `hub` line |
 | --- | --- |
 | ![just doctor output: daemon, MCP and every provider check passing, laptop provider disabled by the GPU guard](docs/images/doctor.png) | ![Claude Code statusline with a second line showing tokens per provider, credits and estimated cost for the session](docs/images/statusline.png) |
 

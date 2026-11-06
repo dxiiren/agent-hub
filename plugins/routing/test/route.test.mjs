@@ -540,9 +540,9 @@ test("normCwd: Git-Bash and Cygwin drive paths become C:/ on win32 only", async 
   assert.equal(normCwd("/c/Users/x", "linux"), "/c/Users/x");
 });
 test("route CLI with a missing --cwd fails fast with a clear message (no daemon call)", async () => {
-  const { spawnSync } = await import("node:child_process"); const { fileURLToPath } = await import("node:url");
+  const { spawnSync } = await import("node:child_process"); const { fileURLToPath } = await import("node:url"); const { mkdtempSync } = await import("node:fs"); const { join } = await import("node:path");
   const t0 = Date.now();
-  const r = spawnSync(process.execPath, [fileURLToPath(new URL("../route.mjs", import.meta.url)), "summarise", "x", "--cwd", "/c/definitely/not/here-xyz"], { encoding: "utf8", timeout: 20000 });
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL("../route.mjs", import.meta.url)), "summarise", "x", "--cwd", "/c/definitely/not/here-xyz"], { encoding: "utf8", timeout: 20000, env: { ...process.env, PASEO_HOME: mkdtempSync(join(tmpdir(), "ph-")) } });
   assert.equal(r.status, 2); assert.match(r.stderr, /not an existing folder/); assert.ok(Date.now() - t0 < 10000);
 });
 
@@ -629,4 +629,24 @@ test("the Qwen deny settings env var is set only for the read-only launcher", ()
   for (const r of reads) assert.ok(q.includes(r), r);
   for (const t of ["Bash", "Shell", "run_shell_command", "Write", "Edit"]) assert.ok(q.includes(t), t);
   assert.equal(JSON.parse(rfsR5(new URL("qwen/system-settings.json", dir), "utf8")).permissions, undefined); // edit tasks keep full tools
+});
+
+test("RAM admission: waits with backoff until free RAM clears the floor, then starts; gives up on the entry at waitTimeout", () => {
+  let gb = 0.5; const sleeps = []; const f = fake({ run: () => ({ status: "completed", agentId: "A" }) });
+  const r = runRoute({ ...o, freeMem: () => gb, sleep: (ms) => { sleeps.push(ms); if (sleeps.length === 3) gb = 3; } }, f, { ...routes, routes: { edit: ["qwen/b"] } });
+  assert.equal(r.used, "qwen/b"); assert.deepEqual(sleeps, [2000, 4000, 8000]);
+  const f2 = fake({ run: () => ({ status: "completed", agentId: "B" }) });
+  const r2 = runRoute({ ...o, waitTimeout: "10s", freeMem: () => 0.5, sleep: () => {} }, f2, { ...routes, routes: { edit: ["qwen/b"] } });
+  assert.equal(r2.used, null); assert.match(r2.trace[0].skip, /low RAM/); assert.equal(f2.calls.filter((c) => c[0] === "run").length, 0);
+  const f3 = fake({ run: () => ({ status: "completed", agentId: "C" }) }); // per-provider floor
+  const r3 = runRoute({ ...o, waitTimeout: "2s", freeMem: () => 3, sleep: () => {} }, f3, { ...routes, minFreeRamGbByProvider: { qwen: 6 }, routes: { edit: ["qwen/b"] } });
+  assert.equal(r3.used, null);
+});
+
+test("markActive sweeps markers older than 30 min and keeps fresh ones", async () => {
+  const { mkdtempSync, writeFileSync, utimesSync, existsSync } = await import("node:fs"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "sweep-")); const old = join(d, "t-1-1.json"), fresh = join(d, "t-2-2.json");
+  writeFileSync(old, "{}"); writeFileSync(fresh, "{}"); const t = (Date.now() - 31 * 60 * 1000) / 1000; utimesSync(old, t, t);
+  markActive({ slots: {} }, "a/x", d)();
+  assert.equal(existsSync(old), false); assert.equal(existsSync(fresh), true);
 });
