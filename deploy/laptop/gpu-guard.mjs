@@ -73,9 +73,10 @@ export function cpuSeconds(pid) {
 /** Start a process OUTSIDE the caller's process tree and return its pid (null when it did not start). Paseo ends an agent with a tree kill (tree-kill -> `taskkill /T /F`), which walks
  *  parent-pid links: a llama-server or reaper spawned `detached` by the launcher still has the launcher as parent on Windows and died with it (an archived or timed-out agent
  *  stopped the hub's server within seconds). A short-lived middle process starts it and exits, so the child's parent is gone and no tree walk reaches it. */
-export function spawnOrphan(cmd, args = []) {
+export function spawnOrphan(cmd, args = [], cwd = runDir()) {
   const code = "const p=require('node:child_process').spawn(process.argv[1],JSON.parse(process.argv[2]),{detached:true,stdio:'ignore',windowsHide:true});p.on('error',()=>process.exit(1));p.unref();setTimeout(()=>{process.stdout.write(String(p.pid));process.exit(0)},300)";
-  const r = sh(process.execPath, ['-e', code, cmd, JSON.stringify(args)]);
+  // cwd = a neutral per-user folder: a child that inherits the caller's cwd (doctor temp dir, route worktree) pins that folder against deletion for the child's whole life
+  const r = spawnSync(process.execPath, ['-e', code, cmd, JSON.stringify(args)], { encoding: 'utf8', timeout: 15000, windowsHide: true, cwd });
   return parseInt(r.stdout, 10) || null;
 }
 

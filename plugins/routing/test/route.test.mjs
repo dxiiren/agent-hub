@@ -259,6 +259,18 @@ test("an edit type that ends in `permission` outside a worktree returns a clear 
   assert.match(r.trace.at(-1).error, /code-edit|edit/);
 });
 
+test("permission hint gives the real reason: worktree run never says the flag is missing; a secret in the tree is named; outside a worktree it names the flag", async () => {
+  const { permissionHint } = await import("../route.mjs");
+  const mk = (extra) => ({ o: { type: "code-edit", worktree: true, base: "a".repeat(40) }, mode: "yolo", ro: false, wt: { path: "/wt/x" }, agentId: "A", routes: {}, paseo: () => [], ...extra });
+  const withSecret = permissionHint(mk({ gate: () => ({ reasons: ["secret pattern in diff", "gate cmd exit 1"] }) }));
+  assert.match(withSecret, /secret pattern in diff/); assert.doesNotMatch(withSecret, /need --new-workspace|pass --new-workspace/); assert.doesNotMatch(withSecret, /gate cmd/);
+  const pending = permissionHint(mk({ gate: () => ({ reasons: [] }), paseo: () => [{ agentId: "A", name: "write", paths: ["/wt/x/c.py"] }, { agentId: "B", name: "x" }] }));
+  assert.match(pending, /pending write on \/wt\/x\/c\.py/); assert.doesNotMatch(pending, /pending x/);
+  assert.match(permissionHint(mk({ gate: () => { throw new Error("boom"); } })), /no secret pattern found/);
+  assert.match(permissionHint(mk({ o: { type: "code-edit", worktree: false } })), /pass --new-workspace worktree/);
+  assert.match(permissionHint(mk({ ro: true, o: { type: "summarise" } })), /read-only task summarise/);
+});
+
 test("worktree run: create is --no-wait, then a separate bounded wait; idle becomes completed", () => {
   const calls = [];
   const p = (args) => { calls.push(args); return args[0] === "worktree" ? { name: "wt-x", worktreePath: "/wt/x" } : args[0] === "ls" ? [] : args[0] === "run" ? { agentId: "W1", status: "created" } : args[0] === "wait" ? { status: "idle" } : {}; };

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { add, edit, remove, migrate, describe } from '../provider.mjs';
 import { kindOf, discover, LOCAL_FIELD_IDS } from '../provider-kinds.mjs';
 import { llamaArgs, startRefusal, reapStep, writeOwn, listenerPid, spawnOrphan, ownRecord } from '../../deploy/laptop/gpu-guard.mjs';
@@ -51,6 +51,20 @@ test('spawnOrphan: the child outlives its starter and is not in the caller proce
     assert.throws(() => process.kill(ppid, 0));
   } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
   assert.equal(spawnOrphan(join(tmpdir(), 'no-such-binary-xyz'), []), null);
+});
+
+test('spawnOrphan: the child does not inherit the caller cwd (the caller folder can be removed while the child lives)', () => {
+  const caller = mkdtempSync(join(tmpdir(), 'orphan-cwd-'));
+  const mod = pathToFileURL(resolve(dirname(fileURLToPath(import.meta.url)), '../../deploy/laptop/gpu-guard.mjs')).href;
+  const code = `import(${JSON.stringify(mod)}).then((m)=>{process.stdout.write(String(m.spawnOrphan(process.execPath,['-e','setTimeout(()=>{},20000)'])))})`;
+  const r = spawnSync(process.execPath, ['-e', code], { cwd: caller, encoding: 'utf8' });
+  const pid = parseInt(r.stdout, 10);
+  try {
+    assert.ok(pid > 0, r.stderr);
+    process.kill(pid, 0);
+    rmSync(caller, { recursive: true, force: false, maxRetries: 0 }); // throws EBUSY on Windows when the child still pins it
+    assert.equal(existsSync(caller), false);
+  } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } rmSync(caller, { recursive: true, force: true }); }
 });
 
 test('start is refused when the GPU is missing or busy, allowed when free', () => {

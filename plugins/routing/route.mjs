@@ -15,6 +15,7 @@ import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
 import { batchAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
+import { runDir } from "./runstate.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -235,7 +236,7 @@ export function park(rec, { home, dir = parkDir(home), seconds = PARK_SECONDS, r
   const f = parkFile(dir, rec.agentId); if (!f) throw new Error("invalid agent id for parking");
   writeFileSync(f, JSON.stringify({ ...rec, parkedAt }));
   if (reaper) { // shortcut: one detached node per parked agent, not a daemon timer; upgrade if parking becomes frequent
-    try { spawn(process.execPath, [fileURLToPath(import.meta.url), "--reap", rec.agentId, String(parkedAt), String(seconds), home ?? "", dir], { detached: true, stdio: "ignore", windowsHide: true }).unref(); } catch { /* the park file stays; a reply still works */ }
+    try { spawn(process.execPath, [fileURLToPath(import.meta.url), "--reap", rec.agentId, String(parkedAt), String(seconds), home ?? "", dir], { detached: true, stdio: "ignore", windowsHide: true, cwd: runDir() }).unref(); } catch { /* the park file stays; a reply still works */ }
   }
   return parkedAt;
 }
@@ -308,6 +309,16 @@ export function inputError(o) {
 /** Session-mode ids a caller may pass with --mode: the ones the routes file names, the read-only tables, and the common ACP ones (routes.knownModes adds more). */
 export const knownModes = (routes = {}) => new Set([routes.mode, ...Object.values(routes.modes ?? {}), ...Object.values(routes.readOnlyModes ?? {}), ...Object.values(READ_ONLY_MODES), ...Object.values(SAFE_MODES).flat(), ...(routes.knownModes ?? []),
   "default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto", "auto-edit", "auto-review", "yolo", "full-access", "read-only"].filter(Boolean));
+/** Why a task stopped on `permission`, from facts: no worktree for an edit type; else the secret gate reasons found in the agent's tree and the pending request (tool + paths) nobody granted. Never claims a flag is missing when it was passed. */
+export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate, routes = {} }) {
+  const m = mode ?? "provider default";
+  if (ro) return `read-only task ${o.type} (mode ${m}) asked for a permission it may not have (it can only read plain files inside the task folder; sensitive files, writes and shell are refused)`;
+  if (!o.worktree) return `edit task ${o.type} ran outside a worktree (mode ${m}) and asked for a permission the provider default mode does not grant: pass --new-workspace worktree (full-access is dropped outside one, decision 21)`;
+  const why = [];
+  try { const g = gate(wt.path, gateOpts(routes, wt.path, undefined, o.base)); why.push(...(g?.reasons ?? []).filter((r) => /secret/i.test(r))); } catch { /* the gate result is only an explanation */ }
+  try { const pend = paseo(["pending"]); for (const p of (Array.isArray(pend) ? pend : []).filter((x) => x.agentId === agentId)) why.push(`pending ${p.name ?? p.kind ?? "request"}${p.paths?.length ? " on " + p.paths.join(", ") : ""}`); } catch { /* optional */ }
+  return `agent in the worktree (type ${o.type}, mode ${m}) stopped on a permission request that was not granted` + (why.length ? `: ${why.join("; ")}` : ` (no secret pattern found in its tree and no pending request visible: check \`paseo logs ${agentId ?? "<agent>"}\`)`);
+}
 /** An unknown --mode is refused loudly (it used to be dropped silently on read-only types); null when fine or absent. */
 export const modeError = (mode, routes = {}) => (mode === undefined || mode === null || knownModes(routes).has(mode) ? null : `unknown --mode "${mode}": use one of ${[...knownModes(routes)].filter((m) => !m.startsWith("http")).sort().join(", ")} (read-only task types always run read-only whatever --mode says)`);
 export function runRoute(o, paseo, routes, gate = runGate) {
@@ -393,7 +404,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
     if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"), { cwd: o.cwd, allow: routes.readAllow });
-    const hint = j.status === "permission" ? { error: `agent asked for a permission its mode does not grant (type ${o.type}, mode ${mode ?? "provider default"}). Edit types (code-edit, test-scaffold) need --new-workspace worktree (full-access is dropped outside one, decision 21); read-only types run in the provider read-only mode and cannot edit.` } : {};
+    const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes }) } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });

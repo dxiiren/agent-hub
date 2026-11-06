@@ -1,12 +1,13 @@
-// agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--home H]
+// agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--home H] [--fix-model-ids]
 // Archives finished/idle agents so none lingers "running"/"idle" after a test, doctor or fix job.
 // --mine (default): only agents agent-hub itself created = labelled route/type=<a route type> (set by route.mjs) or caller=agent-hub-doctor (doctor --deep).
 // --all: every finished agent of the daemon, including other users' (never the default). Running agents are never touched.
 import { fileURLToPath } from "node:url";
-import { existsSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { cliPaseo, withRetry, loadRoutes } from "./route.mjs";
+import { cleanModelId } from "./acp-proxy.mjs";
 
 export const DOCTOR_LABEL = "caller=agent-hub-doctor";
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
@@ -57,10 +58,37 @@ export function cleanDoctorLeftovers({ paseo, dry = false, tmp = tmpdir(), rm = 
   return { dirs, projects };
 }
 
+/** Agent records written before the plain-model-id fix keep qwen's runtime id (`$runtime|openai|<id>(openai)` / `<id>(openai)`) in three model fields. Rewrites those fields to the plain served id, only where the value ends in "(openai)" (qwen's own suffix) and the agent is not running. Run with the daemon stopped (`just down`): a running daemon keeps its records in memory. Returns the number of records changed. */
+const MODEL_FIELDS = [["config", "model"], ["runtimeInfo", "model"], ["persistence", "metadata", "model"]];
+export function cleanAgentModelIds({ home = process.env.PASEO_HOME ?? join(homedir(), ".paseo"), dry = false } = {}) {
+  const root = join(home, "agents"); let changed = 0;
+  let dirs = []; try { dirs = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return 0; }
+  for (const d of dirs) {
+    let files = []; try { files = readdirSync(join(root, d.name)).filter((f) => f.endsWith(".json")); } catch { continue; }
+    for (const f of files) {
+      const file = join(root, d.name, f);
+      try {
+        const text = readFileSync(file, "utf8"); if (!text.includes("(openai)")) continue;
+        const rec = JSON.parse(text); if (/^running$/i.test(String(rec.lastStatus ?? ""))) continue;
+        let hit = false;
+        for (const path of MODEL_FIELDS) {
+          const holder = path.slice(0, -1).reduce((o, k) => o?.[k], rec), key = path.at(-1);
+          if (holder && typeof holder[key] === "string" && /\(openai\)$/.test(holder[key]) && cleanModelId(holder[key]) !== holder[key]) { holder[key] = cleanModelId(holder[key]); hit = true; }
+        }
+        if (!hit) continue;
+        changed++;
+        if (!dry) { const tmp = file + ".tmp-" + process.pid; writeFileSync(tmp, JSON.stringify(rec, null, 2) + (text.endsWith(String.fromCharCode(10)) ? String.fromCharCode(10) : "")); renameSync(tmp, file); }
+      } catch { /* an unreadable record is left alone */ }
+    }
+  }
+  return changed;
+}
+
 const guard = await import("../../deploy/laptop/gpu-guard.mjs").catch(() => null); // optional in a trimmed install
 import { reapAgentOrphans } from "./orphans.mjs";
 
 export function main(argv, env = process.env) {
+  if (argv.includes("--fix-model-ids")) { const n = cleanAgentModelIds({ home: argv.includes("--home") ? argv[argv.indexOf("--home") + 1] : env.PASEO_HOME, dry: argv.includes("--dry-run") }); console.log(`${argv.includes("--dry-run") ? "would rewrite" : "rewrote"} the model id in ${n} old agent record(s) (stop the daemon first: it keeps records in memory)`); return 0; }
   const opt = (n) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
   if (argv.includes("--all") && argv.includes("--mine")) { console.error("cleanup: --mine and --all exclude each other"); return 2; }
   const olderThan = opt("--older-than") === undefined ? 0 : parseAge(opt("--older-than"));

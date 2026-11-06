@@ -165,3 +165,27 @@ test('the schedule hint uses a plain DOM element: that module exports no Text (R
   const r = edit('schedule-missing-use').replace;
   assert.ok(r.includes('jsx)("div"') && !/t\.Text/.test(r));
 });
+
+test('config patch: the new value is cached at once (nested objects merged), then the daemon answer, then a read-back; a failed save re-reads and rethrows', async () => {
+  const body = edit("config-read-back").replace.replace(/}$/, ""); // the injected text ends with the closing brace of patchConfig
+  const make = (patchImpl) => {
+    const cache = [{ idleRuntimeCleanup: true, features: { dictation: { enabled: true }, webUi: { enabled: true }, voiceMode: { enabled: false, stt: { provider: 'local' } } } }]; const seen = [];
+    const C = { setQueryData: (_k, v) => { const nv = typeof v === 'function' ? v(cache.at(-1)) : v; cache.push(nv); seen.push(nv); } };
+    const h = { patchDaemonConfig: patchImpl, getDaemonConfig: async () => ({ config: { fresh: true } }) };
+    const fn = vm.runInContext(`(async (n,h,C,w)=>{${body}})`, vm.createContext({}));
+    return { run: (n) => fn(n, h, C, 'k'), seen };
+  };
+  const ok = make(async (n) => ({ config: { fromDaemon: n } }));
+  assert.deepEqual(JSON.parse(JSON.stringify(await ok.run({ idleRuntimeCleanup: false, features: { dictation: { enabled: false } } }))), { fromDaemon: { idleRuntimeCleanup: false, features: { dictation: { enabled: false } } } });
+  assert.deepEqual(JSON.parse(JSON.stringify(ok.seen[0])), { idleRuntimeCleanup: false, features: { dictation: { enabled: false }, webUi: { enabled: true }, voiceMode: { enabled: false, stt: { provider: 'local' } } } }, 'optimistic value first, siblings kept');
+  const deep = make(async (n) => ({ config: n })); await deep.run({ features: { voiceMode: { enabled: true } } });
+  assert.deepEqual(JSON.parse(JSON.stringify(deep.seen[0])).features.voiceMode, { enabled: true, stt: { provider: 'local' } }, 'a deep patch keeps the sibling keys (voice page reads stt.provider)');
+  assert.ok(ok.seen[1].fromDaemon, 'then the daemon answer');
+  await new Promise((r) => setImmediate(r)); assert.deepEqual(JSON.parse(JSON.stringify(ok.seen.at(-1))), { fresh: true }, 'then the read-back');
+  const bad = make(async () => { throw new Error('nope'); });
+  await assert.rejects(bad.run({ idleRuntimeCleanup: false }), /nope/);
+  await new Promise((r) => setImmediate(r)); assert.deepEqual(JSON.parse(JSON.stringify(bad.seen.at(-1))), { fresh: true }, 'a failed save is rolled back by a read');
+});
+test('the plugin Reload menu item says why it is disabled', () => {
+  const e = edit('plugin-reload-hint'); assert.match(e.replace, /l\.enabled\?B:B\+"[^"]*enable the plugin/);
+});

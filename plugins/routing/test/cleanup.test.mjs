@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cleanup, parseAge, ageSeconds, DOCTOR_LABEL } from "../cleanup.mjs";
+import { cleanup, parseAge, ageSeconds, DOCTOR_LABEL, cleanAgentModelIds } from "../cleanup.mjs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const fake = (byLabel, all = []) => { const calls = []; const p = (a) => { calls.push(a); if (a[0] === "ls") return a[1] === "--label" ? byLabel[a[2]] ?? [] : all; return {}; }; return { p, calls }; };
 
@@ -30,4 +33,19 @@ test("cleanup with an age limit leaves an agent whose age is unreadable; without
   const mk = () => { const calls = []; return { calls, paseo: (a) => { calls.push(a.join(" ")); return a[0] === "ls" ? rows : {}; } }; };
   const a = mk(); assert.deepEqual(cleanup({ paseo: a.paseo, olderThan: 1800, all: true }).archived, []);
   const b = mk(); assert.deepEqual(cleanup({ paseo: b.paseo, olderThan: 0, all: true }).archived, ["aaaa1111"]);
+});
+
+test("cleanAgentModelIds rewrites only qwen's (openai) runtime ids in closed records; running agents and other models are untouched", () => {
+  const home = mkdtempSync(join(tmpdir(), "ah-models-")); const dir = join(home, "agents", "proj"); mkdirSync(dir, { recursive: true });
+  const rec = (model, lastStatus = "closed") => JSON.stringify({ id: "x", lastStatus, config: { model, mode: "yolo" }, runtimeInfo: { model }, persistence: { metadata: { model } } });
+  writeFileSync(join(dir, "a.json"), rec("$runtime|openai|qwen35-9b(openai)")); writeFileSync(join(dir, "b.json"), rec("Qwen3.8-27B(openai)"));
+  writeFileSync(join(dir, "c.json"), rec("claude-opus-4")); writeFileSync(join(dir, "d.json"), rec("m(openai)", "running")); writeFileSync(join(dir, "e.json"), "{not json (openai)");
+  assert.equal(cleanAgentModelIds({ home, dry: true }), 2); assert.match(readFileSync(join(dir, "a.json"), "utf8"), /\(openai\)/, "dry run writes nothing");
+  assert.equal(cleanAgentModelIds({ home }), 2);
+  const a = JSON.parse(readFileSync(join(dir, "a.json"), "utf8"));
+  assert.deepEqual([a.config.model, a.runtimeInfo.model, a.persistence.metadata.model, a.config.mode], ["qwen35-9b", "qwen35-9b", "qwen35-9b", "yolo"]);
+  assert.equal(JSON.parse(readFileSync(join(dir, "b.json"), "utf8")).config.model, "Qwen3.8-27B");
+  assert.equal(JSON.parse(readFileSync(join(dir, "c.json"), "utf8")).config.model, "claude-opus-4");
+  assert.equal(JSON.parse(readFileSync(join(dir, "d.json"), "utf8")).config.model, "m(openai)");
+  assert.equal(cleanAgentModelIds({ home }), 0, "idempotent");
 });

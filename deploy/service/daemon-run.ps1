@@ -14,7 +14,8 @@ if (-not $env:AGENT_HUB_OTLP) { $env:AGENT_HUB_OTLP = 'http://127.0.0.1:4318/v1/
 $env:AGENT_HUB_POLLER_DIR = Join-Path $Repo 'plugins/usage-otel/pollers'
 # Gates and agents may run hooks through Git Bash: put it first so Windows does not pick System32's WSL bash.exe.
 $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
-if ($git) { $gr = Split-Path (Split-Path $git); foreach ($d in @("$gr\bin", "$gr\usr\bin")) { if (Test-Path $d) { $env:Path = "$d;$env:Path" } } }
+# Only Git's bin goes FIRST (bash.exe). usr\bin goes LAST: its GNU tar would shadow the Windows one (GNU tar reads C:\x as host C, so Paseo's voice-model download failed with 'tar: Cannot connect to C: resolve failed').
+if ($git) { $gr = Split-Path (Split-Path $git); if (Test-Path "$gr\bin") { $env:Path = "$gr\bin;$env:Path" }; if (Test-Path "$gr\usr\bin") { $env:Path = "$env:Path;$gr\usr\bin" } }
 # Logon/reboot: Docker Desktop + the usage stack come up on their own (hidden, does not delay the daemon).
 if ($env:AGENT_HUB_NO_USAGE_STACK -ne '1') { Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $Repo 'deploy\usage\ensure-usage.ps1')) }
 $paseo = (Get-Command paseo.cmd -ErrorAction SilentlyContinue).Source

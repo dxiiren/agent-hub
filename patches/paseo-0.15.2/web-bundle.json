@@ -50,8 +50,8 @@
   },
   {
    "name": "config-read-back",
-   "find": "=await h.patchDaemonConfig(n);return C.setQueryData(w,t.config),t.config}",
-   "replace": "=await h.patchDaemonConfig(n);return C.setQueryData(w,t.config),h.getDaemonConfig().then(q=>C.setQueryData(w,q.config)).catch(()=>{}),t.config}"
+   "find": "if(!h)return;const t=await h.patchDaemonConfig(n);return C.setQueryData(w,t.config),t.config}",
+   "replace": "if(!h)return;const __mg=(a1,b1)=>{if(!b1||\"object\"!=typeof b1||Array.isArray(b1)||!a1||\"object\"!=typeof a1||Array.isArray(a1))return b1;const z={...a1};for(const k in b1)z[k]=__mg(a1[k],b1[k]);return z},__rd=()=>h.getDaemonConfig().then(q=>C.setQueryData(w,q.config)).catch(()=>{});C.setQueryData(w,q=>q?__mg(q,n):q);let t;try{t=await h.patchDaemonConfig(n)}catch(x){__rd();throw x}return C.setQueryData(w,t.config),__rd(),t.config}"
   },
   {
    "name": "scrollback-state",
@@ -102,7 +102,12 @@
    "name": "model-error-retry-room",
    "find": "emptyState:{padding:o.spacing[4],alignItems:\"center\",gap:o.spacing[2],uni__dependencies:[0]},emptyStateText",
    "replace": "emptyState:{padding:o.spacing[4],paddingBottom:o.spacing[8],flexShrink:0,alignItems:\"center\",gap:o.spacing[2],uni__dependencies:[0]},emptyStateText"
+  },
+  {
+   "name": "plugin-reload-hint",
+   "find": "{onSelect:v,disabled:k,status:H,pendingLabel:R,children:B}",
+   "replace": "{onSelect:v,disabled:k,status:H,pendingLabel:R,children:l.enabled?B:B+\" (enable the plugin first)\"}"
   }
  ],
- "rev": 5
+ "rev": 7
 }
