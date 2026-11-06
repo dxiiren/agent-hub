@@ -92,11 +92,11 @@ test('a custom kind from AGENT_HUB_KINDS is offered and builds its launch comman
 test('the key proxy: secret and Host required, path pinned to the upstream base, redirects never followed, real key never leaves', async () => {
   const { createServer, request } = await import('node:http');
   const { startAuthProxy, scrubKeyEnv } = await import('../../plugins/routing/office.mjs');
-  const seen = []; const other = []; const evil = createServer((req, res) => { other.push(req.headers.authorization); res.end('evil'); });
+  let redirectNext = false; const seen = []; const other = []; const evil = createServer((req, res) => { other.push(req.headers.authorization); res.end('evil'); });
   await new Promise((ok) => evil.listen(0, '127.0.0.1', ok));
   const up = createServer((req, res) => {
     seen.push({ url: req.url, auth: req.headers.authorization });
-    if (req.url === '/v1/redirect') { res.writeHead(302, { location: `http://127.0.0.1:${evil.address().port}/steal` }); return res.end(); }
+    if (redirectNext && req.url === '/v1/models') { res.writeHead(302, { location: `http://127.0.0.1:${evil.address().port}/steal` }); return res.end(); }
     res.setHeader('content-type', 'application/json'); res.end('{"data":[{"id":"m1"}]}');
   });
   await new Promise((ok) => up.listen(0, '127.0.0.1', ok));
@@ -110,9 +110,11 @@ test('the key proxy: secret and Host required, path pinned to the upstream base,
     assert.deepEqual(seen, [{ url: '/v1/models', auth: 'Bearer sk-proxy-secret' }]);
     assert.equal((await raw('/v1/models')).status, 401); assert.equal((await raw('/v1/models', { authorization: 'Bearer nope' })).status, 401);
     assert.equal((await raw('/v1/models', { ...good, host: 'evil.example' })).status, 403);
-    for (const p of ['//127.0.0.1/v1/models', '//evil.example/x', 'http://evil.example/', '/../etc/passwd', '/v1/../other', '/v2/models']) assert.ok([400].includes((await raw(p, good)).status), p);
+    for (const p of ['//127.0.0.1/v1/models', '//evil.example/x', 'http://evil.example/', '/../etc/passwd', '/v1/../models', '/v1/./models', '/v1//models', '/v1/%2e%2e/models', '/v1/%2E%2E%2fmodels', '/v1/models%2f..%2f', '/v1\\models', '/v1/models/%5c..', '/v1/models%00'])
+      assert.equal((await raw(p, good)).status, 400, p);
+    for (const p of ['/v2/models', '/v1/models/extra', '/v1/files', '/v1/chat/completions', '/models']) assert.equal((await raw(p, good)).status, 404, p);
     assert.equal(seen.length, 1, 'nothing forbidden reached the upstream');
-    const red = await raw('/v1/redirect', good); assert.equal(red.status, 302); assert.deepEqual(other, [], 'the redirect target never received the key');
+    redirectNext = true; const red = await raw('/v1/models', good); assert.equal(red.status, 302); assert.deepEqual(other, [], 'the redirect target never received the key');
   } finally { proxy.close(); up.close(); evil.close(); }
   assert.deepEqual(scrubKeyEnv({ HUB_OPENAI_API_KEY: 'k', OPENAI_API_KEY: 'k', PATH: 'p' }), { PATH: 'p' });
 });
