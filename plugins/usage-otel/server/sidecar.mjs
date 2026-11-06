@@ -5,7 +5,15 @@ import { join, dirname } from "node:path";
 import { execFileTree } from "./exec-tree.mjs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
-import { innerSession } from "../../routing/acp-proxy.mjs";
+
+/** Qwen's own session id for the one Paseo knows (the read-only restart changes it); the proxy records it in the hub run dir.
+ *  Self-contained on purpose: Paseo bundles this plugin alone, it cannot import from plugins/routing. Same folder rule as plugins/routing/runstate.mjs (a test pins them together). */
+export function innerSession(outer, env = process.env) {
+  try {
+    const dir = env.AGENT_HUB_RUN_DIR || join(env.PASEO_HOME || join(os.homedir(), ".agent-hub"), "run");
+    return JSON.parse(readFileSync(join(dir, `qwen-session-${String(outer).replace(/[^A-Za-z0-9-]/g, "_")}.json`), "utf8")).inner ?? null;
+  } catch { return null; }
+}
 
 /** Sum usageMetadata of one Qwen Code session file: {in (uncached), out (incl. thoughts), cached}. */
 export function qwenSession(sessionId, home = join(os.homedir(), ".qwen")) {

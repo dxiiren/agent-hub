@@ -140,13 +140,14 @@ test('orphan shell snapshots: only a snapshot shell whose parent is gone is stop
 
 test('C5: the usage hook finds qwen\'s own chat file through the proxy alias (Paseo only knows the outer session id)', async () => {
   const { aliasFile, innerSession } = await import('../../plugins/routing/acp-proxy.mjs');
-  const { qwenSession } = await import('../../plugins/usage-otel/server/sidecar.mjs');
+  const { qwenSession, innerSession: pluginInner } = await import('../../plugins/usage-otel/server/sidecar.mjs');
   const { tryWriteState } = await import('../../plugins/routing/runstate.mjs');
   const home = tmp('fixc-qwen-'), outer = 'aaaa-1111', inner = 'bbbb-2222';
   mkdirSync(join(home, 'projects', 'p', 'chats'), { recursive: true });
   writeFileSync(join(home, 'projects', 'p', 'chats', inner + '.jsonl'), JSON.stringify({ usageMetadata: { promptTokenCount: 120, cachedContentTokenCount: 20, candidatesTokenCount: 30, thoughtsTokenCount: 5 } }) + '\n');
   assert.equal(qwenSession(outer, home), null, 'no alias yet: not found');
   tryWriteState(join(runDir(), aliasFile(outer)), { inner });
-  assert.equal(innerSession(outer), inner);
+  assert.equal(innerSession(outer), inner); assert.equal(pluginInner(outer), inner, 'the self-contained plugin reader uses the same folder as runDir()');
+  assert.ok(!/from "\.\.\/\.\.\//.test(readFileSync(join(import.meta.dirname, '..', '..', 'plugins', 'usage-otel', 'server', 'sidecar.mjs'), 'utf8')), 'plugin files never import outside their folder (Paseo bundles the plugin alone)');
   assert.deepEqual(qwenSession(outer, home), { in: 100, out: 35, cached: 20 });
 });
