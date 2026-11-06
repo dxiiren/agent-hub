@@ -85,3 +85,16 @@ test("route parks an agent whose final line is [ASK]: status asking, alive, no g
   assert.equal(loadPark("R1", join(d, "usage", "parked")).gate, "false");
   assert.ok(loadPark("R1", join(d, "usage", "parked")));
 });
+test("read-only task: a file changed during the reply fails it and retires the agent; unchanged passes", async () => {
+  const { mkdtempSync: mk, writeFileSync: wf } = await import("node:fs");
+  const { snapshot, sha } = await import("../route.mjs");
+  const d = dir(); const cwd = mk(join(tmpdir(), "ro-")); wf(join(cwd, "a.txt"), "1");
+  rec(d, { ro: true, guardCwd: cwd, guardHash: sha(snapshot(cwd)), type: "summarise" });
+  let p = fake("fine");
+  assert.equal(runReply("A1", "ok", p, {}, { dir: d, answerRetryMs: 0 }).status, "completed");
+  rec(d, { ro: true, guardCwd: cwd, guardHash: sha(snapshot(cwd)), type: "summarise" });
+  p = (a) => { if (a[0] === "wait") wf(join(cwd, "new.txt"), "x"); return fake("fine")(a); };
+  const calls = []; const q = (a) => { calls.push(a); return p(a); };
+  const r = runReply("A1", "ok", q, {}, { dir: d, answerRetryMs: 0 });
+  assert.equal(r.status, "failed-readonly-changed"); assert.ok(calls.some((c) => c[0] === "stop")); assert.equal(loadPark("A1", d), null);
+});

@@ -4,7 +4,7 @@
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
 // Usage: route.mjs reply <agentId> "<text>" | route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]
 import { spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -197,6 +197,7 @@ export function parseAsk(answer) {
   return m ? m[1] : null;
 }
 /** Asking is allowed while fewer than MAX_ASKS questions were asked; after that the answer is final even if it ends with [ASK]. */
+export const sha = (t) => createHash("sha1").update(String(t)).digest("hex");
 export const mayAsk = (asks) => asks < MAX_ASKS;
 const parkDir = (home) => join(home || process.env.PASEO_HOME || join(os.homedir(), ".paseo"), "usage", "parked");
 /** Remember what a parked agent needs for its reply (gate, base, worktree) and arm a detached reaper that stops it after PARK_SECONDS without a reply. */
@@ -238,6 +239,10 @@ export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, di
   if (s?.error) return fail("send failed: " + String(s.error).slice(0, 160));
   const w = paseo(["wait", agentId, "--timeout", String(toSeconds(waitTimeout ?? routes.waitTimeout ?? "10m"))]);
   if (w?.error || (w?.status && w.status !== "idle")) return fail(w?.error ? "wait failed: " + String(w.error).slice(0, 160) : `agent ended with status ${w.status}`, w?.status ?? "error");
+  if (rec.ro && sha(snapshot(rec.guardCwd)) !== rec.guardHash) { // read-only post-check, same as route: a summarise/review agent must not change files during a reply either
+    trace.push({ provider: rec.provider, status: "error", error: `read-only task ${rec.type} changed files in ${rec.guardCwd} after the reply: failed` });
+    retireParked(paseo, rec); return { used: rec.provider, agentId, status: "failed-readonly-changed", trace };
+  }
   const r = withAnswer({ used: rec.provider, agentId, status: "completed", trace }, paseo, answerRetryMs);
   const q = mayAsk(rec.asks) ? parseAsk(r.answer) : null;
   if (q) { park({ ...rec, asks: rec.asks + 1 }, { dir, reaper, home: rec.home }); return { ...r, status: "asking", question: q, round: rec.asks + 1 }; }
@@ -343,7 +348,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const a = withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs);
       const q = parseAsk(a.answer);
       if (q && j.agentId) {
-        park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, wt, keep: !!o.keep, asks: 1, home: o.home }, { home: o.home, reaper: o.reaper });
+        park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
         return { ...a, status: "asking", question: q, round: 1, hint: `answer with: agent-hub reply ${j.agentId} "<text>" (a parked agent is stopped after ${PARK_SECONDS / 60} min with no reply)` };
       }
     }
