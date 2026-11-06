@@ -56,8 +56,12 @@ export const QWEN_SYSTEM_SETTINGS_RO = join(dirname(fileURLToPath(import.meta.ur
 export const qwenEnv = (env = process.env, readOnly = false) => ({ ...env, QWEN_CODE_SYSTEM_SETTINGS_PATH: readOnly ? QWEN_SYSTEM_SETTINGS_RO : QWEN_SYSTEM_SETTINGS });
 export const takeReadOnlyFlag = (argv) => { const i = argv.indexOf("--read-only"); if (i < 0) return false; argv.splice(i, 1); return true; };
 
-/** Env for an agent process and its tool subprocesses: the hub's endpoint-key variables never reach it. */
-export const scrubKeyEnv = (env) => { const e = { ...env }; delete e.HUB_OPENAI_API_KEY; delete e.OPENAI_API_KEY; return e; };
+/**
+ * Env for an agent process and its tool subprocesses: the hub's endpoint-key variables and anything that looks like a credential
+ * (names ending in API_KEY, TOKEN, PAT, SECRET, PASSWORD, CREDENTIALS) never reach it. An agent can run `env`; the daemon's own secrets must not be in it.
+ */
+export const SECRET_ENV = /(^|_)(API_?KEY|APIKEY|TOKEN|PAT|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$/i;
+export const scrubKeyEnv = (env) => { const e = {}; for (const [k, v] of Object.entries(env)) if (!SECRET_ENV.test(k)) e[k] = v; return e; };
 
 /**
  * Local auth proxy: the agent talks to 127.0.0.1:<port> with a random per-launch secret as its "key"; this launcher swaps in the real

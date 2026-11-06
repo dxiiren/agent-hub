@@ -116,7 +116,7 @@ test('the key proxy: secret and Host required, path pinned to the upstream base,
     assert.equal(seen.length, 1, 'nothing forbidden reached the upstream');
     redirectNext = true; const red = await raw('/v1/models', good); assert.equal(red.status, 302); assert.deepEqual(other, [], 'the redirect target never received the key');
   } finally { proxy.close(); up.close(); evil.close(); }
-  assert.deepEqual(scrubKeyEnv({ HUB_OPENAI_API_KEY: 'k', OPENAI_API_KEY: 'k', PATH: 'p' }), { PATH: 'p' });
+  assert.deepEqual(scrubKeyEnv({ HUB_OPENAI_API_KEY: 'k', OPENAI_API_KEY: 'k', GITEA_TOKEN: 't', GITHUB_MCP_PAT: 't', DB_PASSWORD: 'x', AWS_SECRET: 'x', PATH: 'p', HOME: 'h', TOKENS_PER_MIN: '5', KEYBOARD: 'k' }), { PATH: 'p', HOME: 'h', TOKENS_PER_MIN: '5', KEYBOARD: 'k' });
 });
 
 test('a kind without a key field refuses a key (opencode)', async () => {
