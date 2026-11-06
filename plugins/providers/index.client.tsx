@@ -34,7 +34,9 @@ function Screen() {
     const d: any = await call({ verb: "describe" });
     if (d.error) return setMsg({ ok: false, text: `${S.failed} ${d.error}` });
     setKinds(d.kinds); setRouteTypes(d.routeTypes); setAdded(d.providers);
-    setKind((k) => k || d.kinds[0]?.type || "");
+    // ?kind=<type> comes from Paseo's Add-provider list (scripts/paseo-web-patch.mjs): preselect that kind
+    const want = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("kind") : null;
+    setKind((k) => k || (d.kinds.some((x: Kind) => x.type === want) ? want! : d.kinds[0]?.type) || "");
   }, [call]);
   useEffect(() => { void refresh(); }, [refresh]);
 

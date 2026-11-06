@@ -191,6 +191,8 @@ Run `just` with no arguments to list every recipe. The ones you'll use daily:
 
 Paseo's own Settings > Providers > "Add provider" is a fixed catalog of ACP agents: each is added with its stock command, with no URL, model or key field. Agent Hub adds the missing piece, with the same behaviour from the web UI and the command line.
 
+**Where to find it in Paseo.** The kinds below are listed in Paseo's own Add provider list too: search `qwen`, `openai`, `ollama`, `vllm`, `sglang`, `lm studio`, `opencode`, `qoder`, `codex` or `claude`, press Add, and the Agent Hub form opens with that kind selected. Paseo 0.15.2 has no plugin hook for that list, so `just up` applies a small, reversible edit to the installed web bundle (`scripts/paseo-web-patch.mjs`, edits in `patches/paseo-0.15.2/web-bundle.json`): it runs only when the installed Paseo version and the bundle's sha256 both match (any other version: a warning, nothing touched, the form stays under Plugins > agent-hub-providers), never modifies the original bundle file, is idempotent, and `node scripts/paseo-web-patch.mjs restore` undoes it. The entries are generated from `scripts/provider-kinds.mjs` (your custom kinds included) into `agent-hub-catalog.json` next to the web UI each time. `AGENT_HUB_NO_WEB_PATCH=1` skips it.
+
 **What you can add (a "kind"):**
 
 | Kind | What it is | Fields |

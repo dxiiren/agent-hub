@@ -1,0 +1,27 @@
+{
+ "paseo": "0.15.2",
+ "bundle": "_expo/static/js/web/index-10c243663698ec3bae375aa22e2bfe92.js",
+ "sha256": "232baefe40cf648f606cb64861616dd485325d6ee1a1c6077a8beffb47499962",
+ "edits": [
+  {
+   "name": "catalog-fetch",
+   "find": "const c=(0,t.c)(5),[s]=(0,n.useState)(o.ACP_PROVIDER_CATALOG);",
+   "replace": "const c=(0,t.c)(5),[s,__ahSet]=(0,n.useState)(o.ACP_PROVIDER_CATALOG);(0,n.useEffect)(()=>{/*agent-hub-catalog*/let x=!0;fetch(\"/agent-hub-catalog.json\",{cache:\"no-store\"}).then(q=>q.ok?q.json():null).then(j=>{if(!x||!Array.isArray(j))return;const have=new Set(o.ACP_PROVIDER_CATALOG.map(q=>q.id)),add=j.filter(q=>q&&\"string\"==typeof q.id&&\"string\"==typeof q.title&&q.agentHub&&!have.has(q.id)).map(q=>({command:[],description:\"\",...q}));add.length&&__ahSet([...o.ACP_PROVIDER_CATALOG,...add])}).catch(()=>{});return()=>{x=!1}},[]);"
+  },
+  {
+   "name": "search-keywords",
+   "find": "(0,t.scoreTextFields)(s,[o.title,o.id])",
+   "replace": "(0,t.scoreTextFields)(s,[o.title,o.id,...(o.keywords??[])])"
+  },
+  {
+   "name": "open-form",
+   "find": "Y=(0,l.useCallback)(async e=>{if(!$){W(e.id);",
+   "replace": "Y=(0,l.useCallback)(async e=>{if(e.agentHub){const h=(location.pathname.match(/\\/hosts\\/([^/]+)/)||[])[1];if(h){location.assign(\"/settings/hosts/\"+h+\"/plugins/\"+encodeURIComponent(e.agentHub.plugin||\"agent-hub-providers\")+\"/\"+encodeURIComponent(e.agentHub.screen||\"providers\")+\"?kind=\"+encodeURIComponent(e.agentHub.kind));return}}if(!$){W(e.id);"
+  },
+  {
+   "name": "no-empty-link",
+   "find": "U=(0,b.jsx)(v.ExternalLink,{href:A,label:E,accessibilityLabel:O})",
+   "replace": "U=A?(0,b.jsx)(v.ExternalLink,{href:A,label:E,accessibilityLabel:O}):null"
+  }
+ ]
+}
