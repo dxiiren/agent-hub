@@ -243,6 +243,29 @@ The provider list shows each added provider as "<Kind> <host>" (for example `Qwe
 
 The UI is one small Paseo plugin (`plugins/providers`) drawn from this same schema with Paseo's own Settings components; all of its text is in `plugins/providers/client/strings.ts`. A Paseo-side change to put these fields into the built-in "Add provider" dialog would be a better home for it; none is needed for this to work.
 
+### Multiple accounts
+
+Every kind in `scripts/provider-kinds.mjs` declares how it separates accounts (`account` in the schema; the Settings form shows it, or the reason it cannot):
+
+| Kind | Separation | One-time sign-in for a new account | Plan usage in the Usage panel |
+|---|---|---|---|
+| Claude | `CLAUDE_CONFIG_DIR` per account (set on that provider only) | `CLAUDE_CONFIG_DIR=<dir> claude auth login` | 5-hour and weekly % from the account's own login |
+| Codex | `CODEX_HOME` per account | `CODEX_HOME=<dir> codex login` | 5-hour and weekly % from the account's own login |
+| Qoder | `--config-dir <dir>` on the provider command | `qodercli --config-dir <dir> login` | tokens and tasks only |
+| Qwen Code, OpenCode, custom endpoint kinds | no login: another account is another entry with its own Base URL and/or API key | none | endpoint status, tokens and tasks |
+
+```
+agent-hub provider add claude-work --kind claude --account work --model <id> --routes code-edit
+# prints the one-line sign-in command for the new, empty account folder; run it once yourself
+agent-hub provider add claude-home --kind claude --account home --account-dir D:\accounts\home --model <id>
+agent-hub provider remove claude-work            # the account folder (its login) is kept
+agent-hub provider remove claude-work --purge    # ... or deleted with it
+```
+
+The hub never asks for, stores or automates a password: you sign in once with the CLI itself. The folder defaults to `~/.agent-hub/accounts/<kind>/<account>` (`AGENT_HUB_ACCOUNTS_DIR` moves it). An account is its own provider (own slots, own route entries `<name>/<model>`), so more accounts means more parallel tasks. Account providers serve code-edit style tasks; read-only task types (`summarise`, `review`) stay on the providers with an enforced sensitive-read guard. The Usage panel shows one card per kind with a Total line and one line per account (the default login first); an account that is not signed in shows "not logged in". Restart the daemon after adding (`just down && just up`) so Paseo loads the new provider; Paseo lists an account's models once it knows the provider, until then the base provider's list is shown.
+
+The model is never a guess: the form (and `agent-hub provider models --kind K [--link URL]`) fills a list from the endpoint's `/v1/models` or from the CLI, with its tier and cost text; `add` without `--model` prints that list. A custom id is the last option of the list.
+
 ## Security
 
 **Agents get an allow-listed environment.** Every way of starting the daemon (`just up`, the `AgentHub` scheduled task, the systemd unit) goes through `scripts/daemon-env.mjs`, which builds the daemon's environment from an allow-list: OS basics (`PATH`, `SystemRoot`, `TEMP`, `HOME`/`USERPROFILE`, `APPDATA`, `LANG`/`LC_*`, `XDG_*` ...), the hub's own and Paseo's own names, by exact name only (no prefix wildcards for the hub or Paseo, so an unlisted `PASEO_*` or `AGENT_HUB_*` name is dropped); a value that is a URL with `user:pass@` is always dropped. Codex, Claude, Qoder, OpenCode and Qwen agents inherit that environment, so an agent (or injected text it reads) that runs `env` sees none of the tokens of the shell that started the hub. The agent CLIs keep working because they read their logins from their own config dirs. If a CLI genuinely needs another variable (a proxy, `NODE_EXTRA_CA_CERTS`), list it in `config/hub.local.json` as `"daemonEnvAllow": ["HTTPS_PROXY", "NODE_*"]` (a trailing `*` is a prefix) or in `AGENT_HUB_ENV_ALLOW=HTTPS_PROXY,NODE_*`; a name listed exactly there is passed even if it looks like a credential (a `*` prefix entry still skips credential-looking names), so list only what you mean to share. Restart the daemon after changing it. The Docker images take their environment from the container's own env file, which is yours.

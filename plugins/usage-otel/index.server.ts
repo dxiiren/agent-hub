@@ -7,6 +7,7 @@ import { z } from "zod";
 import { qoderSummary, toReport } from "./server/qoder-usage.mjs";
 import { paseoHome, selfHostedProviders, selfHostedReport, kindId } from "./server/selfhosted-usage.mjs";
 import { readFileSync } from "node:fs";
+import { accountGroups, groupReport } from "./server/accounts-usage.mjs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
 
@@ -54,6 +55,23 @@ export default function contribute(server: PluginServerContext) {
       input: z.object({ id: z.string() }),
       discover: async () => [{ key: id, label: kind, harness: "Self-hosted", input: { id } }],
       fetch: async (input: { id: string }) => { try { return await selfHostedReport(input.id); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+    });
+  }
+  // One card per CLI kind that has extra accounts (Claude Code, Codex, Qoder): Total + a line per account. Read from hub.local.json at plugin load.
+  const localPaths = [process.env.AGENT_HUB_LOCAL, process.env.AGENT_HUB_REPO && join(process.env.AGENT_HUB_REPO, "config", "hub.local.json")];
+  try { const cfg = JSON.parse(readFileSync(join(paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); for (const p of Object.values<any>(cfg.plugins ?? {})) if (p?.path) localPaths.push(join(p.path, "..", "..", "config", "hub.local.json")); } catch { /* no config */ }
+  let local: any = {};
+  for (const lp of localPaths) { if (!lp) continue; try { local = JSON.parse(readFileSync(lp, "utf8").replace(/^﻿/, "")); break; } catch { /* next */ } }
+  for (const [kind, g] of Object.entries<any>(accountGroups(local))) {
+    server.registerUsageSource({
+      id: `accounts-${kind}`,
+      label: `${g.label} accounts`,
+      input: z.object({ kind: z.string() }),
+      discover: async () => [{ key: kind, label: g.label, harness: g.label, input: { kind } }],
+      fetch: async (input: { kind: string }) => {
+        try { let feed = ""; try { feed = readFileSync(join(usageDir(), "usage.jsonl"), "utf8"); } catch { /* none yet */ } return await groupReport(input.kind, { local, feed }); }
+        catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; }
+      },
     });
   }
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number

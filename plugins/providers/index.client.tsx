@@ -6,9 +6,10 @@ import { providersRpc } from "./shared/rpc";
 import { S } from "./client/strings";
 
 type Field = { id: string; label: string; type: string; required?: boolean; help?: string };
-type Kind = { type: string; label: string; fields: Field[]; slots: boolean; readOnlyTwin: boolean; nameHelp: string; ownProvider: boolean };
-type Added = { name: string; label?: string; type: string; model: string; url?: string; slots?: number; keySet?: boolean; routes: string[] };
-type Model = { id: string; label: string };
+type Kind = { type: string; label: string; fields: Field[]; slots: boolean; readOnlyTwin: boolean; nameHelp: string; ownProvider: boolean; account?: { by?: string; env?: string; arg?: string; help?: string; none?: string } };
+type Added = { name: string; label?: string; type: string; model: string; url?: string; slots?: number; keySet?: boolean; routes: string[]; account?: string };
+type Model = { id: string; label: string; hint?: string };
+const CUSTOM = "__custom__";
 const OFF = "off";
 
 function Screen() {
@@ -23,9 +24,12 @@ function Screen() {
   const [vals, setVals] = useState<Record<string, string>>({});
   const [name, setName] = useState("");
   const [slots, setSlots] = useState("2");
+  const [account, setAccount] = useState("");
   const [twin, setTwin] = useState(true);
   const [pos, setPos] = useState<Record<string, string>>({});
   const [models, setModels] = useState<Model[]>([]);
+  const [custom, setCustom] = useState(false);
+  const [modelErr, setModelErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [formKey, setFormKey] = useState(0);
@@ -41,24 +45,32 @@ function Screen() {
   useEffect(() => { void refresh(); }, [refresh]);
 
   const k = kinds.find((x) => x.type === kind);
-  const reset = () => { setEditing(null); setVals({}); setName(""); setSlots("2"); setTwin(true); setPos({}); setModels([]); setFormKey((n) => n + 1); };
-  const loadModels = async () => {
-    setBusy(true); setMsg(null);
-    const r: any = await call({ verb: "models", args: { kind, url: vals.url, key: vals.key } });
-    setBusy(false);
-    if (r.error) return setMsg({ ok: false, text: `${S.failed} ${r.error}` });
-    setModels(r.models);
-    if (!vals.model && r.models[0]) setVals((v) => ({ ...v, model: r.models[0].id }));
-  };
+  const reset = () => { setCustom(false); setModelErr(null); setEditing(null); setVals({}); setName(""); setSlots("2"); setAccount(""); setTwin(true); setPos({}); setModels([]); setFormKey((n) => n + 1); };
+  // The model list loads by itself: CLI kinds at once, endpoint kinds as soon as the link (and key) are typed. Nothing to guess.
+  useEffect(() => {
+    if (!kind || !k) return;
+    const endpoint = k.fields.some((f) => f.id === "url");
+    if (endpoint && !/^https?:\/\/[^\s"]+$/.test(vals.url ?? "")) { setModels([]); setModelErr(null); return; }
+    let live = true;
+    const t = setTimeout(async () => {
+      setModelErr(null);
+      const r: any = await call({ verb: "models", args: { kind, url: vals.url, key: vals.key, provider: editing ?? undefined } });
+      if (!live) return;
+      if (r.error) { setModels([]); return setModelErr(r.error); }
+      setModels(r.models);
+      setVals((v) => (v.model || !r.models[0] ? v : { ...v, model: r.models[0].id }));
+    }, endpoint ? 700 : 0);
+    return () => { live = false; clearTimeout(t); };
+  }, [kind, k, vals.url, vals.key, editing, call]);
   const routesArg = () => Object.entries(pos).filter(([, v]) => v !== OFF).map(([c, v]) => (v === "end" ? c : `${c}:${v}`)).join(",");
   const submit = async () => {
     setBusy(true); setMsg(null);
-    const args: Record<string, unknown> = { ...vals, kind, slots, readOnly: twin ? "true" : "false", routes: routesArg() };
+    const args: Record<string, unknown> = { ...vals, kind, slots, readOnly: twin ? "true" : "false", routes: routesArg(), ...(account && !editing ? { account } : {}) };
     if (editing) { args.name = editing; if (!vals.key) delete args.key; } else args.name = name;
     const r: any = await call({ verb: editing ? "edit" : "add", args });
     setBusy(false);
     if (r.error) return setMsg({ ok: false, text: `${S.failed} ${r.error}` });
-    setMsg({ ok: true, text: r.needsRestart ? S.needsRestart : S.noRestart });
+    setMsg({ ok: true, text: (r.login ? S.loginOnce(r.login) + " " : "") + (r.needsRestart ? S.needsRestart : S.noRestart) });
     reset(); await refresh();
   };
   const startEdit = (a: Added) => {
@@ -76,7 +88,7 @@ function Screen() {
 
   const posOptions = (c: string) => [{ label: S.off, value: OFF }, { label: S.end, value: "end" },
     ...Array.from({ length: (routeTypes[c] ?? 0) + 1 }, (_, i) => ({ label: S.position(i + 1), value: String(i + 1) }))];
-  const modelOptions = models.map((m) => ({ label: m.label === m.id ? m.id : `${m.label} (${m.id})`, value: m.id }));
+  const modelOptions = [...models.map((m) => ({ label: [m.label === m.id ? m.id : `${m.label} (${m.id})`, m.hint].filter(Boolean).join(" - "), value: m.id })), { label: S.customModel, value: CUSTOM }];
 
   return (
     <>
@@ -91,9 +103,12 @@ function Screen() {
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
               onChangeText={(t) => setVals((v) => ({ ...v, [f.id]: t }))} />
           ))}
-          <SettingsAction label={S.model} hint={vals.model ? vals.model : undefined} actionLabel={busy ? S.loading : S.loadModels} disabled={busy} onPress={() => void loadModels()} />
-          {models.length ? <SettingsSelect label={S.modelPick} value={vals.model ?? ""} options={modelOptions} onValueChange={(v) => setVals((x) => ({ ...x, model: v }))} /> : null}
-          <SettingsInput key={`m${formKey}${vals.model ?? ""}`} label={S.modelType} initialValue={vals.model ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, model: t }))} />
+          {modelErr ? <SettingsRow label={S.model} error={`${S.modelsFailed} ${modelErr}`} /> : null}
+          <SettingsSelect label={S.model} value={custom || (vals.model && !models.some((m) => m.id === vals.model)) ? CUSTOM : vals.model ?? ""} options={modelOptions}
+            onValueChange={(v) => { if (v === CUSTOM) { setCustom(true); setVals((x) => ({ ...x, model: "" })); } else { setCustom(false); setVals((x) => ({ ...x, model: v })); } }} />
+          {custom || (vals.model && !models.some((m) => m.id === vals.model)) ? <SettingsInput key={`m${formKey}`} label={S.modelType} initialValue={vals.model ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, model: t }))} /> : null}
+          {k?.account?.by === "config-dir" && !editing ? <SettingsInput key={`a${formKey}`} label={S.account} hint={S.accountHint(k.account.env ?? k.account.arg ?? "")} initialValue={account} onChangeText={setAccount} /> : null}
+          {k?.account && k.account.by !== "config-dir" ? <SettingsRow label={S.account} hint={k.account.by === "endpoint" ? k.account.help : `${S.noAccounts} ${k.account.none ?? ""}`} /> : null}
           {k?.slots ? <SettingsInput key={`s${formKey}`} label={S.slots} initialValue={slots} onChangeText={setSlots} /> : null}
           {k?.readOnlyTwin ? <SettingsSwitch label={S.readOnlyTwin} value={twin} onValueChange={setTwin} /> : null}
           <SettingsRow label={S.routes} hint={S.routesHint} />
@@ -108,7 +123,7 @@ function Screen() {
         <SettingsCard>
           {added.length === 0 ? <SettingsRow label={S.none} /> : null}
           {added.map((a) => (
-            <SettingsRow key={a.name} label={`${a.name}  (${a.type})`} hint={`${a.model}${a.url ? `  ${a.url}` : ""}${a.keySet ? `  ${S.keySet}` : ""}  slots ${a.slots ?? "-"}  ${a.routes.join(", ") || "-"}`}>
+            <SettingsRow key={a.name} label={`${a.name}  (${a.type}${a.account ? `, account ${a.account}` : ""})`} hint={`${a.model}${a.url ? `  ${a.url}` : ""}${a.keySet ? `  ${S.keySet}` : ""}  slots ${a.slots ?? "-"}  ${a.routes.join(", ") || "-"}`}>
               <SettingsAction label={a.name} actionLabel={S.edit} onPress={() => startEdit(a)} />
               <SettingsAction label={a.name} actionLabel={S.remove} disabled={busy} onPress={() => void del(a.name)} />
             </SettingsRow>
