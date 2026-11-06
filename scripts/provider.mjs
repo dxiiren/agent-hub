@@ -33,6 +33,7 @@ const wr = writeJsonKeepEol; // keeps the file's own line endings
 const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
 const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
 const FILES = ['local', 'paseo', 'routes'];
+const basePath = (p) => join(dirname(p.local), 'hub.local.undo-base.json'); // the files as they were before the FIRST added provider
 const undoPath = (p, name) => join(dirname(p.local), `hub.local.undo-${name}.json`); // matches .gitignore *.local.*
 
 /** Refuse unless the endpoint's /v1/models lists `model`. `f` is injectable for tests. */
@@ -74,7 +75,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   if (key && !k.fields.some((x) => x.id === 'key')) throw new Error(`kind ${type} takes no API key (an agent of that kind could read it)`);
   if (!safeId(model)) throw new Error('--model must be a plain model id');
   const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
-  const local = rd(p.local, {});
+  const local = rd(p.local, {}); const first = !Object.keys(local.extraProviders || {}).length;
   if (local.extraProviders?.[name]) throw new Error(`${name} already exists (remove it first, or use edit)`);
   const cfg = rd(p.paseo, { version: 1 });
   if (k.own && cfg.agents?.providers?.[name]) throw new Error(`${name} is already a provider in the Paseo config (not added by this tool)`);
@@ -99,6 +100,7 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen', run
   }
   for (const { c, pos } of chains) { const l = routes.routes[c]; l.splice(pos ? Math.min(pos - 1, l.length) : l.length, 0, token); }
   if (type === 'opencode') { mkdirSync(join(hubDir, 'xdg'), { recursive: true }); writeJsonKeepEol(join(hubDir, `opencode-${name}.json`), opencodeFile(name, spec)); }
+  if (first) writeFileSync(basePath(p), JSON.stringify(Object.fromEntries(FILES.map((x) => [x, (preOverride ?? pre)[x]?.toString('base64') ?? null]))));
   wr(p.local, local); wr(p.routes, routes); wr(p.paseo, cfg);
   // remove() puts the exact pre-add bytes back while nothing else touched the files since
   const snap = Object.fromEntries(FILES.map((x) => [x, { pre: (preOverride ?? pre)[x]?.toString('base64') ?? null, post: sha(bytes(p[x])) }]));
@@ -122,12 +124,25 @@ function removeManual(name, p, local = rd(p.local, {})) {
   if (cfg.agents && !Object.keys(cfg.agents).length) delete cfg.agents;
   wr(p.local, local); wr(p.routes, routes); wr(p.paseo, cfg);
   if (spec.type === 'opencode') rmSync(join(hubDirOf(p.paseo), `opencode-${name}.json`), { force: true });
+  rmSync(undoPath(p, name), { force: true });
+  if (!local.extraProviders) restoreBase(p);
+}
+/** Last provider gone: put each file's ORIGINAL bytes back when its content is the same JSON (keeps hand formatting that a rewrite would lose). */
+function restoreBase(p) {
+  let b; try { b = JSON.parse(readFileSync(basePath(p), 'utf8')); } catch { return; }
+  const canon = (buf) => { try { return JSON.stringify(JSON.parse(buf.toString('utf8').replace(/^﻿/, ''))); } catch { return null; } };
+  for (const x of FILES) {
+    const pre = b[x] === null ? null : Buffer.from(b[x], 'base64'); const cur = bytes(p[x]);
+    if (pre === null) { if (cur && canon(cur) === '{}') rmSync(p[x], { force: true }); }
+    else if (cur && canon(cur) !== null && canon(cur) === canon(pre)) writeFileSync(p[x], pre);
+  }
+  rmSync(basePath(p), { force: true });
 }
 export function remove(name, p = paths()) {
   const local = rd(p.local, {});
   if (!local.extraProviders?.[name]) throw new Error(`${name} is not an added provider (list: ${Object.keys(local.extraProviders || {}).join(', ') || 'none'})`);
   const spec = local.extraProviders[name];
-  if (restoreSnapshot(name, p)) { if (spec.type === 'opencode') rmSync(join(hubDirOf(p.paseo), `opencode-${name}.json`), { force: true }); return; } // untouched since add: byte-identical to before
+  if (restoreSnapshot(name, p)) { if (spec.type === 'opencode') rmSync(join(hubDirOf(p.paseo), `opencode-${name}.json`), { force: true }); if (!Object.keys(rd(p.local, {}).extraProviders || {}).length) rmSync(basePath(p), { force: true }); return; } // untouched since add: byte-identical to before
   removeManual(name, p, local);
 }
 /** Change slots, model, url, key, routes (with positions) or the read-only twin of an added provider. Kind and name are fixed. Undo still returns to the state before the ORIGINAL add. */
@@ -142,9 +157,9 @@ export async function edit(name, ch, p = paths(), o = {}) {
   const untouched = u && FILES.every((x) => !u[x] || sha(before[x]) === u[x].post);
   const preOverride = untouched ? Object.fromEntries(FILES.map((x) => [x, u[x].pre === null ? null : Buffer.from(u[x].pre, 'base64')])) : undefined;
   const merged = { name, kind: spec.type, url: spec.url, model: spec.model, key: spec.key, readOnly: spec.readOnly, slots: cur.slots, routes: curRoutes, ...Object.fromEntries(Object.entries(ch).filter(([k, v]) => v !== undefined && v !== '' && !['name', 'kind', 'type'].includes(k))) };
-  const ocf = join(hubDirOf(p.paseo), `opencode-${name}.json`), ocBefore = bytes(ocf);
+  const ocf = join(hubDirOf(p.paseo), `opencode-${name}.json`), ocBefore = bytes(ocf), undoBefore = bytes(undoPath(p, name)), baseBefore = bytes(basePath(p));
   try { removeManual(name, p); return await add(merged, p, { ...o, preOverride }); }
-  catch (e) { for (const x of FILES) { if (before[x] === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], before[x]); } if (ocBefore) writeFileSync(ocf, ocBefore); throw e; }
+  catch (e) { for (const x of FILES) { if (before[x] === null) rmSync(p[x], { force: true }); else writeFileSync(p[x], before[x]); } if (ocBefore) writeFileSync(ocf, ocBefore); if (undoBefore) writeFileSync(undoPath(p, name), undoBefore); if (baseBefore) writeFileSync(basePath(p), baseBefore); throw e; }
 }
 /** Restore each file whose bytes still equal what add() left; true when every file was restored. */
 function restoreSnapshot(name, p) {

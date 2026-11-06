@@ -124,3 +124,14 @@ test('a kind without a key field refuses a key (opencode)', async () => {
   await assert.rejects(add({ name: 'opencode-k', kind: 'opencode', url: URL1, model: 'm1', key: 'sk-x' }, p, { f: served(['m1']) }), /takes no API key/);
   assert.ok(!existsSync(p.local));
 });
+
+test('two providers added then removed in the SAME order restore hand-formatted files byte for byte', async () => {
+  const { p, sha } = box();
+  writeFileSync(p.routes, '{"slots":{"codex":2},"modes":{},\n  "routes":{"summarise":["a","b"],"code-edit":["x/1"]}}'); // hand formatting, no final newline
+  const before = sha();
+  await add({ name: 'qwen-a', kind: 'qwen', url: URL1, model: 'm1', routes: 'summarise' }, p, { f: served(['m1']), which: () => 'q' });
+  await add({ name: 'fast-tier', kind: 'qoder', model: 'efficient', routes: 'code-edit' }, p, { run: cli(['efficient']) });
+  remove('qwen-a', p); remove('fast-tier', p);
+  assert.deepEqual(sha(), before);
+  assert.ok(!existsSync(join(p.local, '..', 'hub.local.undo-base.json')) && !existsSync(join(p.local, '..', 'hub.local.undo-fast-tier.json')), 'no undo files left behind');
+});
