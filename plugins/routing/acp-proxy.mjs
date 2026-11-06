@@ -3,6 +3,11 @@
 // modes, and when Paseo selects it (session/set_mode, before the first prompt) it restarts qwen with the read-only settings,
 // replays initialize + session/new, and keeps talking to Paseo under the original session id. One provider entry per endpoint.
 import { createInterface } from 'node:readline';
+import { join } from 'node:path';
+import { runDir, tryWriteState, readStateJson } from './runstate.mjs';
+/** Run-dir file that maps the session id Paseo sees to the id of qwen's own session (they differ after the read-only restart). */
+export const aliasFile = (outer) => `qwen-session-${String(outer).replace(/[^A-Za-z0-9-]/g, '_')}.json`;
+export const innerSession = (outer) => { try { return readStateJson(join(runDir(), aliasFile(outer)))?.inner ?? null; } catch { return null; } };
 
 export const RO_MODE = { id: 'read-only', name: 'Read-only', description: 'Reads files inside the task folder only: no edits, no shell, sensitive files refused by the agent itself.' };
 const NL = String.fromCharCode(10);
@@ -54,6 +59,7 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
     await rpc('initialize', init.params);
     const r = await rpc(sess.method, { ...sess.params, ...(sess.method === 'session/load' ? { sessionId: inner } : {}) });
     inner = r?.sessionId ?? inner;
+    if (inner !== outer) tryWriteState(join(runDir(), aliasFile(outer)), { inner }); // Paseo only knows `outer`; the usage hook finds qwen's own chat file (the token counts) through this
     await rpc('session/set_mode', { sessionId: inner, modeId: roBaseMode });
   }
   const reply = (id, result) => toClient({ jsonrpc: '2.0', id, result });

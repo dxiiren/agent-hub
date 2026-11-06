@@ -5,11 +5,13 @@ import { join, dirname } from "node:path";
 import { execFileTree } from "./exec-tree.mjs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
+import { innerSession } from "../../routing/acp-proxy.mjs";
 
 /** Sum usageMetadata of one Qwen Code session file: {in (uncached), out (incl. thoughts), cached}. */
 export function qwenSession(sessionId, home = join(os.homedir(), ".qwen")) {
   const root = join(home, "projects");
   if (!sessionId || !existsSync(root)) return null;
+  sessionId = innerSession(sessionId) ?? sessionId; // the read-only restart gives qwen a new session id; the proxy recorded it
   for (const p of readdirSync(root)) {
     const f = join(root, p, "chats", sessionId + ".jsonl");
     if (!existsSync(f)) continue;
