@@ -12,7 +12,9 @@ type Model = { id: string; label: string };
 const OFF = "off";
 
 function Screen() {
-  const call = useRpc(providersRpc);
+  const rpc = useRpc(providersRpc);
+  // an RPC that times out or fails must not leave the screen stuck on "Loading...": turn it into the same {error} shape as a tool refusal
+  const call = useCallback(async (input: Parameters<typeof rpc>[0]) => { try { return await rpc(input); } catch (e: any) { return { error: String(e?.message ?? e) } as any; } }, [rpc]);
   const [kinds, setKinds] = useState<Kind[]>([]);
   const [routeTypes, setRouteTypes] = useState<Record<string, number>>({});
   const [added, setAdded] = useState<Added[]>([]);
