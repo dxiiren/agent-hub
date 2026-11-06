@@ -72,10 +72,13 @@ export async function add(a, p = paths(), { f = fetch, which = () => 'qwen' } = 
 export function remove(name, p = paths()) {
   const local = rd(p.local, {});
   if (!local.extraProviders?.[name]) throw new Error(`${name} is not an added provider (list: ${Object.keys(local.extraProviders || {}).join(', ') || 'none'})`);
-  delete local.extraProviders[name];
+  delete local.extraProviders[name]; if (!Object.keys(local.extraProviders).length) delete local.extraProviders;
   const routes = rd(p.routes, {});
   delete routes.slots?.[name]; delete routes.modes?.[name]; delete routes.readOnlyModes?.[name];
   if (routes.readOnlyEnforced) routes.readOnlyEnforced = routes.readOnlyEnforced.filter((x) => x !== name);
+  // add() materialised the built-in defaults and an empty readOnlyModes: drop what is back to its default so the file returns to its pre-add form
+  if (routes.readOnlyEnforced && routes.readOnlyEnforced.length === READ_ONLY_ENFORCED.length && READ_ONLY_ENFORCED.every((x) => routes.readOnlyEnforced.includes(x))) delete routes.readOnlyEnforced;
+  if (routes.readOnlyModes && !Object.keys(routes.readOnlyModes).length) delete routes.readOnlyModes;
   for (const c of Object.keys(routes.routes || {})) routes.routes[c] = routes.routes[c].filter((x) => x.split('/')[0] !== name);
   const cfg = rd(p.paseo, {});
   if (cfg.agents?.providers) { delete cfg.agents.providers[name]; delete cfg.agents.providers[name + '-ro']; }

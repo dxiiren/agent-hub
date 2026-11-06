@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
-import { grantReads, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
+import { withAnswer, grantReads, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 
 const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop", "opencode", "qoder"]; // fake providers in tests: enforcement is tested separately
 const routes = { readOnlyEnforced: ALL, readOnlyModes: { codex: "auto", qwen: "plan" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
@@ -665,4 +665,20 @@ test("retire removes only the project this route created (not one that existed b
   assert.deepEqual(del(f3), [], "another agent still runs there: kept");
   const f4 = mk([], [mine]); runRoute({ ...o, cwd: "C:/r", keep: true }, f4, { ...routes, routes: { edit: ["qwen/b"] } });
   assert.deepEqual(del(f4), [], "--keep");
+});
+
+test("round 7: a hung `paseo logs` is killed after the logs timeout, retried once, then reported unreadable", () => {
+  const calls = [];
+  const spawn = (_c, args, o) => { calls.push(o.timeout); return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("t"), { code: "ETIMEDOUT" }) }; };
+  const r = cliPaseo(undefined, { PASEO_BIN: "paseo", AGENT_HUB_LOGS_TIMEOUT_S: "7" }, spawn)(["logs", "A"]);
+  assert.deepEqual(calls, [7000, 7000]); assert.match(r.error, /hung and was killed/);
+  assert.ok(!transient(r), "not retried by withRetry");
+  const calls2 = []; const hang = (_c, a, o) => { calls2.push(o.timeout); return { status: 0, stdout: "{}" }; };
+  cliPaseo(undefined, { PASEO_BIN: "paseo" }, hang)(["ls"]); cliPaseo(undefined, { PASEO_BIN: "paseo" }, hang)(["logs", "A"]);
+  assert.deepEqual(calls2, [120000, 30000]);
+  // first call hangs, retry answers: the text comes back
+  let n = 0; const flaky = () => (++n === 1 ? { error: Object.assign(new Error("t"), { code: "ETIMEDOUT" }), stdout: "" } : { status: 0, stdout: "hello" });
+  assert.deepEqual(cliPaseo(undefined, { PASEO_BIN: "paseo" }, flaky)(["logs", "A"]), { text: "hello" });
+  const w = withAnswer({ agentId: "A" }, cliPaseo(undefined, { PASEO_BIN: "paseo" }, spawn), 0);
+  assert.equal(w.answer, ""); assert.match(w.answerReason, /logs unreadable/);
 });

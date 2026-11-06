@@ -234,7 +234,7 @@ function mcp(action) {
 }
 
 // ---------- doctor
-const paseo = (args, o = {}) => run(WIN ? 'paseo.cmd' : 'paseo', ['--home', HOME, ...args], { shell: WIN, ...o });
+const paseo = (args, o = {}) => run(WIN ? 'paseo.cmd' : 'paseo', ['--home', HOME, ...args], { shell: WIN, timeout: args[0] === 'logs' ? 30_000 : 300_000, killSignal: 'SIGKILL', ...o }); // bounded: the deep run's own wait is 240 s
 let fails = 0;
 const row = (good, label, detail = '') => { console.log(`${good ? 'PASS' : 'FAIL'}  ${label}${detail ? '  ' + detail : ''}`); if (!good) fails++; };
 async function http(path, headers = {}, body) {

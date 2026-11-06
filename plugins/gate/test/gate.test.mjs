@@ -295,3 +295,12 @@ test("attack: an agent that commits, moves HEAD and the branch ref, or rewrites 
     assert.notEqual(r.d.status, "PASS", name); assert.match(r.res.reasons.join(), /path not allowed: evil.txt/, name);
   }
 });
+
+test("round 7: a bare JWT and a PGP private key block are secrets; ordinary dotted text is not", () => {
+  const jwt = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"].join(".");
+  const pgp = "-----BEGIN PGP PRIVATE " + "KEY BLOCK-----";
+  for (const l of ["+auth: " + jwt, jwt, pgp]) assert.ok(SECRET_RE.test(l), l.slice(0, 20));
+  for (const l of ["see eyJ-prefixed values in the docs", "a.b.c version 1.2.3", "-----BEGIN PGP PUBLIC KEY BLOCK-----", "eyJhbGciOiJIUzI1NiJ9 header only"]) assert.ok(!SECRET_RE.test(l), l);
+  const d = repo(); writeFileSync(join(d, "t.txt"), "x = " + jwt);
+  assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern/);
+});

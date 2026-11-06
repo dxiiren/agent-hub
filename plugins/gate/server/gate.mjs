@@ -10,7 +10,7 @@ const SECRET_KEY = String.raw`(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|priv
 // value: quoted 8+ non-space chars holding a digit or punctuation (or 16+ plain chars) | unquoted 8+ with a digit/punctuation and no brackets/parens, so `token = tokens[i]`, `password_field = input` and `token = parse_the_user_token` stay clean
 const PUNCT = String.raw`[\d!@#$%^&*+]`;
 export const SECRET_RE = new RegExp(
-  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9\-._~+/]{20,}|aws\w*secret\w*['"]?\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}|` + SECRET_KEY +
+  String.raw`(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9\-._~+/]{20,}|aws\w*secret\w*['"]?\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}|` + SECRET_KEY +
   String.raw`['"]?\s*[:=]\s*(?:['"](?=[^'"\s]*` + PUNCT + String.raw`)[^'"\s]{8,}['"]|['"][A-Za-z0-9_\-\/+]{16,}['"]|['"]?(?=[^\s'"\[\]()<>{},;]*` + PUNCT + String.raw`)[^\s'"\[\]()<>{},;]{8,}))`, "i");
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.

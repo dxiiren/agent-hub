@@ -33,8 +33,17 @@ test('add writes provider + ro twin, local config, slots, modes and routes; list
   assert.deepEqual(list(p), [{ name: 'qwen-extra', type: 'qwen-code', url: URL1, model: 'm1', slots: 3, routes: ['summarise', 'code-edit'] }]);
   remove('qwen-extra', p);
   assert.deepEqual(Object.keys(read('paseo').agents.providers), ['codex']);
-  assert.deepEqual(read('routes').routes.summarise, ['qwen-laptop']); assert.equal(read('routes').slots['qwen-extra'], undefined); assert.ok(!read('routes').readOnlyEnforced.includes('qwen-extra')); assert.equal(read('routes').readOnlyModes['qwen-extra'], undefined);
+  assert.deepEqual(read('routes').routes.summarise, ['qwen-laptop']); assert.equal(read('routes').slots['qwen-extra'], undefined); assert.equal(read('routes').readOnlyEnforced, undefined); assert.equal(read('routes').readOnlyModes, undefined);
   assert.deepEqual(list(p), []);
+});
+
+test('remove restores the config files byte for byte', async () => {
+  const { p } = box(); const before = ['local', 'paseo', 'routes'].map((f) => existsSync(p[f]) ? readFileSync(p[f], 'utf8') : null);
+  await add({ name: 'qwen-extra', url: URL1, model: 'm1', routes: 'summarise' }, p, opts());
+  remove('qwen-extra', p);
+  const after = ['local', 'paseo', 'routes'].map((f) => existsSync(p[f]) ? readFileSync(p[f], 'utf8') : null);
+  assert.deepEqual(JSON.parse(after[1]), JSON.parse(before[1])); assert.deepEqual(JSON.parse(after[2]), JSON.parse(before[2]));
+  const r = JSON.parse(after[2]); assert.ok(!('readOnlyEnforced' in r) && !('readOnlyModes' in r)); assert.ok(!('extraProviders' in JSON.parse(after[0])));
 });
 
 test('refuses a model the endpoint does not serve, writing nothing', async () => {

@@ -37,6 +37,8 @@ export function loadRoutes(env = process.env) {
 
 /** Seconds a `paseo run --no-wait` (agent + worktree creation) may take before the CLI gives up. Upstream Paseo has no bound: under load or a provider ACP init stall the daemon holds the request for 120 s+ (agent.create.request, "Timed out refreshing <provider> ... pending: initialize") and the caller used to hang for the 15 min spawn cap. */
 export const createTimeoutS = (env = process.env) => Number(env.AGENT_HUB_CREATE_TIMEOUT_S) || 240;
+/** Seconds one `paseo logs` call may take (it answers in ~2 s when healthy). */
+export const logsTimeoutS = (env = process.env) => Number(env.AGENT_HUB_LOGS_TIMEOUT_S) || 30;
 export const toSeconds = (d) => { const m = /^(\d+)\s*(s|m|h)?$/.exec(String(d ?? "").trim()); return m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 }[m[2] ?? "s"]) : 900; };
 
 /** Default CLI runner: parsed JSON of `paseo <args> --json`, or {error}. */
@@ -49,7 +51,12 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
       try { return JSON.parse(q.stdout); } catch { return { error: "pending permissions unreadable: " + String(q.stderr || q.stdout).slice(0, 200) }; }
     }
     const text = args[0] === "logs"; // `paseo logs` has no JSON output: hand back the raw text
-    const r = spawn(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), ...(text ? [] : ["--json"])], { encoding: "utf8", timeout: create ? createTimeoutS(env) * 1000 : 15 * 60_000, env });
+    // Every CLI call is bounded (a hung `paseo logs` once held a route for the whole 15 min). Only wait/run legitimately run long; logs is short and retried once, then reported unreadable so the route still returns.
+    const long = args[0] === "wait" || args[0] === "run";
+    const timeout = create ? createTimeoutS(env) * 1000 : text ? logsTimeoutS(env) * 1000 : long ? 15 * 60_000 : 2 * 60_000;
+    const call = () => spawn(cmd, [...pre, ...args, ...(home ? ["--home", home] : []), ...(text ? [] : ["--json"])], { encoding: "utf8", timeout, killSignal: "SIGKILL", env });
+    let r = call();
+    if (text && r.error?.code === "ETIMEDOUT") { r = call(); if (r.error?.code === "ETIMEDOUT") return { error: `logs call hung and was killed after 2 x ${logsTimeoutS(env)} s` }; }
     if (create && r.error?.code === "ETIMEDOUT") return { error: `CREATE_TIMEOUT: the daemon did not create the agent within ${createTimeoutS(env)} s (saturated daemon or a provider that stalls at initialize; upstream Paseo, not a worktree bug). Check \`paseo ls\` and the laptop load, then retry; raise AGENT_HUB_CREATE_TIMEOUT_S if the host is just slow.` };
     const out = r.stdout || "";
     if (text) return r.status === 0 ? { text: out } : { error: `exit=${r.status} ` + String(r.stderr || out).slice(0, 300) };
