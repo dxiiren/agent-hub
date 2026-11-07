@@ -1,6 +1,7 @@
 {
   "id": "agent-hub-usage",
   "name": "Agent Hub usage",
+  "description": "Records the tokens, credits and cost of every finished agent task and shows plan usage and hub task totals on the Usage page.",
   "media": [],
   "requirements": { "paseo": ">=0.15.0" }
 }
