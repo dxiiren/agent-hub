@@ -64,6 +64,24 @@ Read usage afterwards: `agent-hub usage --all`, or Settings > Usage in the UI.
 | ![Doctor](docs/images/doctor.png) | `agent-hub doctor` output. |
 | ![Grafana usage](docs/images/grafana-usage.png) | **Usage:** Settings > Usage shows plan percentages and one card per self-hosted endpoint (up/down, tokens today); Grafana (`http://127.0.0.1:3000`) shows tokens per provider and per day. |
 
+## Routing & slots (models, slots and chain order per provider)
+
+Settings > Plugins > agent-hub-providers > **Routing & slots** (also in the command palette), and the same on the command line. Both use one backend, `scripts/routes.mjs`, and write `config/routes/routes.local.json`, the file `route.mjs` reads. Writes take the same lock and atomic write as `provider add`, never touch a template, and every save can be undone byte for byte.
+
+- **Per provider:** on/off (Paseo's own enabled flag; the page changes it live through the daemon, the CLI writes the Paseo config and tells you to restart), which of its models the hub may use (one switch per model from the live list; none restricted = all allowed), parallel slots (1 to 64), and whether it may run read-only tasks (shown, not editable).
+- **Per task type** (`code-edit`, `code-edit-easy`, `summarise`, `test-scaffold`, `review`): chain order with Up / Down / Off and an add list. Earlier entries are tried first.
+- **A model that is not allowed is never used:** the next entry is tried, and an explicit `--provider P/M` cannot bypass it. A chain entry with no model (an endpoint provider's own model) is not restricted.
+- **Totals:** the page shows configured slots and an "effective now" figure (today the slots of enabled providers; `effectiveBudget()` in `plugins/routing/budget.mjs` is the one place a laptop-based budget plugs in).
+
+```
+agent-hub routes show [--json] | models <provider> | undo
+agent-hub routes set <provider> [--slots N] [--models id,id|all] [--enabled true|false]
+agent-hub routes chain <type> <entry,entry,...>
+agent-hub routes move <type> <entry> up|down|off
+```
+
+Bad input is refused with every problem listed and nothing written. Undo is refused when the routes file changed after the save you would undo.
+
 ## Command cheat-sheet
 
 Run `agent-hub --help` or `agent-hub <command> --help` (help never runs the command).
@@ -73,6 +91,7 @@ Run `agent-hub --help` or `agent-hub <command> --help` (help never runs the comm
 | Route a task | `agent-hub route <code-edit\|code-edit-easy\|test-scaffold\|summarise\|review> "<prompt>" --cwd . [--gate "npm test"] [--new-workspace worktree] [--provider P/M]` |
 | Edit tasks | use `--new-workspace worktree` (throwaway copy) and a real `--gate`; the gate must pass or `status` is `gate-failed` |
 | Agent asked a question (`status: "asking"`, exit 3) | `agent-hub reply <agentId> "<answer>"` (never put a secret in it; up to 3 questions per task) |
+| Routing & slots | `agent-hub routes show \| set <provider> --slots N --models a,b \| chain <type> a,b \| move <type> <entry> up\|down\|off \| undo` |
 | Providers | `agent-hub provider kinds \| list \| models --kind K --url U \| add NAME --kind K ... \| edit NAME --slots 4 \| remove NAME` |
 | Usage | `agent-hub usage --all`, `agent-hub usage --session <id> --json` |
 | Health | `agent-hub doctor` (add `--deep` to run one tiny task per provider; uses tokens) |
