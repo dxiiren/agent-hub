@@ -297,7 +297,17 @@
    "name": "provider-error-actions",
    "find": "H&&!z?(0,B.jsx)(t.Text,{style:G.errorText,numberOfLines:3,children:H}):null",
    "replace": "H&&!z?(0,B.jsxs)(s.View,{children:[(0,B.jsx)(t.Text,{style:G.errorText,numberOfLines:2,children:H}),(0,B.jsxs)(s.View,{style:{flexDirection:\"row\",gap:16,marginTop:4},children:[(0,B.jsx)(__ahP,{accessibilityRole:\"button\",testID:\"provider-retry-\"+p.id,onPressIn:e=>{e?.stopPropagation?.()},onPress:e=>{e?.stopPropagation?.();__ahRetry&&__ahRetry()},children:(0,B.jsx)(t.Text,{style:G.errorText,children:\"Retry\"})}),w?(0,B.jsx)(__ahP,{accessibilityRole:\"button\",testID:\"provider-remove-button-\"+p.id,onPressIn:e=>{e?.stopPropagation?.()},onPress:e=>{e?.stopPropagation?.();T(p.id,p.label)},children:(0,B.jsx)(t.Text,{style:G.errorText,children:\"Remove\"})}):null]})]}):null"
+  },
+  {
+   "name": "provider-switch-label",
+   "find": "accessibilityLabel:R(\"settings.providers.enableProvider\",{name:p.label})",
+   "replace": "accessibilityLabel:(x?\"Switch off \":\"Switch on \")+p.label"
+  },
+  {
+   "name": "rename-default-maxlength",
+   "find": "onSubmit:j,validate:C,maxLength:D,testID:z}=l,",
+   "replace": "onSubmit:j,validate:C,maxLength:D=100,testID:z}=l,"
   }
  ],
- "rev": 14
+ "rev": 15
 }
