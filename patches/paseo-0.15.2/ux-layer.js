@@ -99,7 +99,7 @@ function polish(){
   document.querySelectorAll('[data-testid="model-picker-error"]').forEach(e=>{if(/switched off/.test(e.textContent||"")){const b=e.parentElement&&e.parentElement.querySelector("button");if(b&&b.style.display!=="none")b.style.display="none"}});
   // Providers page: a status that is only a word gets an explanation on hover, and a jump link to the "Add provider" list (it sits far down)
   if(/\/providers$/.test(path)){
-    document.querySelectorAll("div").forEach(e=>{if(e.children.length)return;const t=(e.textContent||"").trim();if(t==="Disabled")e.title="Switched off. Turn the switch on to use this provider.";else if(t==="Not installed")e.title="The program for this provider is not on this computer."});
+    document.querySelectorAll("div").forEach(e=>{if(e.children.length)return;const t=(e.textContent||"").trim();if(t==="Agent Hub")e.title="Set up through the hub's own short form: adds another model, endpoint or account.";else if(t==="Agent CLI")e.title="A command-line coding agent. Its program must be installed on this computer first.";else if(t==="Disabled")e.title="Switched off. Turn the switch on to use this provider.";else if(t==="Not installed")e.title="The program for this provider is not on this computer."});
     if(!document.getElementById("ah-jump")){
       const h=[...document.querySelectorAll("div")].find(e=>!e.children.length&&(e.textContent||"").trim()==="Add provider"&&e.getBoundingClientRect().height>0&&e.getBoundingClientRect().top>200);
       const title=[...document.querySelectorAll("div")].find(e=>!e.children.length&&(e.textContent||"").trim()==="Providers"&&parseFloat(getComputedStyle(e).fontSize)>=24);
@@ -107,6 +107,7 @@ function polish(){
     }
   }else{const j=document.getElementById("ah-jump");if(j)j.remove()}
   // account e-mails on the Usage cards are masked (a shared screen or a screenshot must not show them); hover shows the full address
+  if(/\/usage$/.test(location.pathname)){const w0=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n0;while((n0=w0.nextNode())){const m=(n0.nodeValue||'').match(/^(\d{2,3})% used$/);if(m&&+m[1]>=90)n0.nodeValue=m[1]+'% used - '+(+m[1]>=100?'full':'almost full')+', tasks on this plan may be refused until it resets'}}
   if(/\/usage$/.test(location.pathname)){const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;while((n=w.nextNode())){const m=(n.nodeValue||"").match(/^\s*([\w.+-]{2,})@([\w-]+(?:\.[\w-]+)+)\s*$/);if(m&&n.parentElement){n.parentElement.title=m[1]+"@"+m[2];n.nodeValue=m[1][0]+"***@"+m[2]}}}
   document.querySelectorAll('[role="switch"][aria-label]').forEach(e=>{const l=e.getAttribute("aria-label"),on=e.getAttribute("aria-checked")==="true",m=l.match(/^(?:Enable|Disable) (.+)$/);if(m){const w=(on?"Disable ":"Enable ")+m[1];if(w!==l)e.setAttribute("aria-label",w)}});
   document.querySelectorAll('div,span').forEach(e=>{if(e.children.length===0&&/^Updated /.test(e.textContent||"")&&e.style.whiteSpace!=="normal"){e.style.whiteSpace="normal";e.style.textOverflow="clip";e.style.overflow="visible"}});
