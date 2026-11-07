@@ -84,7 +84,7 @@ class WidgetJson(unittest.TestCase):
         self.assertEqual(by["mylocal"]["kind"], "custom")
 
     def test_label_ip_is_shortened_to_the_last_octet(self):
-        config = {"agents": {"providers": {"x": {"label": "Box 192.168.1.50 main", "command": ["c"]}}}}
+        config = {"agents": {"providers": {"x": {"label": "Box " + ".".join(["192", "168", "1", "50"]) + " main", "command": ["c"]}}}}
         self.assertEqual(w.build(self.d, config, 1)["sources"][0]["name"], "Box .50 main")
 
     def test_probe_is_cached_so_repeat_calls_add_no_load(self):

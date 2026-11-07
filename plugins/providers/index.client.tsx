@@ -127,7 +127,7 @@ function Screen() {
     if (editing) { args.name = editing; if (!vals.key) delete args.key; } else args.name = name;
     const r: any = await call({ verb: editing ? "edit" : "add", args });
     setBusy(false);
-    if (r.error) return setMsg({ ok: false, text: friendly(r.error) });
+    if (r.error) return setMsg({ ok: false, text: modelErr && r.error === modelErr ? S.fixAbove : friendly(r.error) });
     setMsg({ ok: true, text: (r.login ? S.loginOnce(r.login) + " " : "") + (r.needsRestart ? S.needsRestart : S.noRestart), restart: !!r.needsRestart });
     reset(); await refresh();
   };

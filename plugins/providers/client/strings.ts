@@ -56,6 +56,7 @@ export const S = {
   badName: "Name: use lowercase letters, digits and single dashes, and start with the kind (for example opencode-office). Names the hub already uses are not allowed.",
   badLabel: "Display name: 1 to 80 characters, without quotes.",
   badSlots: "Parallel slots: a whole number from 1 to 64.",
+  fixAbove: "Not saved: the Base URL above cannot be reached. Correct it (or press Cancel edit to keep the old one) and save again.",
   gone: "That provider is no longer there (it may have been removed in another tab or window). Reload this page to see the current list.",
   badNameLong: "Name: at most 40 characters.",
   loadFailed: "Could not load the provider kinds",
