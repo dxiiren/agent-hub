@@ -53,5 +53,6 @@ usage: agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--stale-
 example: agent-hub cleanup --older-than 30m --dry-run`,
 };
 const a = process.argv[2];
+if (a && !H[a] && !['help', '--help', '-h'].includes(a)) console.error(`agent-hub: unknown command '${a}'. Use one of: route, reply, provider, routes, usage, doctor, cleanup.`);
 console.log(H[a] || H._);
 process.exit(a && !H[a] && !['help', '--help', '-h'].includes(a) ? 2 : 0);

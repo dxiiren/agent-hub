@@ -46,7 +46,7 @@
   {
    "name": "transport-1006-hint",
    "find": "Transport closed (code ${n.code})`",
-   "replace": "Transport closed (code ${n.code})${1006===n.code?\". The host closed the connection: a password is required or wrong, or the address is not reachable.\":\"\"}`"
+   "replace": "Transport closed (code ${n.code})${1006===n.code?\". The host closed the connection: it may be restarting or not reachable (wait a few seconds and try again), or a password is required or wrong.\":\"\"}`"
   },
   {
    "name": "config-read-back",
@@ -327,7 +327,32 @@
    "name": "model-routing-link",
    "find": "function V({fetchedAt:t,isCompact:s,modelsRefreshing:o,t:n,onOpenAddSheet:d,onOpenDiagSheet:c,onRefreshModels:a}){const u=",
    "replace": "function __AhLink(){const m=\"undefined\"!=typeof location&&location.pathname.match(/\\/hosts\\/([^/]+)/);return m?(0,z.jsx)(t.Text,{accessibilityRole:\"link\",\"data-testid\":\"models-routing-link\",onPress:()=>location.assign(\"/settings/hosts/\"+m[1]+\"/plugins/agent-hub-providers/routing\"),style:{fontSize:13,textDecorationLine:\"underline\",color:\"#3b9a6e\",textAlign:\"center\",paddingBottom:10,paddingHorizontal:12},children:\"Choose which of these models the hub may use: Routing & slots\"}):null}function V(__p){return(0,z.jsxs)(e.View,{children:[(0,z.jsx)(__V0,__p),__AhLink()]})}function __V0({fetchedAt:t,isCompact:s,modelsRefreshing:o,t:n,onOpenAddSheet:d,onOpenDiagSheet:c,onRefreshModels:a}){const u="
+  },
+  {
+   "name": "terminal-profile-name-limit",
+   "find": "0===I.trim().length&&(t.name=v(\"settings.host.terminalProfiles.nameRequired\")),",
+   "replace": "0===I.trim().length?t.name=v(\"settings.host.terminalProfiles.nameRequired\"):I.trim().length>60&&(t.name=\"The name can have at most 60 characters.\"),"
+  },
+  {
+   "name": "directory-empty-hint",
+   "find": ":\"No matching options\"}function oe(t)",
+   "replace": ":\"directory\"===t.kind&&\"\"===String(t.query??\"\").trim()?\"Type part of a folder name, or paste a full path.\":\"No matching options\"}function oe(t)"
+  },
+  {
+   "name": "directory-name-slash",
+   "find": "}else ge(t=>ue(t,\"new-directory-name\",{error:\"Enter a directory name\"}))",
+   "replace": "}else ge(t=>ue(t,\"new-directory-name\",{error:me.name.trim()?\"A directory name cannot contain slashes and cannot be . or ..\":\"Enter a directory name\"}))"
+  },
+  {
+   "name": "directory-name-invalid",
+   "find": "{isSubmitting:!1,error:o.error??\"Unable to create directory\"}",
+   "replace": "{isSubmitting:!1,error:/EINVAL|EPERM|illegal/i.test(o.error||\"\")?\"This name cannot be used for a folder. Avoid * ? \\\" < > | and a name ending in a dot or space.\":o.error??\"Unable to create directory\"}"
+  },
+  {
+   "name": "host-name-maxlength",
+   "find": "onClose:_,onSubmit:w,testID:\"host-page-rename-modal\"}",
+   "replace": "onClose:_,onSubmit:w,testID:\"host-page-rename-modal\",maxLength:40}"
   }
  ],
- "rev": 17
+ "rev": 18
 }

@@ -1,4 +1,4 @@
-/*agent-hub-rev:17*/(function(){const __go=function(){
+/*agent-hub-rev:18*/(function(){const __go=function(){
 // Agent Hub UX layer (patch rev 10): an in-app confirm dialog, a friendly page for addresses that show nothing, and plain-English labels for hub-internal names.
 try{
 if(typeof document==="undefined")return;
@@ -76,14 +76,15 @@ const DOWN="The hub is not answering right now. This page loads by itself as soo
 let hubDown=false,downAt=0;
 function downCheck(){
   const t=document.body.innerText||"";
-  if(!/Plugin host is offline|Connect to .{1,60} to see (usage|providers)|Connecting(\s+to)?\s+\S+/.test(t)&&!hubDown)return;
+  if(!/Plugin host is offline|Connect to .{1,60} to see (usage|providers)|Connecting(\s+to)?\s+\S+|^No active schedules$/m.test(t)&&!hubDown)return;
   if(Date.now()-downAt<2500)return;downAt=Date.now();
   fetch("/api/health",{cache:"no-store"}).then(r=>{hubDown=!r.ok}).catch(()=>{hubDown=true});
 }
+const downOrig=new Map(); // a replaced text goes back once the hub answers again (React would not redraw an unchanged node)
 function downText(){
-  if(!hubDown)return;
+  if(!hubDown){downOrig.forEach((v,n)=>{n.nodeValue=v});downOrig.clear();return}
   const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;
-  while((n=w.nextNode())){const v=(n.nodeValue||"").trim();if(/^Connect to .{1,60} to see (usage|providers)\.?$/.test(v)||/^The host is still connecting, or its plugin service is restarting/.test(v)||/^Reconnect to this host to manage its plugins/.test(v))n.nodeValue=DOWN}
+  while((n=w.nextNode())){const v=(n.nodeValue||"").trim();if(/^Connect to .{1,60} to see (usage|providers)\.?$/.test(v)||/^The host is still connecting, or its plugin service is restarting/.test(v)||/^Reconnect to this host to manage its plugins/.test(v)||/^No active schedules$/.test(v)){if(!downOrig.has(n))downOrig.set(n,n.nodeValue);n.nodeValue=DOWN}}
 }
 let strikes=0;
 // a short note while the page greys out (plugin Reload takes a moment and disables the whole list)

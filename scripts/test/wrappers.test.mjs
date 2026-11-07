@@ -49,7 +49,7 @@ for (const [args, re] of CASES) {
 }
 test('an unknown subcommand prints the usage and exits 2 through both wrappers', () => {
   const sh = spawnSync('sh', [SH, 'nope'], { encoding: 'utf8', timeout: 30000, windowsHide: true });
-  if (!sh.error) { assert.equal(sh.status, 2); assert.match(out(sh), /usage: agent-hub/); }
+  if (!sh.error) { assert.equal(sh.status, 2); assert.match(out(sh), /usage: agent-hub/); assert.match(out(sh), /unknown command 'nope'/); }
   if (process.platform === 'win32') {
     const c = spawnSync('cmd', ['/d', '/c', CMD, 'nope'], { encoding: 'utf8', timeout: 30000, windowsHide: true });
     assert.equal(c.status, 2); assert.match(out(c), /usage: agent-hub/);
