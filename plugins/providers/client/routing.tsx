@@ -8,6 +8,7 @@ type Prov = { id: string; label: string; status: string | null; enabled: boolean
 type Show = { types: string[]; chains: Record<string, string[]>; providers: Prov[]; maxSlots: number; canUndo: boolean; configuredTotal: number; effective: { configured: number; effective: number; reasons: string[]; source: string } };
 type Models = { loading?: boolean; list?: { id: string; label: string }[]; known?: boolean; error?: string };
 const ADD = "__add__";
+const OFF = "off";
 const move = (a: string[], i: number, d: number) => { const b = [...a]; const [x] = b.splice(i, 1); b.splice(i + d, 0, x); return b; };
 
 export function RoutingScreen() {
@@ -110,11 +111,9 @@ export function RoutingScreen() {
             <SettingsCard>
               {chain.length === 0 ? <SettingsRow label={R.emptyChain} /> : null}
               {chain.map((e, i) => (
-                <SettingsRow key={e} label={`${i + 1}. ${e}`}>
-                  <SettingsAction label="" actionLabel={R.up} disabled={busy || i === 0} onPress={() => void setChain(t, move(chain, i, -1))} />
-                  <SettingsAction label="" actionLabel={R.down} disabled={busy || i === chain.length - 1} onPress={() => void setChain(t, move(chain, i, 1))} />
-                  <SettingsAction label="" actionLabel={R.off} disabled={busy} onPress={() => void setChain(t, chain.filter((x) => x !== e))} />
-                </SettingsRow>
+                <SettingsSelect key={e} label={e} value={String(i + 1)} disabled={busy}
+                  options={[...chain.map((_, j) => ({ label: R.position(j + 1) + (j === i ? ` (${R.current})` : ""), value: String(j + 1) })), { label: R.off, value: OFF }]}
+                  onValueChange={(v) => { if (v === OFF) void setChain(t, chain.filter((x) => x !== e)); else if (Number(v) !== i + 1) void setChain(t, move(chain, i, Number(v) - 1 - i)); }} />
               ))}
               <SettingsSelect label={R.addLabel} value={ADD} options={addOptions(t)} onValueChange={(v) => { if (v !== ADD) void setChain(t, [...chain, v]); }} />
             </SettingsCard>
