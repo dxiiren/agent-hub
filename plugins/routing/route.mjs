@@ -4,6 +4,7 @@
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
 // Usage: route.mjs reply <agentId> "<text>" | route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep]
 import { modelNotAllowed } from "./allow.mjs";
+import { outsideHours } from "./hours.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
@@ -468,6 +469,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (state && state.get(base(prov)) === false) { trace.push({ provider: prov, skip: "provider disabled or unavailable in Paseo (Settings > Providers)" }); continue; }
     { const until = Number(readLimits(o)[base(prov)]); if (until > (o.now ?? Date.now)()) { trace.push({ provider: prov, skip: `${base(prov)}: usage limit until ${new Date(until).toISOString()}, skipped` }); continue; } }
     { const dn = o.endpointDown?.(base(prov)); if (dn) { trace.push({ provider: prov, skip: dn }); continue; } } // a known-down endpoint is skipped at once, not retried for minutes
+    { const oh = outsideHours(routes, entry, (o.now ?? Date.now)()); if (oh) { trace.push({ provider: prov, skip: oh }); continue; } } // chain entry with a time window (routes.hours)
     { const na = modelNotAllowed(routes, prov); if (na) { trace.push({ provider: prov, skip: na }); continue; } } // Routing & slots model allow-list
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;

@@ -5,7 +5,7 @@ import { routingRpc } from "../shared/rpc";
 import { R } from "./routing-strings";
 
 type Prov = { id: string; label: string; status: string | null; enabled: boolean; slots: number | null; cap: number | null; models: string[] | null; readOnlyAllowed: boolean };
-type Show = { types: string[]; chains: Record<string, string[]>; providers: Prov[]; maxSlots: number; canUndo: boolean; configuredTotal: number; effective: { configured: number; effective: number; configEffective: number; laptopCap: number | null; reasons: string[]; source: string } };
+type Show = { types: string[]; hours?: Record<string, { hours: string; tz?: string }>; chains: Record<string, string[]>; providers: Prov[]; maxSlots: number; canUndo: boolean; configuredTotal: number; effective: { configured: number; effective: number; configEffective: number; laptopCap: number | null; reasons: string[]; source: string } };
 type Models = { loading?: boolean; list?: { id: string; label: string }[]; known?: boolean; error?: string };
 const ADD = "__add__";
 const OFF = "off";
@@ -150,7 +150,7 @@ export function RoutingScreen() {
             <SettingsCard>
               {chain.length === 0 ? <SettingsRow label={R.emptyChain} /> : null}
               {chain.map((e, i) => (
-                <SettingsSelect key={e} label={e} value={String(i + 1)} disabled={busy}
+                <SettingsSelect key={e} label={data.hours?.[e] ? `${e} (${data.hours[e].hours} ${data.hours[e].tz ?? "UTC"})` : e} value={String(i + 1)} disabled={busy}
                   options={[...chain.map((_, j) => ({ label: R.position(j + 1) + (j === i ? ` (${R.current})` : ""), value: String(j + 1) })), { label: R.off, value: OFF }]}
                   onValueChange={(v) => { if (v === OFF) void setChain(t, chain.filter((x) => x !== e)); else if (Number(v) !== i + 1) void setChain(t, move(chain, i, Number(v) - 1 - i)); }} />
               ))}

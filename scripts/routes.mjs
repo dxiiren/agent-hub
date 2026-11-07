@@ -4,6 +4,7 @@
 //   node scripts/hub.mjs routes set <provider> [--slots N] [--models a,b|all] [--enabled true|false]
 //   node scripts/hub.mjs routes chain <type> <entry,entry,...>       replace the chain of a task type (an empty value empties it)
 //   node scripts/hub.mjs routes move <type> <entry> up|down|off      move one entry, or take it out of the chain
+//   node scripts/hub.mjs routes hours <entry> <HH:MM-HH:MM|off> [--tz Zone]   time window for one chain entry (overnight wraps; default tz UTC)
 //   node scripts/hub.mjs routes undo                                 exact undo of the last save (refused when the file changed since)
 // ONE backend for the CLI and the Settings page (plugins/providers, screen "routing"). The routes file stays the single source of truth route.mjs reads;
 // writes take the same lock and atomic write as `provider add`, never touch a template, and are undone byte for byte from a snapshot stack.
@@ -17,6 +18,7 @@ import { writeJsonKeepEol as wr, writeAtomic, readJsonStrict as rd, own } from '
 import { withLock } from '../plugins/routing/lock.mjs';
 import { cliPaseo, READ_ONLY_ENFORCED, slotInfo } from '../plugins/routing/route.mjs';
 import { effectiveBudget, chainOrder, costGb, laptopNow, heldIn } from '../plugins/routing/budget.mjs';
+import { parseHours, validTz, label as hoursLabel } from '../plugins/routing/hours.mjs';
 import { endpointDown } from '../plugins/routing/office.mjs';
 import { selfHostedProviders } from '../plugins/usage-otel/server/selfhosted-usage.mjs';
 
@@ -88,7 +90,7 @@ export function show(p = paths(), o = {}) {
     chains: Object.fromEntries(types.map((t) => [t, (own(routes.routes, t) ?? []).filter((e) => baseOf(e) === d.id)])),
   }));
   const enabled = Object.fromEntries(providers.map((x) => [x.id, x.enabled]));
-  return { types, chains: Object.fromEntries(types.map((t) => [t, [...(own(routes.routes, t) ?? [])]])), providers, maxSlots: MAX_SLOTS, canUndo: readUndo(p).length > 0,
+  return { types, hours: { ...(routes.hours ?? {}) }, chains: Object.fromEntries(types.map((t) => [t, [...(own(routes.routes, t) ?? [])]])), providers, maxSlots: MAX_SLOTS, canUndo: readUndo(p).length > 0,
     configuredTotal: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0), onTotal: Object.entries(routes.slots ?? {}).reduce((a, [id, n]) => a + (enabled[id] === false ? 0 : n), 0), effective: effectiveBudget(budgetInput(routes, enabled, o)),
     paseoConfigEnabled: Object.fromEntries(Object.keys(enabled).map((id) => [id, fileEnabled(cfg, id)])) };
 }
@@ -111,6 +113,11 @@ export function validate(ch, routes, ids, live = {}) {
       }
       if (new Set(c.models).size !== c.models?.length) err.push(`${id}: a model is listed twice`);
     }
+  }
+  for (const [e, w] of Object.entries(ch.hours ?? {})) {
+    if (w === null) continue; // removes the window
+    if (typeof w !== 'object' || !parseHours(w.hours)) err.push(`hours ${e}: "${w?.hours}" is not a window like 22:00-08:00`);
+    else if (w.tz !== undefined && !validTz(w.tz)) err.push(`hours ${e}: "${w.tz}" is not a time zone (e.g. Asia/Kuala_Lumpur, UTC)`);
   }
   for (const [t, chain] of Object.entries(ch.chains ?? {})) {
     if (!types.has(t)) { err.push(`unknown task type "${t}" (known: ${[...types].join(', ')})`); continue; }
@@ -146,6 +153,9 @@ export async function set(ch, p = paths(), o = {}) {
       if (c.enabled !== undefined) { const b = bool(c.enabled); const cur = ids.get(id).enabled; if (b !== cur) { prevEnabled[id] = cur; enabledChanges[id] = b; } }
     }
     for (const [t, chain] of Object.entries(ch.chains ?? {})) { next.routes ??= {}; next.routes[t] = [...chain]; }
+    for (const [e, w] of Object.entries(ch.hours ?? {})) {
+      if (w === null) { delete next.hours?.[e]; if (next.hours && !Object.keys(next.hours).length) delete next.hours; } else { next.hours ??= {}; next.hours[e] = { hours: w.hours, ...(w.tz ? { tz: w.tz } : {}) }; }
+    }
     const changed = JSON.stringify(next) !== JSON.stringify(routes);
     if (changed) wr(p.routes, next);
     if (!changed && !Object.keys(enabledChanges).length) return { saved: false, enabledChanges: {}, note: 'nothing to change' };
@@ -207,6 +217,7 @@ const USAGE = `usage:
   routes set <provider> [--slots 1..${MAX_SLOTS}] [--cap 1..${MAX_SLOTS}] [--models id,id|all] [--enabled true|false]
   routes chain <type> <entry,entry,...>     (types: ${TASK_TYPES.join(', ')})
   routes move <type> <entry> up|down|off
+  routes hours <entry> <HH:MM-HH:MM|off> [--tz Zone]   e.g. routes hours qoder/qmodel_38max 22:00-08:00 --tz Asia/Kuala_Lumpur
   routes undo`;
 
 const helpFor = (usage, cmd) => { const rows = usage.split('\n').slice(1), own = rows.filter((x) => new RegExp(`^\\s+(routes|provider) ${cmd}\\b`).test(x)), l = own.length ? own : rows.filter((x) => x.includes(` ${cmd} `) || x.includes(`| ${cmd}`)); return `usage:\n${(l.length ? l : rows).join('\n')}`; };
@@ -218,7 +229,7 @@ function render(s) {
   for (const x of routed) L.push(`  ${x.id.padEnd(26)} ${x.enabled ? 'on ' : 'OFF'}  slots ${String(x.slots ?? 'no limit').padEnd(8)}${x.cap == null ? '' : ` cap ${String(x.cap).padEnd(3)}`} models ${x.models ? x.models.join(',') : 'all'}${x.readOnlyAllowed ? '  read-only ok' : ''}`);
   if (idle.length) L.push(`  ${idle.length} other provider${idle.length === 1 ? '' : 's'} not used by routing (no slots, in no chain): ${idle.map((x) => x.id).join(', ')}`);
   L.push('', 'Chains (first is tried first):');
-  for (const t of s.types) L.push(`  ${t.padEnd(15)} ${s.chains[t].map((e, i) => `${i + 1}. ${e}`).join('  ') || '(empty)'}`);
+  for (const t of s.types) L.push(`  ${t.padEnd(15)} ${s.chains[t].map((e, i) => `${i + 1}. ${e}${s.hours[e] ? ` [${hoursLabel(s.hours[e])}]` : ''}`).join('  ') || '(empty)'}`);
   return L.join('\n');
 }
 
@@ -245,6 +256,9 @@ export async function main(argv, p = paths(), o = {}) {
       if (i < 0) throw new Error(`${e} is not in the ${t} chain (${cur.join(', ') || 'empty'})`);
       cur.splice(i, 1); if (dir !== 'off') cur.splice(Math.max(0, Math.min(cur.length, i + (dir === 'up' ? -1 : 1))), 0, e);
       r = await set({ chains: { [t]: cur } }, p, o);
+    } else if (cmd === 'hours') {
+      const [e, w] = pos; if (!e || !w) throw new Error('hours <entry> <HH:MM-HH:MM|off> [--tz Zone]');
+      r = await set({ hours: { [e]: w === 'off' ? null : { hours: w, ...(f.tz ? { tz: f.tz } : {}) } } }, p, o);
     } else if (cmd === 'undo') r = await undo(p, o);
     else { console.log(USAGE); return 2; }
     if (r.enabledChanges && Object.keys(r.enabledChanges).length) { (o.writeEnabled ?? writeEnabledFile)(r.enabledChanges, p); const on = Object.entries(r.enabledChanges).map(([k, v]) => `${k} ${v ? 'on' : 'off'}`).join(', '); const live = (o.reload ?? reloadDaemon)(p); console.log(`Switched: ${on}. Routing and the routes list use it now.${live ? '' : ' The daemon was not reached, so Paseo itself shows the old state until it restarts (just down && just up).'}`); }
