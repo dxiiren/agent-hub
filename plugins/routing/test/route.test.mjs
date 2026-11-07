@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
-import { withAnswer, grantReads, lastAnswer, runRoute as runRouteReal, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
+import { withAnswer, grantReads, lastAnswer, stopReason, unusableAnswer, READ_FIRST, runRoute as runRouteReal, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
 const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test; gitleaks per route call would slow every case
 
 const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop", "opencode", "qoder"]; // fake providers in tests: enforcement is tested separately
@@ -770,4 +770,44 @@ test("session falls back from AGENT_HUB_SESSION to CLAUDE_CODE_SESSION_ID, else 
   assert.equal(sessionFromEnv({ AGENT_HUB_SESSION: "a", CLAUDE_CODE_SESSION_ID: "b" }), "a");
   assert.equal(sessionFromEnv({ CLAUDE_CODE_SESSION_ID: "b" }), "b");
   assert.equal(sessionFromEnv({}), undefined);
+});
+
+test("stopReason: a launcher refusal in the agent log becomes the trace reason; no log gives an honest fallback", () => {
+  const log = "[User] q\n[System Error] ACP agent exited unexpectedly (3)\n\nWarning: MCP server(s) failed to start: agent-hub. Continuing.\nLAPTOP-REFUSED: free RAM 2.7 GB < 3\n";
+  assert.equal(stopReason({ status: "error", agentId: "A" }, () => ({ text: log })), "agent stopped (error): LAPTOP-REFUSED: free RAM 2.7 GB < 3");
+  assert.match(stopReason({ status: "error", agentId: "A" }, () => ({ error: "x" })), /no reason: see `paseo logs A`/);
+  assert.match(stopReason({ status: "error" }, () => ({})), /no reason/);
+});
+test("a trace entry of a failed run always carries an error reason (status error from the daemon, reason only in the log)", () => {
+  const p = fake({ run: () => ({ status: "error", agentId: "E" }), logs: "[System Error] ACP agent exited unexpectedly (3)\nLAPTOP-REFUSED: heavy-run lock present\n" });
+  const r = runRoute({ ...o, provider: "qwen/b" }, (a) => (a[0] === "logs" ? { text: "[System Error] x\nLAPTOP-REFUSED: heavy-run lock present\n" } : p(a)), routes);
+  assert.equal(r.used, null);
+  assert.equal(r.trace[0].error, "agent stopped (error): LAPTOP-REFUSED: heavy-run lock present");
+});
+test("unusableAnswer: empty and short refusals are unusable, a real answer and a long text are not", () => {
+  assert.match(unusableAnswer(""), /empty/);
+  assert.match(unusableAnswer("I cannot complete this task. I am Qwen Code, an interactive CLI agent"), /refused/);
+  assert.equal(unusableAnswer("epsilon"), "");
+  assert.equal(unusableAnswer("I cannot stress enough " + "x".repeat(700)), "");
+});
+test("read-only route: an empty or refusing answer falls through to the next entry; the next entry's answer wins; edit types are not judged", () => {
+  const r2 = { readOnlyEnforced: ALL, readOnlyModes: { qwen: "read-only" }, slots: {}, routes: { summarise: ["qwen/a", "qwen/b"], edit: ["qwen/a", "qwen/b"] } };
+  for (const bad of ["", "I cannot complete this task. I am Qwen Code."]) {
+    const texts = { A1: bad, A2: "epsilon" }; let n = 0;
+    const p = (a) => a[0] === "ls" ? [] : a[0] === "run" ? { status: "completed", agentId: "A" + ++n } : a[0] === "logs" ? { text: (a.includes("--filter") ? "" : "[User] q\n") + texts[a[1]] + "\n" } : {};
+    const r = runRoute({ ...o, type: "summarise", cwd: tmpdir() }, p, r2);
+    assert.equal(r.used, "qwen/b"); assert.equal(r.answer, "epsilon");
+    assert.match(r.trace.find((t) => t.error).error, /next provider tried/);
+  }
+  let n = 0; const p = (a) => a[0] === "ls" ? [] : a[0] === "run" ? { status: "completed", agentId: "E" + ++n } : a[0] === "logs" ? { text: "" } : {};
+  assert.equal(runRoute({ ...o, type: "edit", cwd: tmpdir(), noAsk: true }, p, r2).used, "qwen/a", "an edit with no answer text is still a result");
+});
+test("read-only task on a Qwen-style provider gets the open-the-file reminder; an edit task and a Claude provider get the prompt unchanged", () => {
+  const r2 = { readOnlyEnforced: ALL, readOnlyModes: { qwen: "read-only" }, slots: {}, routes: { summarise: ["qwen/a"] } };
+  const p = fake({ run: () => ({ status: "completed", agentId: "A" }), logs: "" });
+  runRoute({ ...o, type: "summarise", prompt: "read x", cwd: tmpdir(), provider: "qwen-code" }, p, r2);
+  const run = p.calls.find((c) => c[0] === "run"); assert.equal(run.at(-1), "read x" + READ_FIRST);
+  const q = fake({ run: () => ({ status: "completed", agentId: "A" }) });
+  runRoute({ ...o, prompt: "edit y" }, q, routes);
+  assert.equal(q.calls.find((c) => c[0] === "run").at(-1), "edit y");
 });

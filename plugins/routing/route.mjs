@@ -141,6 +141,28 @@ export function lastAnswer(full, cap = 4096, assistant = null) {
   const a = run.join(NL).trim();
   return a.length > cap ? { answer: a.slice(0, cap), truncated: true } : { answer: a, truncated: false };
 }
+/** A trace entry for a task that did not complete always says why. The daemon reports an agent that died at start (a launcher refusal such as "LAPTOP-REFUSED: free RAM 2.7 GB < 3") only as status "error" and keeps the reason in the agent log, so read the log: the text after the last "[System Error]" tag, the most telling line, capped at 200 characters. */
+export function stopReason(j, paseo) {
+  const st = j?.status ?? "error";
+  const fallback = `agent ended with status ${st} and the daemon gave no reason${j?.agentId ? `: see \`paseo logs ${j.agentId}\`` : ""}`;
+  if (!j?.agentId) return fallback;
+  try {
+    const t = lines(paseo(["logs", j.agentId])?.text);
+    const i = t.map((l) => l.startsWith("[System Error]")).lastIndexOf(true);
+    const ls = (i < 0 ? t : t.slice(i)).map((l) => l.replace(/^\[System Error\]\s*/, "").trim()).filter((l) => l && !/^warning: mcp server/i.test(l));
+    const best = ls.find((l) => /refused|cannot|failed|error|timed? ?out|not found/i.test(l) && !/^ACP agent exited/i.test(l)) ?? ls.find((l) => !/^ACP agent exited/i.test(l)) ?? ls[0];
+    return best ? `agent stopped (${st}): ${best.slice(0, 200)}` : fallback;
+  } catch { return fallback; }
+}
+/** Appended to a read-only task on a small local model: the laptop 9B answered "k" and "apple" for a one-word file it never opened (no read call in the log), so the prompt says to open the file and not to answer from memory. */
+export const READ_FIRST = "\n\n(Open every file named above with your file-reading tool before you answer. Answer only from what it returns, never from memory. If a file cannot be read, say that in one sentence.)";
+/** Why a completed read-only answer is not usable, or "". The answer IS the product of summarise/review, so an empty one or a short refusal ("I cannot complete this task. I am Qwen Code...") falls through to the next chain entry like an error does. */
+export function unusableAnswer(text) {
+  const t = String(text ?? "").trim();
+  if (!t) return "the agent completed with an empty answer";
+  if (t.length < 600 && /^(i cannot|i can't|i am unable|i'm unable|i am sorry|i'm sorry|sorry,|i am qwen code|as an ai)/i.test(t)) return `the agent refused: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
+  return "";
+}
 /** Paseo prints these when an agent has no transcript yet; they are UI text, never an answer. */
 export const isEmptyState = (t) => /^\s*(no activity to display|no activity|nothing to display|no (messages|output|logs?)( yet| to display)?)\.?\s*$/i.test(String(t ?? ""));
 /** Attach `answer` (always present: "" plus `answerReason` when nothing could be read). The log is re-read once when its last line is a tool line or the text is empty: the final message may not be flushed yet. */
@@ -154,7 +176,7 @@ export function withAnswer(r, paseo, retryMs = 1500, sleep = (ms) => Atomics.wai
   let x = read();
   const tail = lines(x.f?.text).filter((l) => l.trim()).pop() ?? "";
   if (retryMs && (!x.a.answer || TAG.test(tail))) { sleep(retryMs); const y = read(); if (y.a.answer) x = y; }
-  if (!x.a.answer) return { ...r, answer: "", answerReason: x.f?.error ? "logs unreadable: " + String(x.f.error).slice(0, 120) : "the agent log holds no assistant text (or only Paseo's empty-state text)" };
+  if (!x.a.answer) return { ...r, answer: "", answerReason: x.f?.error || typeof x.f?.text !== "string" ? "logs unreadable: " + String(x.f?.error ?? "no text returned").slice(0, 120) : "the agent log holds no assistant text (or only Paseo's empty-state text)" };
   return { ...r, answer: x.a.answer, ...(x.a.truncated ? { answerTruncated: true, answerFull: `paseo logs ${r.agentId}` } : {}) };
 }
 
@@ -411,14 +433,15 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
-    let j = paseo([...args, "--", o.prompt]);
+    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt]);
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
     if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"), { cwd: o.cwd, allow: routes.readAllow });
     const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes }) } : {};
-    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint) });
+    const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
+    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint), ...why });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
       return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);
@@ -431,6 +454,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
         park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
         return { ...a, status: "asking", question: q, round: 1, hint: `answer with: agent-hub reply ${j.agentId} "<text>" (a parked agent is stopped after ${PARK_SECONDS / 60} min with no reply)` };
       }
+    }
+    if (j.status === "completed" && ro && j.agentId) { // read-only: the answer is the product, so an empty or refusing one is a failed entry, not a result
+      const a = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); const bad = /^logs unreadable/.test(a.answerReason ?? "") ? "" : unusableAnswer(a.answer); // an unreadable log proves nothing: the result stands
+      if (bad) { trace.push({ provider: prov, status: "error", error: bad + " (next provider tried)" }); retire(j.agentId, wt); continue; }
     }
     if (j.status === "completed") {
       if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);

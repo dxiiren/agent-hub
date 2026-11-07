@@ -19,6 +19,8 @@ function Start-UsageStack { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_USAGE
   Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\usage\ensure-usage.ps1')) }
 # Put the Agent Hub kinds into Paseo's own Add-provider list (version+hash checked, idempotent, warns and skips on a Paseo it does not know).
 function Invoke-WebPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_WEB_PATCH -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\paseo-web-patch.mjs') apply --quiet 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { Write-Host "[WARN] paseo web patch: $_" } }
+# Caps the daemon's provider probes at 4 at once and shortens a failed probe's error (version + sha256 checked, skipped on a Paseo it does not know; the daemon is started right after, so it loads the patched files).
+function Invoke-ServerPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_SERVER_PATCH -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\paseo-server-patch.mjs') apply --quiet 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { Write-Host "[WARN] paseo server patch: $_" } }
 # Who asked for this start/stop: one line (requester process chain) in <home>/restart-requests.log. Never fails the action.
 function Write-RestartLog { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_RESTART_LOG -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\restart-log.mjs') $Action 2>&1 | Out-Null } catch { } }
 if ($Action -in 'start','stop') { Write-RestartLog }
@@ -34,7 +36,7 @@ switch ($Action) {
     Write-Host "[OK] task '$Task' registered (logon + every minute, IgnoreNew)"
   }
   'uninstall' { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue; Invoke-Paseo @('daemon','stop','--home',$Home_); Unregister-ScheduledTask -TaskName $Task -Confirm:$false; Write-Host "[OK] task '$Task' removed" } else { Write-Host "[OK] task '$Task' not present" } }
-  'start'     { Invoke-WebPatch; Start-UsageStack; if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[OK] task '$Task' started" } else { Invoke-Paseo @('daemon','start','--home',$Home_) -Scrub } }
+  'start'     { Invoke-WebPatch; Invoke-ServerPatch; Start-UsageStack; if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[OK] task '$Task' started" } else { Invoke-Paseo @('daemon','start','--home',$Home_) -Scrub } }
   'stop'      { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $Task | Out-Null; Stop-ScheduledTask -TaskName $Task }; Invoke-Paseo @('daemon','stop','--home',$Home_); if (-not $env:AGENT_HUB_PASEO) { & node (Join-Path $PSScriptRoot '..\..\scripts\hub.mjs') reap-laptop --now 2>&1 | Out-Host } }  # disabled so the 1-minute trigger cannot revive it; start re-enables
   'status'    { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Get-ScheduledTask -TaskName $Task | Get-ScheduledTaskInfo | Format-List TaskName, LastRunTime, LastTaskResult }; Invoke-Paseo @('daemon','status','--home',$Home_) }
 }

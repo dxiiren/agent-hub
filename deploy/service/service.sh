@@ -10,6 +10,7 @@ case "$ACTION" in start|stop) [ -z "${AGENT_HUB_PASEO:-}" ] && [ "${AGENT_HUB_NO
 have() { command -v "$1" >/dev/null 2>&1; }
 # Put the Agent Hub kinds into Paseo's own Add-provider list (version+hash checked, idempotent, never fails the start).
 if [ "$ACTION" = start ] && [ -z "${AGENT_HUB_NO_WEB_PATCH:-}" ] && [ -z "${AGENT_HUB_PASEO:-}" ]; then node "$(dirname "$LAUNCH")/paseo-web-patch.mjs" apply --quiet || true; fi
+if [ "$ACTION" = start ] && [ -z "${AGENT_HUB_NO_SERVER_PATCH:-}" ] && [ -z "${AGENT_HUB_PASEO:-}" ]; then node "$(dirname "$LAUNCH")/paseo-server-patch.mjs" apply --quiet || true; fi
 if ! have systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
   case "$ACTION" in
     start) node "$LAUNCH" "$(command -v paseo)" daemon start --home "$HOME_DIR"; exit $? ;;
