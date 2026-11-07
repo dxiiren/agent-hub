@@ -122,8 +122,8 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
   if (!preOverride) reconcile(p);
   const k = kindOf(a.kind ?? a.type); const type = k.type; const { model } = a;
   const lc = k.local ? localSpec(a) : undefined; let url = k.local ? `http://127.0.0.1:${lc.port}/v1` : a.url;
-  if (k.own && !String(url ?? '').trim()) throw new Error('Enter the link of the endpoint, e.g. http://host:8000/v1');
-  if (k.own) { url = safeUrl(url); if (!url) throw new Error('url must be a plain http(s) base URL like http://host:8000/v1 (host, optional port and path; no credentials, query or special characters)'); }
+  if (k.own && !String(url ?? '').trim()) throw new Error('Enter the Base URL of the endpoint, e.g. http://host:8000/v1');
+  if (k.own) { url = safeUrl(url); if (!url) throw new Error('Base URL must be a plain http(s) base URL like http://host:8000/v1 (host, optional port and path; no credentials, query or special characters)'); }
   let name = a.name; // empty name: made from the display name (or kind and host), made unique with -2, -3
   if (!name) { const used = new Set([...Object.keys(rd(p.local, {}).extraProviders || {}), ...Object.keys(rd(p.paseo, {}).agents?.providers || {}), ...RESERVED]); const b0 = slug(a.label) || slug(displayName(k.label.split(' (')[0], url)) || type; name = b0; for (let n = 2; used.has(name) || used.has(name + '-ro'); n++) name = `${b0}-${n}`; } const key = a.key || undefined; const label = a.label ? String(a.label).trim() : undefined;
   const readOnly = !(a.readOnly === false || a.readOnly === 'false' || a.readOnly === 'off');
@@ -144,7 +144,7 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
   if (key !== undefined && !/^[!-~]{1,512}$/.test(String(key))) throw new Error('--key must be 1-512 printable characters without spaces');
   if (key && !k.fields.some((x) => x.id === 'key')) throw new Error(`kind ${type} takes no API key (an agent of that kind could read it)`);
   if (label && !/^[^\x00-\x1f"]{1,80}$/.test(label)) throw new Error('--label must be 1-80 printable characters without quotes');
-  if (!safeId(model)) throw new Error(model ? 'model must be a plain model id (letters, digits and . _ - : /)' : 'Choose a model first: it is listed once the link works, or pick "Other / custom model id" and type it.');
+  if (!safeId(model)) throw new Error(model ? 'model must be a plain model id (letters, digits and . _ - : /)' : 'Choose a model first: it is listed once the Base URL works, or pick "Other / custom model id" and type it.');
   const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
   const local = rd(p.local, {}); const first = !Object.keys(local.extraProviders || {}).length;
   if (own(local.extraProviders, name)) throw new Error(`${name} already exists (remove it first, or use edit)`);
@@ -384,7 +384,7 @@ export function migrate(p = paths(), { undo, env } = {}) {
 export const list = (p = paths()) => {
   reconcile(p);
   const routes = rdr(p, {});
-  return Object.entries(rd(p.local, {}).extraProviders || {}).map(([name, s]) => { const { key, ...rest } = s; const isOwn = ownish(kindOf(s.type), s); const token = chainToken(name, s);
+  return Object.entries(rd(p.local, {}).extraProviders || {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, s]) => { const { key, ...rest } = s; const isOwn = ownish(kindOf(s.type), s); const token = chainToken(name, s);
     return { name, ...rest, ...(key ? { keySet: true } : {}), slots: own(routes.slots, name),
       routes: Object.entries(routes.routes || {}).filter(([, v]) => v.some((x) => (isOwn ? x.split('/')[0] === name : x === token))).map(([c]) => c) }; });
 };
@@ -444,8 +444,10 @@ export async function main(argv) {
       try { console.log(JSON.stringify(await api(JSON.parse(t), paths(), bins))); return 0; }
       catch (e) { console.log(JSON.stringify({ error: String(e.message || e) })); return 1; }
     }
+    if (cmd === 'add' && !pos[0] && !o.label && !o.kind) { console.log(USAGE); return 2; }
     if (cmd === 'add' && !o.model) { // no --model: show what the kind offers instead of making the user guess
-      const k = kindOf(o.kind); const ms = await discover(k.type, { url: o.url, key: o.key, provider: o.account ? pos[0] : undefined }, bins);
+      const k = kindOf(o.kind);
+      if (k.fields.some((f) => f.id === 'url') && !o.url) throw new Error(`${k.label} needs --url <base URL>, e.g. --url http://host:8000/v1`); const ms = await discover(k.type, { url: o.url, key: o.key, provider: o.account ? pos[0] : undefined }, bins);
       console.log(`Pick a model and run again with --model <id>:\n${ms.map((m) => `  ${m.id}${m.label !== m.id ? `  (${m.label})` : ''}${m.hint ? `  ${m.hint}` : ''}`).join('\n')}`); return 2;
     }
     if (cmd === 'add' || cmd === 'edit') {
@@ -458,7 +460,12 @@ export async function main(argv) {
     else if (cmd === 'list') { const l = list(); console.log(l.length ? l.map((x) => `${x.name}  ${x.type}  ${x.model}  ${x.url ?? '-'}  ${x.keySet ? 'key set  ' : ''}slots ${x.slots ?? '-'}  routes ${x.routes.join(',') || '-'}`).join('\n') : '(no added providers)'); }
     else if (cmd === 'migrate') { const r = migrate(paths(), { undo: 'undo' in o }); console.log(JSON.stringify(r)); }
     else if (cmd === 'kinds') console.log(describe().kinds.map((k) => `${k.type}  ${k.label}  fields: ${k.fields.map((f) => f.id).join(', ')}`).join('\n'));
-    else if (cmd === 'models') console.log((await discover(kindOf(o.kind).type, { url: o.url, key: o.key, provider: o.provider }, bins)).map((m) => `${m.id}${m.hint ? `  (${m.label} - ${m.hint})` : ''}`).join('\n'));
+    else if (cmd === 'models') {
+      const sp = !o.kind && pos[0] ? own(rd(paths().local, {}).extraProviders, pos[0]) : undefined; // `provider models <added name>`
+      if (!o.kind && pos[0] && !sp) throw new Error(`${pos[0]} is not an added provider (list: agent-hub provider list); or pass --kind K [--url U]`);
+      if (sp) { o.kind = sp.type; o.url ??= sp.url; o.key ??= sp.key; o.provider ??= pos[0]; }
+      console.log((await discover(kindOf(o.kind).type, { url: o.url, key: o.key, provider: o.provider }, bins)).map((m) => `${m.id}${m.hint ? `  (${m.label} - ${m.hint})` : ''}`).join('\n'));
+    }
     else { console.log(USAGE); return 2; }
     return 0;
   } catch (e) { console.error(`[REFUSED] ${e.message}`); return 1; }

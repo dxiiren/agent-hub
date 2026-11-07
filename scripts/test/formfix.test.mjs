@@ -40,7 +40,7 @@ test('every failure returns a message that names the exact problem', async () =>
     assert.match(wrongPath.error, /answered HTTP 404/);
     assert.doesNotMatch(wrongPath.error, /Couldn't reach/);
     const junk = await rpc('models', { kind: 'qwen-code', url: 'http://h/v1;ls' });
-    assert.match(junk.error, /is not a usable link/);
+    assert.match(junk.error, /is not a usable Base URL/);
     const empty = await rpc('models', { kind: 'qwen-code', url: '' });
     assert.ok(empty.error, 'an empty link is refused with a message');
   } finally { s.close(); }
@@ -54,7 +54,7 @@ test('Add with a bad link or a model the endpoint does not serve answers with a 
     const nomodel = await rpc('add', { kind: 'qwen-code', url: `http://127.0.0.1:${port}/v1`, model: '' });
     assert.match(nomodel.error, /Choose a model first/);
     const nolink = await rpc('add', { kind: 'qwen-code', url: '', model: 'm' });
-    assert.match(nolink.error, /Enter the link/);
+    assert.match(nolink.error, /Enter the Base URL/);
     const edit = await rpc('edit', { name: 'no-such-provider', model: 'x' });
     assert.ok(edit.error, 'edit of an unknown provider is refused with a message');
     const rm = await rpc('remove', { name: 'no-such-provider' });

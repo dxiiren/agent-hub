@@ -99,6 +99,7 @@ export function validate(ch, routes, ids, live = {}) {
     for (const e of chain) {
       if (typeof e !== 'string' || !ENTRY_RE.test(e)) err.push(`${t}: "${e}" is not a valid entry (provider or provider/model)`);
       else if (!ids.has(baseOf(e))) err.push(`${t}: "${e}" names an unknown provider "${baseOf(e)}"`);
+      else if (e.includes('/')) { const id = baseOf(e), m = e.slice(id.length + 1); if (live[id]?.known && !/^latest|@latest$/.test(m) && !live[id].ids.includes(m)) err.push(`${t}: "${e}": ${id} does not serve a model called "${m}" (${live[id].ids.join(', ')})`); }
     }
   }
   return err;
@@ -109,6 +110,7 @@ export async function set(ch, p = paths(), o = {}) {
   const pre = rdr(p, {}); const ids = providerIds(p, o, pre);
   const live = {}; // network OUTSIDE the lock: only for providers whose model list changes
   for (const [id, c] of Object.entries(ch?.providers ?? {})) if (Array.isArray(c?.models) && ids.has(id)) live[id] = await modelsOf(id, p, o);
+  for (const chain of Object.values(ch?.chains ?? {})) for (const e of Array.isArray(chain) ? chain : []) { const id = typeof e === 'string' ? baseOf(e) : ''; if (id && e.includes('/') && ids.has(id) && !live[id]) live[id] = await modelsOf(id, p, o); }
   return withLock(lockOf(p), () => {
     const routes = rdr(p, {});
     const errs = validate(ch, routes, ids, live); if (errs.length) throw new Error(errs.join('\n'));
@@ -182,7 +184,7 @@ export async function main(argv, p = paths(), o = {}) {
   for (let i = 0; i < rest.length; i++) { if (rest[i] === '--json') f.json = true; else if (rest[i].startsWith('--')) f[rest[i].slice(2)] = rest[++i]; else pos.push(rest[i]); }
   try {
     if (cmd === 'show') { const s = show(p, o); console.log(f.json ? JSON.stringify(s, null, 2) : render(s)); return 0; }
-    if (cmd === 'models') { const m = await modelsOf(pos[0], p, o); console.log(m.known ? m.ids.join('\n') : `(no model list for ${pos[0]}${m.error ? ': ' + m.error : ''})`); return 0; }
+    if (cmd === 'models') { if (!pos[0] || !providerIds(p, o, rdr(p, {})).has(pos[0])) throw new Error(pos[0] ? `unknown provider "${pos[0]}" (see: agent-hub routes show)` : 'models needs a provider id'); const m = await modelsOf(pos[0], p, o); console.log(m.known ? m.ids.join('\n') : `(no model list for ${pos[0]}${m.error ? ': ' + m.error : ''})`); return 0; }
     let r;
     if (cmd === 'set') {
       if (!pos[0]) throw new Error('set needs a provider id');
@@ -202,7 +204,7 @@ export async function main(argv, p = paths(), o = {}) {
     } else if (cmd === 'undo') r = await undo(p);
     else { console.log(USAGE); return 2; }
     if (r.enabledChanges && Object.keys(r.enabledChanges).length) { (o.writeEnabled ?? writeEnabledFile)(r.enabledChanges, p); console.log(`Paseo enabled flag written for ${Object.keys(r.enabledChanges).join(', ')}; restart the daemon to apply it (just down && just up), or use Settings > Routing & slots which applies it live.`); }
-    console.log(r.saved === false ? `[OK] ${r.note}` : '[OK] saved. Undo: agent-hub routes undo. No restart needed: routes are read at dispatch.');
+    console.log(r.saved === false ? `[OK] ${r.note}` : cmd === 'undo' ? '[OK] undone. Run `agent-hub routes show` to see what is back.' : '[OK] saved. Undo: agent-hub routes undo. No restart needed: routes are read at dispatch.');
     return 0;
   } catch (e) { console.error(`[REFUSED] ${e.message}`); return 1; }
 }

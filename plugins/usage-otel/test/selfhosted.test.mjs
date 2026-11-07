@@ -46,7 +46,7 @@ test("groupReport: totals across endpoints, one row per endpoint, tone ok / warn
   assert.equal(d["total-today"].value, "2.0k in / 25 out, 3 tasks");
   assert.equal(d["total-week"].value, "3.5k in / 45 out, 6 tasks");
   assert.deepEqual([d["ep-0"].tone, d["ep-1"].tone], ["ok", "danger"]);
-  assert.ok(d["ep-0"].value.includes("M") && d["ep-0"].value.includes("1 running") && d["ep-1"].value.startsWith("down (ECONNREFUSED)"));
+  assert.ok(d["ep-0"].value.includes("M") && d["ep-0"].value.includes("1 running") && d["ep-1"].value.startsWith("down: nothing is listening there"));
   assert.equal(groupReport([dn]).details[0].tone, "danger");
   assert.equal(groupReport([up, up]).details[0].tone, "ok");
 });

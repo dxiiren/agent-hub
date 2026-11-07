@@ -12,10 +12,11 @@ for %%h in (--help -h help) do if /i "%~2"=="%%h" goto help
 if /i "%sub%"=="usage" goto usage
 if /i "%sub%"=="doctor" goto doctor
 if /i "%sub%"=="provider" goto provider
+if /i "%sub%"=="routes" goto routes
 if /i "%sub%"=="route" goto route
 if /i "%sub%"=="reply" goto reply
 if /i "%sub%"=="cleanup" goto cleanup
-echo usage: agent-hub usage --session ID [--json] ^| agent-hub doctor [--deep] ^| agent-hub provider add^|list^|remove ^| agent-hub route TYPE "prompt" [opts] ^| agent-hub cleanup [--older-than 30m] [--mine^|--all] [--dry-run] ^| agent-hub reply AGENTID "text" 1>&2
+echo usage: agent-hub usage --session ID [--json] ^| agent-hub doctor [--deep] ^| agent-hub provider add^|list^|remove ^| agent-hub routes show^|set^|chain^|move^|undo ^| agent-hub route TYPE "prompt" [opts] ^| agent-hub cleanup [--older-than 30m] [--mine^|--all] [--dry-run] ^| agent-hub reply AGENTID "text" 1>&2
 exit /b 2
 :help
 node "%~dp0..\..\..\scripts\help.mjs" %sub%
@@ -28,6 +29,9 @@ node "%~dp0..\..\..\scripts\hub.mjs" doctor %rest%
 exit /b %errorlevel%
 :provider
 node "%~dp0..\..\..\scripts\hub.mjs" provider %rest%
+exit /b %errorlevel%
+:routes
+node "%~dp0..\..\..\scripts\hub.mjs" routes %rest%
 exit /b %errorlevel%
 :reply
 node "%~dp0..\..\routing\route.mjs" reply %rest%

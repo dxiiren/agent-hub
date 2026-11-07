@@ -66,9 +66,9 @@ Read usage afterwards: `agent-hub usage --all`, or Settings > Usage in the UI.
 
 ## Routing & slots (models, slots and chain order per provider)
 
-Settings > Plugins > agent-hub-providers > **Routing & slots** (also in the command palette), and the same on the command line. Both use one backend, `scripts/routes.mjs`, and write `config/routes/routes.local.json`, the file `route.mjs` reads. Writes take the same lock and atomic write as `provider add`, never touch a template, and every save can be undone byte for byte.
+Settings > Plugins > agent-hub-providers > **Routing & slots** (also in the command palette, and linked from the model list of every provider on Settings > Providers), and the same on the command line. Both use one backend, `scripts/routes.mjs`, and write `config/routes/routes.local.json`, the file `route.mjs` reads. Writes take the same lock and atomic write as `provider add`, never touch a template, and every save can be undone byte for byte.
 
-- **Per provider:** on/off (Paseo's own enabled flag; the page changes it live through the daemon, the CLI writes the Paseo config and tells you to restart), which of its models the hub may use (one switch per model from the live list; none restricted = all allowed), parallel slots (1 to 64), and whether it may run read-only tasks (shown, not editable).
+- **Per provider:** on/off (Paseo's own enabled flag; the page changes it live through the daemon, the CLI writes the Paseo config and tells you to restart), which of its models the hub may use (the list is collapsed; Show N models opens one switch per model from the live list; none restricted = all allowed), parallel slots (1 to 64), and whether it may run read-only tasks (shown, not editable).
 - **Per task type** (`code-edit`, `code-edit-easy`, `summarise`, `test-scaffold`, `review`): chain order with Up / Down / Off and an add list. Earlier entries are tried first.
 - **A model that is not allowed is never used:** the next entry is tried, and an explicit `--provider P/M` cannot bypass it. A chain entry with no model (an endpoint provider's own model) is not restricted.
 - **Totals:** the page shows configured slots and an "effective now" figure (today the slots of enabled providers; `effectiveBudget()` in `plugins/routing/budget.mjs` is the one place a laptop-based budget plugs in).

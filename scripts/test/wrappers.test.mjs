@@ -31,6 +31,7 @@ const CASES = [
   [['route'], /usage: route[.]mjs/],
   [['reply'], /usage: route[.]mjs reply/],
   [['provider'], /provider kinds/],
+  [['routes'], /routes show/],
 ];
 const out = (r) => `${r.stdout ?? ''}${r.stderr ?? ''}`;
 for (const [args, re] of CASES) {

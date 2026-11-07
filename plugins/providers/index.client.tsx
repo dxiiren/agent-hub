@@ -170,7 +170,7 @@ function Screen() {
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
               onChangeText={(t) => setVals((v) => ({ ...v, [f.id]: t }))} />
           ))}
-          <SettingsAction label={S.modelList} hint={loadingModels ? S.loading : modelErr ? undefined : models.length ? S.found(models.length) : S.modelsWait} actionLabel={loadingModels ? S.loading : modelErr ? S.retry : S.reload} disabled={loadingModels} onPress={() => setRetry((n) => n + 1)} />
+          <SettingsAction label={S.modelList} hint={loadingModels ? S.loading : modelErr ? undefined : models.length ? S.found(models.length) : k?.fields.some((f) => f.id === "url") ? S.modelsWait : S.modelsCli} actionLabel={loadingModels ? S.loading : modelErr ? S.retry : S.reload} disabled={loadingModels} onPress={() => setRetry((n) => n + 1)} />
           {modelErr ? <SettingsRow label={S.modelsFailed} error={modelErr} /> : null}
           <SettingsSelect label={S.model} value={custom || (vals.model && !models.some((m) => m.id === vals.model)) ? CUSTOM : vals.model ?? ""} options={modelOptions}
             onValueChange={(v) => { if (v === CUSTOM) { setCustom(true); setVals((x) => ({ ...x, model: "" })); } else { setCustom(false); setVals((x) => ({ ...x, model: v })); } }} />
@@ -193,7 +193,7 @@ function Screen() {
         <SettingsCard>
           {added.length === 0 ? <SettingsRow label={S.none} /> : null}
           {added.map((a) => (
-            <SettingsRow key={a.name} label={`${a.label || a.name}  (${a.type}${a.account ? `, account ${a.account}` : ""})`} hint={[a.model, a.url, a.keySet ? S.keySet : "", a.slots ? `slots ${a.slots}` : "", a.routes.length ? `serves ${a.routes.join(", ")}` : ""].filter(Boolean).join("  ")}>
+            <SettingsRow key={a.name} label={`${a.label || a.name}  (${(kinds.find((x) => x.type === a.type)?.label ?? a.type).replace(/\s*\(.*\)$/, "")}${a.account ? `, account ${a.account}` : ""})`} hint={[a.model, a.url, a.keySet ? S.keySet : "", a.slots ? `slots ${a.slots}` : "", a.routes.length ? `serves ${a.routes.join(", ")}` : S.servesNone].filter(Boolean).join("  ")}>
               <SettingsAction label={S.editRow(a.name)} actionLabel={S.edit} onPress={() => startEdit(a)} />
               <SettingsAction label={S.removeRow(a.name)} actionLabel={S.remove} disabled={busy} onPress={() => void del(a.name)} />
             </SettingsRow>

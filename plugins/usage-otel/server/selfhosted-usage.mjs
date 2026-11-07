@@ -108,7 +108,7 @@ export function groupReport(items) {
     { id: "total-week", label: "Total last 7 days", value: line(sum("week")) },
     ...items.map((i, k) => ({
       id: `ep-${k}`, label: i.label,
-      value: [i.probe.up ? "up" : i.probe.idle ? "idle: starts when a task needs it" : `down${i.probe.error ? ` (${i.probe.error}): ${WHY[i.probe.error] ?? "the server did not answer"}; start it or check its address` : ""}`, i.probe.up && i.probe.model, i.probe.metrics && `${i.probe.metrics.running ?? "?"} running, ${i.probe.metrics.queued ?? "?"} queued`, `today ${line(i.t.today)}`].filter(Boolean).join(" · "),
+      value: [i.probe.up ? "up" : i.probe.idle ? "idle: starts when a task needs it" : `down${i.probe.error ? `: ${WHY[i.probe.error] ?? "the server did not answer"}; start it or check its Base URL` : ""}`, i.probe.up && i.probe.model, i.probe.metrics && `${i.probe.metrics.running ?? "?"} running, ${i.probe.metrics.queued ?? "?"} queued`, `today ${line(i.t.today)}`].filter(Boolean).join(" · "),
       tone: i.probe.up || i.probe.idle ? "ok" : "danger",
     })),
   ];

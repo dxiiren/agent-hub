@@ -86,7 +86,7 @@ export async function discover(type, { url, key, provider } = {}, { f = fetch, r
   if (k.modelsFrom === 'none') return []; // the user names the model (local-llama)
   if (k.modelsFrom === 'endpoint') {
     const typed = url;
-    url = safeUrl(url); if (!url) throw new Error(`"${String(typed ?? '').slice(0, 80)}" is not a usable link. Use a plain http(s) base URL like http://host:8000/v1 (host, optional port and path; no credentials, query or special characters).`);
+    url = safeUrl(url); if (!url) throw new Error(`"${String(typed ?? '').slice(0, 80)}" is not a usable Base URL. Use a plain http(s) base URL like http://host:8000/v1 (host, optional port and path; no credentials, query or special characters).`);
     // a link with no port is the usual slip: say so, with the same host and the typical port
     const portHint = new URL(url).port ? '' : ` Did you mean a port, e.g. ${url.replace(/^(https?:\/\/[^/]+)/, '$1:8000')}?`;
     let body;

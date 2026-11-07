@@ -24,7 +24,8 @@ export function RoutingScreen() {
   const [models, setModels] = useState<Record<string, Models>>({});
   const [slots, setSlots] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [openModels, setOpenModels] = useState<Record<string, boolean>>({});
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; where: string } | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -40,15 +41,17 @@ export function RoutingScreen() {
   }, [call]);
   useEffect(() => { void refresh().then((d) => { d?.providers.forEach((p) => void loadModels(p.id)); }); }, [refresh, loadModels]);
 
-  const save = async (verb: "set" | "undo", args: Record<string, unknown> = {}, ok: string = R.saved) => {
+  const save = async (verb: "set" | "undo", args: Record<string, unknown> = {}, ok: string = R.saved, where = "top") => {
     setBusy(true); setMsg(null);
     const r: any = await call({ verb, args });
     setBusy(false);
-    setMsg(r.error ? { ok: false, text: `${R.failed} ${r.error}` } : { ok: true, text: r.saved === false ? R.nothing : ok });
+    setMsg(r.error ? { ok: false, text: String(r.error), where } : { ok: true, text: r.saved === false ? R.nothing : ok, where });
     await refresh();
   };
-  const setProv = (id: string, c: Record<string, unknown>) => save("set", { providers: { [id]: c } });
-  const setChain = (t: string, chain: string[]) => save("set", { chains: { [t]: chain } });
+  const setProv = (id: string, c: Record<string, unknown>) => save("set", { providers: { [id]: c } }, R.saved, id);
+  const setChain = (t: string, chain: string[]) => save("set", { chains: { [t]: chain } }, R.saved, `chain:${t}`);
+  // The answer appears in the card the user just used, not at the top of a long page.
+  const note = (where: string) => (msg && msg.where === where ? <SettingsRow label={msg.ok ? msg.text : R.failed} error={msg.ok ? null : msg.text} /> : null);
 
   if (loadErr) return <SettingsSection title={R.title}><SettingsCard><SettingsRow label={R.loadFailed} error={loadErr} /><SettingsAction label={R.title} actionLabel={R.retry} onPress={() => void refresh()} /></SettingsCard></SettingsSection>;
   if (!data) return <SettingsSection title={R.title}><SettingsCard><SettingsRow label={R.loading} /></SettingsCard></SettingsSection>;
@@ -57,13 +60,18 @@ export function RoutingScreen() {
     const all = (models[p.id]?.list ?? []).map((m) => m.id);
     const cur = p.models ?? all;
     const next = on ? [...new Set([...cur, id])] : cur.filter((x) => x !== id);
-    if (!next.length) { setMsg({ ok: false, text: R.lastModel }); return; }
+    if (!next.length) { setMsg({ ok: false, text: R.lastModel, where: p.id }); return; }
     void setProv(p.id, { models: all.every((x) => next.includes(x)) ? "all" : next });
   };
+  const usedIds = new Set(Object.values(data.chains).flat().map((e) => e.split("/")[0]));
+  // A provider that is off or not installed, with no slots, models or chain entry, is noise here: it is hidden and counted below (Settings > Providers switches it on).
+  const shown = data.providers.filter((p) => (p.enabled && p.status !== "unavailable") || p.slots != null || p.models || usedIds.has(p.id));
+  const hidden = data.providers.length - shown.length;
+  const pretty = (p: Prov) => (p.label.toLowerCase() === p.id.toLowerCase() ? p.label : `${p.label} (${p.id})`);
   const addOptions = (t: string) => {
     const inChain = new Set(data.chains[t]);
     const opts: { label: string; value: string }[] = [{ label: R.addEntry, value: ADD }];
-    for (const p of data.providers) {
+    for (const p of shown) {
       const ids = (models[p.id]?.list ?? []).map((m) => m.id).filter((id) => !p.models || p.models.includes(id));
       for (const e of [p.id, ...ids.map((id) => `${p.id}/${id}`)]) if (!inChain.has(e)) opts.push({ label: e, value: e });
     }
@@ -78,31 +86,35 @@ export function RoutingScreen() {
           <SettingsRow label={R.intro} />
           <SettingsRow label={R.total(data.configuredTotal)} hint={R.effective(eff.effective, eff.source)} />
           {eff.reasons.map((x) => <SettingsRow key={x} label={x} />)}
-          {msg ? <SettingsRow label={msg.text} error={msg.ok ? null : msg.text} /> : null}
+          {note("top")}
           <SettingsAction label={R.undoLabel} hint={data.canUndo ? undefined : R.nothingToUndo} actionLabel={R.undo} disabled={busy || !data.canUndo} onPress={() => void save("undo", {}, R.undone)} />
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title={R.providers}>
         {data.providers.length === 0 ? <SettingsCard><SettingsRow label={R.noProviders} /></SettingsCard> : null}
-        {data.providers.map((p) => {
+        {shown.map((p) => {
           const m = models[p.id] ?? {};
           return (
             <SettingsCard key={p.id}>
-              <SettingsSwitch label={`${p.label} (${p.id})`} value={p.enabled} disabled={busy} onValueChange={(v) => void setProv(p.id, { enabled: v })} />
-              <SettingsRow label={R.status} hint={`${p.status ?? R.unknown}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />
+              <SettingsSwitch label={pretty(p)} value={p.enabled} disabled={busy} onValueChange={(v) => void setProv(p.id, { enabled: v })} />
+              <SettingsRow label={R.status} hint={`${R.statusWord(p.status)}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />
               <SettingsInput label={R.slots(data.maxSlots)} hint={p.slots == null ? R.unlimited : undefined} initialValue={slots[p.id] ?? ""} onChangeText={(t) => setSlots((s) => ({ ...s, [p.id]: t }))} />
               <SettingsAction label={R.slotsAction} actionLabel={R.saveSlots} disabled={busy || (slots[p.id] ?? "") === (p.slots == null ? "" : String(p.slots))} onPress={() => void setProv(p.id, { slots: (slots[p.id] ?? "").trim() })} />
-              <SettingsRow label={R.models} hint={m.loading ? R.loading : m.error ? undefined : m.known ? (p.models ? R.someModels(p.models.length, m.list!.length) : R.allModels) : R.noList} />
+              {m.known && !m.error ? (
+                <SettingsAction label={R.models} hint={p.models ? R.someModels(p.models.length, m.list!.length) : R.allModels} actionLabel={openModels[p.id] ? R.hideList : R.showList(m.list!.length)} onPress={() => setOpenModels((o) => ({ ...o, [p.id]: !o[p.id] }))} />
+              ) : <SettingsRow label={R.models} hint={m.loading ? R.loading : m.error ? undefined : R.noList} />}
               {m.error ? <SettingsRow label={R.modelsFailed} error={m.error} /> : null}
               {m.error ? <SettingsAction label={R.modelsFailed} actionLabel={R.retry} onPress={() => void loadModels(p.id)} /> : null}
-              {m.known ? m.list!.map((x) => (
+              {m.known && openModels[p.id] ? m.list!.map((x) => (
                 <SettingsSwitch key={x.id} label={x.label && x.label !== x.id ? `${x.label} (${x.id})` : x.id} value={!p.models || p.models.includes(x.id)} disabled={busy} onValueChange={(v) => toggleModel(p, x.id, v)} />
               )) : null}
               {m.known && p.models ? <SettingsAction label={R.useAllLabel} actionLabel={R.useAll} disabled={busy} onPress={() => void setProv(p.id, { models: "all" })} /> : null}
               {p.models ? <SettingsRow label={R.restricted(p.models.join(", "))} /> : null}
+              {note(p.id)}
             </SettingsCard>
           );
         })}
+        {hidden > 0 ? <SettingsCard><SettingsRow label={R.hidden(hidden)} /></SettingsCard> : null}
       </SettingsSection>
       {data.types.map((t) => {
         const chain = data.chains[t] ?? [];
@@ -116,6 +128,7 @@ export function RoutingScreen() {
                   onValueChange={(v) => { if (v === OFF) void setChain(t, chain.filter((x) => x !== e)); else if (Number(v) !== i + 1) void setChain(t, move(chain, i, Number(v) - 1 - i)); }} />
               ))}
               <SettingsSelect label={R.addLabel} value={ADD} options={addOptions(t)} onValueChange={(v) => { if (v !== ADD) void setChain(t, [...chain, v]); }} />
+              {note(`chain:${t}`)}
             </SettingsCard>
           </SettingsSection>
         );
