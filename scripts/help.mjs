@@ -1,12 +1,13 @@
 // agent-hub --help and agent-hub <command> --help: plain text only, never runs the command.
 const H = {
-  _: `usage: agent-hub <route|reply|provider|usage|doctor|cleanup> [--help]
+  _: `usage: agent-hub <route|reply|provider|routes|usage|doctor|cleanup> [--help]
 agent-hub hands a task to an agent provider through the local Paseo daemon.
 
 Commands (run \`agent-hub <command> --help\` for details and examples):
   route     send a task to a provider chain and get the answer back (JSON)
   reply     answer a question an agent asked (status "asking")
   provider  add, edit, list, remove providers; list kinds and models
+  routes    models, slots and chain order per provider (Settings > Routing & slots)
   usage     tokens, credits and cost for a session or for everything
   doctor    health checks: daemon, MCP, providers, secret scanner
   cleanup   archive finished agents and temp leftovers (preview with --dry-run)
@@ -33,6 +34,13 @@ usage: agent-hub provider kinds | list | models --kind K [--url U] [--key K]
 kinds: qwen-code, opencode, local-llama, qoder, codex, claude (see \`provider kinds\`)
 example: agent-hub provider add my-qwen --kind qwen-code --url http://127.0.0.1:8000/v1 --model my-model --routes summarise,code-edit
 Restart the daemon after adding a provider that has its own entry: just down && just up`,
+  routes: `routes: which models each provider may use, its slots, and the order of each task type's chain. Same thing as Settings > Plugins > agent-hub-providers > Routing & slots.
+usage: agent-hub routes show [--json] | models <provider> | undo
+       agent-hub routes set <provider> [--slots 1..64] [--models id,id|all] [--enabled true|false]
+       agent-hub routes chain <type> <entry,entry,...>      (an empty value empties the chain)
+       agent-hub routes move <type> <entry> up|down|off
+Invalid input is refused with every problem listed and nothing is written. undo restores the file byte for byte.
+example: agent-hub routes set codex --models gpt-6.1-sol --slots 2`,
   usage: `usage: show tokens, credits and estimated cost.
 usage: agent-hub usage --session <id> [--json] [--dir D] | agent-hub usage --all
 example: agent-hub usage --all`,
