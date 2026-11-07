@@ -1,4 +1,4 @@
-/*agent-hub-rev:22*/(function(){const __go=function(){
+/*agent-hub-rev:25*/(function(){const __go=function(){
 // Agent Hub UX layer (patch rev 10): an in-app confirm dialog, a friendly page for addresses that show nothing, and plain-English labels for hub-internal names.
 try{
 if(typeof document==="undefined")return;
@@ -34,7 +34,7 @@ globalThis.__ahConfirm=o=>dialog(o.title||"Are you sure?",o.message||"",[{id:"ca
 globalThis.__ahSettingsActions=(push,Icon)=>{
   const host=()=>{const m=location.pathname.match(/\/(?:settings\/hosts|h)\/([^/]+)/);if(m)return m[1];try{const r=JSON.parse(localStorage.getItem("@paseo:daemon-registry")||"[]");return r[0]&&r[0].serverId}catch(e){return null}};
   const APP=[["General","general","language startup updates"],["Appearance","appearance","theme dark light font size colors"],["Sidebar","sidebar","badge navigation items footer"],["Chat","chat","messages detail level collapse send behaviour"],["Terminal","terminal","shell scrollback"],["Editor","editor","code editor"],["Files","files","file panels"],["Diagnostics","diagnostics","logs help support run"],["About","about","version"]];
-  const HOST=[["Overview","host","restart host name remove"],["Projects","projects","folders repositories delete remove"],["Connections","connections","address password pair"],["Pair device","pair-device","phone qr code"],["Agents","agents","profiles"],["Metadata","metadata","labels"],["Voice","voice","dictation speech"],["Workspaces","workspaces","worktrees"],["Providers","providers","models claude codex qwen add provider catalog endpoint"],["Usage","usage","limits plan credits tokens cost"],["Terminals","terminals","terminal profiles shell"],["Plugins","plugins","plugin gate install extensions"]];
+  const HOST=[["Overview","host","restart host name remove"],["Projects","projects","folders repositories delete remove"],["Connections","connections","address password pair"],["Pair device","pair-device","phone qr code"],["Agents","agents","profiles"],["Metadata","metadata","labels"],["Voice","voice","dictation speech"],["Workspaces","workspaces","worktrees"],["Providers","providers","models claude codex qwen add provider catalog endpoint"],["Usage","usage","limits plan credits tokens cost"],["Terminals","terminals","terminal profiles shell"],["Plugins","plugins","plugin gate install extensions"],["Routing & slots","plugins/agent-hub-providers/routing","routing rout slots models chain provider limits plugin agent hub"],["Add provider","plugins/agent-hub-providers/providers","add provider endpoint model catalog plugin agent hub"]];
   const mk=(label,rank,kw,path)=>({id:"settings-"+label.toLowerCase().replace(/\W+/g,"-"),group:"actions",groupRank:0,rank,keywords:["settings","setting",...label.toLowerCase().split(" "),...kw.split(" ")],visibility:"query",run:()=>{const p=path();if(p)push(p)},presentation:{kind:"action",title:"Settings: "+label,sectionTitle:"Actions",icon:Icon}});
   return [...APP.map((a,i)=>mk(a[0],20+i,a[2],()=>"/settings/"+a[1])),...HOST.map((a,i)=>mk(a[0],40+i,a[2],()=>{const h=host();return h?"/settings/hosts/"+h+"/"+a[1]:null}))];
 };
@@ -119,9 +119,18 @@ function check(){
   c.append(h,q,row);ov.appendChild(c);document.body.appendChild(ov);
 }
 let sched=0;
+// "Run now" on a schedule: the daemon records a run only when it ends, so a provider that never answers leaves the row saying "Never run" / an old "Last run". The bundle patch calls __ahTrack when a run starts; it polls the run and this timer appends its state to the row: Running..., then No answer after 90 s (still waiting), or Failed: <reason>, or Run finished.
+globalThis.__ahTrack=async(c,id)=>{const R=(globalThis.__ahRun=globalThis.__ahRun||{});const q=()=>c.scheduleInspect({requestId:(crypto.randomUUID?crypto.randomUUID():"ah"+Date.now()),id});let name=id,prev=[];try{const x=await q();const sc=x&&x.schedule;if(sc){name=sc.name||id;prev=(sc.runs||[]).map(r=>r.id)}}catch(e){}
+  const st={state:"running",t0:Date.now()};R[name]=st; // the run call itself does not return until the run ends, so the row is tracked from here
+  const tick=async()=>{try{const x=await q();const rs=(x&&x.schedule&&x.schedule.runs)||[];const last=rs.filter(r=>prev.indexOf(r.id)<0).pop();if(last&&last.status&&last.status!=="running"){st.state=last.status==="failed"?"failed":"done";st.error=String(last.error||"").slice(0,120);setTimeout(()=>{if(R[name]===st)delete R[name]},120000);return}}catch(e){}
+    if(R[name]===st&&Date.now()-st.t0<3600000)setTimeout(tick,3000)};setTimeout(tick,1500)};
+const RSUF=new WeakMap();
+function runRows(){const R=globalThis.__ahRun;if(!R||!Object.keys(R).length)return;const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;const hits=[];while((n=w.nextNode())){const v=n.nodeValue||"";if(v.length<500&&v.indexOf(" \u00b7 Created ")>=0&&/(Last run|Never run)/.test(v))hits.push(n)}
+  for(const n of hits){const m=RSUF.get(n);const base=m&&n.nodeValue===m.applied?m.base:n.nodeValue;let e=n.parentElement,name=null;for(let i=0;i<6&&e&&!name;i++,e=e.parentElement){const lines=(e.innerText||"").split("\n").map(x=>x.trim());for(const k in R)if(lines.indexOf(k)>=0){name=k;break}}
+    if(!name)continue;const r=R[name];const t=r.state==="running"?(Date.now()-r.t0>90000?"No answer after 90 s (the provider has not replied; still waiting)":"Running..."):r.state==="failed"?"Failed: "+(r.error||"no reason given"):"Run finished";const nv=base+" \u00b7 "+t;if(n.nodeValue!==nv){n.nodeValue=nv}RSUF.set(n,{base,applied:nv})}}
 const tick=()=>{sched=0;try{rewrite(document.body)}catch(e){}try{downText()}catch(e){}try{polish()}catch(e){}};
 new MutationObserver(()=>{if(!sched)sched=setTimeout(tick,120)}).observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["aria-checked"]});
-setInterval(()=>{try{check();downCheck();offlineRetry();connectingHint();preTick()}catch(e){}},1200);
+setInterval(()=>{try{runRows()}catch(e){}try{check();downCheck();offlineRetry();connectingHint();preTick()}catch(e){}},1200);
 // polish applied to elements as they appear
 function polish(){
   const path=location.pathname;

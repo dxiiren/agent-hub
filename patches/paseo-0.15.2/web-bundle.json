@@ -234,6 +234,11 @@
    "replace": "H={mutationFn:(...q)=>{const iv=setInterval(()=>p(),2500);return Promise.resolve(G(...q)).finally(()=>clearInterval(iv))},onSettled:(...q)=>{p(...q);setTimeout(()=>p(...q),1500);setTimeout(()=>p(...q),4e3);setTimeout(()=>p(...q),8e3);setTimeout(()=>p(...q),13e3)}},c[56]=p"
   },
   {
+   "name": "schedule-run-now-track",
+   "find": "const t=l(h,v(\"common.errors.daemonClientUnavailable\")),s=await t.scheduleRunOnce({id:n});",
+   "replace": "const t=l(h,v(\"common.errors.daemonClientUnavailable\"));try{globalThis.__ahTrack&&globalThis.__ahTrack(t,n)}catch(e){}const s=await t.scheduleRunOnce({id:n});"
+  },
+  {
    "name": "schedule-run-now-label",
    "find": "pendingLabel:\"Starting...\",onSelect:w,testID:f,children:\"Run now\"",
    "replace": "pendingLabel:\"Running...\",onSelect:w,testID:f,children:\"Run now\""
@@ -369,5 +374,5 @@
    "replace": "M=l.args&&l.args.length>0?`${l.command} ${l.args.join(\" \").split(\"{{{prompt}}}\").join(\"<your prompt>\")}`:l.command"
   }
  ],
- "rev": 22
+ "rev": 25
 }

@@ -52,7 +52,7 @@ class WidgetJson(unittest.TestCase):
         by = {s["id"]: s for s in out["sources"]}
         self.assertEqual(out["version"], 1)
         self.assertEqual(by["qoder"]["percent"], 49.2)
-        self.assertEqual(by["qoder"]["text"], "49.2% - resets 28 Nov\n6.3k used - 6.5k left")
+        self.assertEqual(by["qoder"]["text"], "6.5k credits left\n49% used - resets 28 Nov")
         self.assertEqual(by["qwen_laptop"]["text"], "up - 1.5k today\n3.5k in 7 days")
         self.assertNotIn("percent", by["qwen_laptop"])
         self.assertEqual((by["qwen_laptop"]["tokens_today"], by["qwen_laptop"]["tokens_7d"]), (1500, 3500))

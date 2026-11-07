@@ -230,3 +230,8 @@ test('diagnostic text: PATH hidden, user names and long log lines shortened', ()
   const out = g.__ahDiag(['  PATH: C:' + B + 'a;C:' + B + 'b', '  Paseo home: C:' + B + 'Users' + B + 'bob' + B + 'x', '  {"level":30,"m":"' + 'z'.repeat(400) + '"}'].join(String.fromCharCode(10)));
   assert.match(out, /PATH: .hidden, 2 folders./); assert.ok(out.includes('C:' + B + 'Users' + B + '<user>' + B + 'x') && !out.includes('bob')); assert.ok(out.split(String.fromCharCode(10))[2].length < 260);
 });
+test('Run now: the run is tracked before the (blocking) run call, and the layer shows Running... / No answer / Failed on the row; plugin pages are searchable', () => {
+  const t = edit('schedule-run-now-track'); assert.ok(t.find.includes('scheduleRunOnce') && t.replace.indexOf('__ahTrack') < t.replace.indexOf('await t.scheduleRunOnce'));
+  const src = readFileSync(new URL('../../patches/paseo-0.15.2/ux-layer.js', import.meta.url), 'utf8');
+  for (const s of ['globalThis.__ahTrack=', 'Running...', 'No answer after 90 s', '"Failed: "', '["Routing & slots","plugins/agent-hub-providers/routing"']) assert.ok(src.includes(s), s);
+});
