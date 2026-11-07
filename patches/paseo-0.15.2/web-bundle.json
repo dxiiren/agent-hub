@@ -81,12 +81,12 @@
   {
    "name": "schedule-missing-fn",
    "find": "function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){",
-   "replace": "function __AhBad(T){if(\"agent\"===T.targetKind)return!1;const r=String(T.maxRuns??\"\").trim();return(\"\"!==r&&!/^[1-9]d{0,5}$/.test(r))||String(T.name||\"\").length>120||String(T.prompt||\"\").length>20000}function __AhMissing(T,te){if(\"agent\"===T.targetKind)return[];const r=String(T.maxRuns??\"\").trim();return[!(T.workingDir||\"\").trim()&&\"a project\",!(T.selectedProvider&&T.selectedModel)&&\"a model\",!(T.prompt||\"\").trim()&&\"a prompt\",(!T.submitCadence||te)&&\"a valid cadence\",(\"\"!==r&&!/^[1-9]d{0,5}$/.test(r))&&\"Max runs as a whole number from 1 to 999999 (or empty)\",String(T.name||\"\").length>120&&\"a name of at most 120 characters\",String(T.prompt||\"\").length>20000&&\"a prompt of at most 20000 characters\"].filter(Boolean)}function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){"
+   "replace": "function __AhBad(T){if(\"agent\"===T.targetKind)return!1;const r=String(T.maxRuns??\"\").trim();return(\"\"!==r&&!/^[1-9]\\d{0,5}$/.test(r))||String(T.name||\"\").length>120||String(T.prompt||\"\").length>20000}function __AhMissing(T,te){if(\"agent\"===T.targetKind)return[];const r=String(T.maxRuns??\"\").trim();return[!(T.workingDir||\"\").trim()&&\"Choose a project\",!(T.selectedProvider&&T.selectedModel)&&\"Choose a model\",!(T.prompt||\"\").trim()&&\"Write a prompt\",(!T.submitCadence||te)&&\"Fix the cadence (for example 0 9 * * * runs every day at 09:00)\",(\"\"!==r&&!/^[1-9]\\d{0,5}$/.test(r))&&\"Max runs must be a whole number from 1 to 999999, or leave it empty\",String(T.name||\"\").length>120&&\"The name can have at most 120 characters\",String(T.prompt||\"\").length>20000&&\"The prompt can have at most 20000 characters\"].filter(Boolean)}function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){"
   },
   {
    "name": "schedule-missing-use",
    "find": "ae=(0,c.useMemo)(()=>(0,N.jsxs)(t.View,{style:ue.footer,children:[(0,N.jsx)(I.Button,{style:ue.footerButton,variant:\"secondary\"",
-   "replace": "ae=(0,c.useMemo)(()=>(0,N.jsxs)(t.View,{style:ue.footer,children:[se||ee||!__AhMissing(T,te).length?null:(0,N.jsx)(\"div\",{style:{flex:1,fontSize:12,opacity:.7,alignSelf:\"center\"},\"data-testid\":\"schedule-form-missing\",children:\"Needed before Create: \"+__AhMissing(T,te).join(\", \")},\"m\"),(0,N.jsx)(I.Button,{style:ue.footerButton,variant:\"secondary\""
+   "replace": "ae=(0,c.useMemo)(()=>(0,N.jsxs)(t.View,{style:ue.footer,children:[se||ee||!__AhMissing(T,te).length?null:(0,N.jsx)(\"div\",{style:{flex:1,fontSize:12,opacity:.7,alignSelf:\"center\"},\"data-testid\":\"schedule-form-missing\",children:\"To create this schedule: \"+__AhMissing(T,te).join(\". \")+\".\"},\"m\"),(0,N.jsx)(I.Button,{style:ue.footerButton,variant:\"secondary\""
   },
   {
    "name": "schedule-missing-deps",
@@ -231,12 +231,57 @@
   {
    "name": "schedule-run-now-refresh",
    "find": "H={mutationFn:G,onSettled:p},c[56]=p",
-   "replace": "H={mutationFn:G,onSettled:(...q)=>{p(...q);setTimeout(()=>p(...q),3e3);setTimeout(()=>p(...q),12e3)}},c[56]=p"
+   "replace": "H={mutationFn:G,onSettled:(...q)=>{p(...q);setTimeout(()=>p(...q),1500);setTimeout(()=>p(...q),4e3);setTimeout(()=>p(...q),8e3);setTimeout(()=>p(...q),13e3)}},c[56]=p"
   },
   {
    "name": "models-no-double-list",
    "find": "let M,w,A;return n[33]!==b||n[34]!==d?(M=b.length>0?(0,z.jsxs)(e.View,{style:L.section,children:[(0,z.jsx)(R,{title:d(\"settings.providers.models.discovered\"),count:b.length}),(0,z.jsx)(e.View,{style:_.settingsStyles.card,children:b.map(H)})]}):null,",
    "replace": "let M,w,A,__d;return!0?(M=(__d=b.filter(q=>!y.some(c=>c.id===q.id))).length>0?(0,z.jsxs)(e.View,{style:L.section,children:[(0,z.jsx)(R,{title:d(\"settings.providers.models.discovered\"),count:__d.length}),(0,z.jsx)(e.View,{style:_.settingsStyles.card,children:__d.map(H)})]}):null,"
+  },
+  {
+   "name": "picker-hide-broken",
+   "find": "(o??[]).filter(o=>o.enabled).map(o=>{const t=o.label??o.provider;return{id:o.provider,label:t,modelSelection:u(o,t,n)}})",
+   "replace": "(o??[]).filter(o=>o.enabled&&\"error\"!==o.status&&\"unavailable\"!==o.status).map(o=>{const t=o.label??o.provider;return{id:o.provider,label:t,modelSelection:u(o,t,n)}})"
+  },
+  {
+   "name": "default-newest",
+   "find": "function a(o,n,l){if(null===l)return{kind:\"loading\"};const a=(0,t.filterSelectableModels)(l)??[];return 0===a.length?{kind:\"models\",rows:[c(o,n)]}:{kind:\"models\",rows:s(o,n,a)}}",
+   "replace": "function __ahNew(r){const L=r.find(m=>/latest release/i.test(m.description||\"\"));return L&&!L.isDefault&&r.some(m=>m.isDefault)?r.map(m=>({...m,isDefault:m===L})):r}function a(o,n,l){if(null===l)return{kind:\"loading\"};const a=(0,t.filterSelectableModels)(l)??[];return 0===a.length?{kind:\"models\",rows:[c(o,n)]}:{kind:\"models\",rows:__ahNew(s(o,n,a))}}"
+  },
+  {
+   "name": "overview-auto-restart",
+   "find": "P=(0,c.useCallback)(()=>D(!1),[D]),_=(0,c.useCallback)(()=>D(!0),[D])",
+   "replace": "P=(0,c.useCallback)(()=>D(!1),[D]),__ahR=(0,c.useEffect)(()=>{if(!/[?&]ah-restart=1/.test(location.search)||!o||!b())return;history.replaceState(null,\"\",location.pathname);D(!1)},[o,D]),_=(0,c.useCallback)(()=>D(!0),[D])"
+  },
+  {
+   "name": "search-nomatches",
+   "find": "searchingFiles:\"Searching files...\",noMatches:\"No matches\"",
+   "replace": "searchingFiles:\"Searching files...\",noMatches:\"Nothing found in workspaces, agents or actions. To change a setting, open Settings (bottom left)\""
+  },
+  {
+   "name": "diag-hint",
+   "find": "testAudio:\"Test audio\",playTest:\"Play test\",playing:\"Playing...\",playbackFailed:\"Playback failed: {{message}}\",app:{title:\"App diagnostic\",rowTitle:\"App diagnostic\",rowHint:\"Collect connection, daemon, provider, desktop, and log details\"",
+   "replace": "testAudio:\"Test audio\",playTest:\"Play test\",playing:\"Playing...\",playbackFailed:\"Playback failed: {{message}}\",app:{title:\"App diagnostic\",rowTitle:\"App diagnostic\",rowHint:\"Collects connection, daemon, provider and log details into text you can copy and send when asking for help. Press Run, then Copy.\""
+  },
+  {
+   "name": "custom-model-valid",
+   "find": "V=P.length>0&&!R.some(e=>e.id===P),n[5]=R,n[6]=P,n[7]=V):V=n[7]",
+   "replace": "V=P.length>0&&P.length<=200&&!R.some(e=>e.id===P)&&!(globalThis.__ahHave||[]).includes(P),n[5]=R,n[6]=P,n[7]=V):V=n[7]"
+  },
+  {
+   "name": "custom-model-msg",
+   "find": "n[37]!==M?(Y=M?(0,z.jsx)(t.Text,{style:L.errorText,children:M}):null,n[37]=M,n[38]=Y):Y=n[38]",
+   "replace": "Y=M?(0,z.jsx)(t.Text,{style:L.errorText,children:M}):__AhMsg(P,R)"
+  },
+  {
+   "name": "custom-model-close-first",
+   "find": ".then(()=>v([l])).then(()=>h()).catch(",
+   "replace": ".then(()=>{h();return v([l])}).catch("
+  },
+  {
+   "name": "diag-redact",
+   "find": "s()&&E((0,f.redactAppDiagnosticReport)(n.join(\"\\n\\n\"),O))",
+   "replace": "s()&&E((globalThis.__ahDiag||(x=>x))((0,f.redactAppDiagnosticReport)(n.join(\"\\n\\n\"),O)))"
   },
   {
    "name": "provider-retry-prop",
@@ -254,5 +299,5 @@
    "replace": "H&&!z?(0,B.jsxs)(s.View,{children:[(0,B.jsx)(t.Text,{style:G.errorText,numberOfLines:2,children:H}),(0,B.jsxs)(s.View,{style:{flexDirection:\"row\",gap:16,marginTop:4},children:[(0,B.jsx)(__ahP,{accessibilityRole:\"button\",testID:\"provider-retry-\"+p.id,onPressIn:e=>{e?.stopPropagation?.()},onPress:e=>{e?.stopPropagation?.();__ahRetry&&__ahRetry()},children:(0,B.jsx)(t.Text,{style:G.errorText,children:\"Retry\"})}),w?(0,B.jsx)(__ahP,{accessibilityRole:\"button\",testID:\"provider-remove-button-\"+p.id,onPressIn:e=>{e?.stopPropagation?.()},onPress:e=>{e?.stopPropagation?.();T(p.id,p.label)},children:(0,B.jsx)(t.Text,{style:G.errorText,children:\"Remove\"})}):null]})]}):null"
   }
  ],
- "rev": 13
+ "rev": 14
 }

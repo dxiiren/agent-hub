@@ -1,7 +1,9 @@
-/*agent-hub-rev:13*/(function(){const __go=function(){
+/*agent-hub-rev:14*/(function(){const __go=function(){
 // Agent Hub UX layer (patch rev 10): an in-app confirm dialog, a friendly page for addresses that show nothing, and plain-English labels for hub-internal names.
 try{
 if(typeof document==="undefined")return;
+// App diagnostic text (Settings > Diagnostics > Run): the machine PATH list, user names in folder paths and long raw log lines are not needed to get help, so they are shortened before the text is shown or copied
+globalThis.__ahDiag=q=>String(q).split("\n").map(l=>/^\s*PATH:\s/.test(l)?"  PATH: (hidden, "+l.split(";").length+" folders)":l).map(l=>l.replace(/([A-Za-z]:\\Users\\)[^\\\s"']+/g,"$1<user>").replace(/(\/(?:Users|home)\/)[^\/\s"']+/g,"$1<user>")).map(l=>/^\s*\{"level":/.test(l)&&l.length>240?l.slice(0,240)+" ...":l).join("\n");
 const css=document.createElement("style");
 css.textContent=".ah-ov{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}"
 +".ah-card{max-width:440px;width:100%;box-sizing:border-box;background:var(--ah-bg,#fff);color:var(--ah-fg,#18181b);border:1px solid var(--ah-bd,#e4e4e7);border-radius:12px;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3)}"
@@ -27,10 +29,19 @@ globalThis.__ahConfirm=o=>dialog(o.title||"Are you sure?",o.message||"",[{id:"ca
 const MAP=[[/\(clean MCP\)/g,"(hub tasks)"],[/\(no user MCP\)/g,"(hub tasks)"],[/^opus\[1m\]$/,"Custom model (from your Claude settings)"],[/^From Claude settings\.json model$/,"Set in your Claude settings"],
  [/^Could not load the model list: Provider .+ is disabled\.?$/,"This provider is switched off. Switch it on in the Providers list first, then add a model."],
  [/^0\.00x Credit$/,"Free (uses no credits)"],[/^([\d.]+)x Credit$/,"$1x credit cost"],
+ [/^agent-hub-[a-z]+ · (.+)$/,"$1"],
+ [/^This plugin settings screen is unavailable\.?$/,"This plugin is switched off or not loaded, so its page is not available. Switch it on under Plugins, then open this page again."],
+ [/^Connect to this host to open plugin settings\.?$/,"The host is not connected right now. This page reconnects by itself; anything you typed here is not saved yet."],
+ [/^(.+?) not found on PATH$/,"$1 is not installed on this computer (not found on PATH). Install it, or switch this provider off."],
+ [/^Provider (.+) is not installed\.?$/,"$1 is not installed on this computer."],
  [/^(.+?) \(([a-z0-9. -]+)\)$/i,(m,a,b)=>a.toLowerCase().includes(b.toLowerCase())&&a.length>b.length?a:m]];
+const LONG=[[/^Request failed: Plugin manifest is missing:.*$/s,"That is not a plugin folder: it has no paseo-plugin.json file. Choose the plugin's own folder, a Git URL or an npm package that is a Paseo plugin."],
+ [/Plugin ID "([^"]+)" is already configured.*$/s,"A plugin with the ID $1 is already installed. Remove it first, or install a different plugin."],
+ [/^Request failed: .*code=handler_error.*$/s,"The plugin could not be installed. Check the folder, URL or package name and try again."],
+ [/^npm error.*$/s,"The package could not be downloaded from npm. Check the name and your internet connection."]];
 function rewrite(root){
   const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n;
-  while((n=w.nextNode())){const v=n.nodeValue;if(!v||v.length>200)continue;let o=v;for(const [re,to] of MAP)o=o.replace(re,to);if(o!==v)n.nodeValue=o}
+  while((n=w.nextNode())){const v=n.nodeValue;if(!v)continue;let o=v;if(v.length>200){if(v.length<4000)for(const [re,to] of LONG)o=o.replace(re,to);if(o!==v)n.nodeValue=o;continue}for(const [re,to] of MAP)o=o.replace(re,to);if(o!==v){try{if(/mono|courier/i.test(getComputedStyle(n.parentElement).fontFamily))continue}catch(e){}n.nodeValue=o}}
 }
 // an address that shows nothing: say so and offer a way back
 let lastPath="",timer=0;
@@ -51,6 +62,14 @@ function offlineRetry(){
   fetch("/api/health",{cache:"no-store"}).then(r=>{if(r.ok){try{sessionStorage.setItem("ah-off-c",String(c+1))}catch(e){}location.reload()}}).catch(()=>{});
 }
 let strikes=0;
+let connAt=0;
+function connectingHint(){
+  const t=document.body.innerText||"",busy=/^\s*Connecting( to)? \S+/m.test(t)&&t.length<400;
+  const id="ah-conn";let e=document.getElementById(id);
+  if(!busy){connAt=0;if(e)e.remove();return}
+  if(!connAt)connAt=Date.now();
+  if(Date.now()-connAt>15000&&!e){e=document.createElement("div");e.id=id;e.setAttribute("data-testid","ah-connecting-hint");e.style.cssText="position:fixed;left:0;right:0;bottom:24px;text-align:center;font:14px system-ui,sans-serif;opacity:.75;padding:0 16px";e.textContent="Still connecting. The host may be busy or starting up; this page keeps trying by itself.";document.body.appendChild(e)}
+}
 function check(){
   const p=location.pathname;if(p!==lastPath){lastPath=p;strikes=0;hideNotice()}
   if(!/^\/(settings|h)\//.test(p)){return}
@@ -67,9 +86,27 @@ function check(){
   c.append(h,q,row);ov.appendChild(c);document.body.appendChild(ov);
 }
 let sched=0;
-const tick=()=>{sched=0;try{rewrite(document.body)}catch(e){}};
-new MutationObserver(()=>{if(!sched)sched=setTimeout(tick,120)}).observe(document.documentElement,{childList:true,subtree:true,characterData:true});
-setInterval(()=>{try{check();offlineRetry()}catch(e){}},1200);
+const tick=()=>{sched=0;try{rewrite(document.body)}catch(e){}try{polish()}catch(e){}};
+new MutationObserver(()=>{if(!sched)sched=setTimeout(tick,120)}).observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["aria-checked"]});
+setInterval(()=>{try{check();offlineRetry();connectingHint()}catch(e){}},1200);
+// polish applied to elements as they appear
+function polish(){
+  const path=location.pathname;
+  // Providers page: a status that is only a word gets an explanation on hover, and a jump link to the "Add provider" list (it sits far down)
+  if(/\/providers$/.test(path)){
+    document.querySelectorAll("div").forEach(e=>{if(e.children.length)return;const t=(e.textContent||"").trim();if(t==="Disabled")e.title="Switched off. Turn the switch on to use this provider.";else if(t==="Not installed")e.title="The program for this provider is not on this computer."});
+    if(!document.getElementById("ah-jump")){
+      const h=[...document.querySelectorAll("div")].find(e=>!e.children.length&&(e.textContent||"").trim()==="Add provider"&&e.getBoundingClientRect().height>0&&e.getBoundingClientRect().top>200);
+      const title=[...document.querySelectorAll("div")].find(e=>!e.children.length&&(e.textContent||"").trim()==="Providers"&&parseFloat(getComputedStyle(e).fontSize)>=24);
+      if(h&&title&&title.parentElement){const b=document.createElement("button");b.id="ah-jump";b.type="button";b.className="ah-btn";b.style.cssText="margin:6px 0 0;align-self:flex-start";b.textContent="Add a provider ↓";b.onclick=()=>{const t=[...document.querySelectorAll("div")].find(e=>!e.children.length&&(e.textContent||"").trim()==="Add provider"&&e.getBoundingClientRect().height>0&&e.id!=="ah-jump");if(t)t.scrollIntoView({behavior:"smooth",block:"start"})};title.parentElement.insertBefore(b,title.nextSibling)}
+    }
+  }else{const j=document.getElementById("ah-jump");if(j)j.remove()}
+  // account e-mails on the Usage cards are masked (a shared screen or a screenshot must not show them); hover shows the full address
+  if(/\/usage$/.test(location.pathname)){const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;while((n=w.nextNode())){const m=(n.nodeValue||"").match(/^\s*([\w.+-]{2,})@([\w-]+(?:\.[\w-]+)+)\s*$/);if(m&&n.parentElement){n.parentElement.title=m[1]+"@"+m[2];n.nodeValue=m[1][0]+"***@"+m[2]}}}
+  document.querySelectorAll('[role="switch"][aria-label]').forEach(e=>{const l=e.getAttribute("aria-label"),on=e.getAttribute("aria-checked")==="true",m=l.match(/^(?:Enable|Disable) (.+)$/);if(m){const w=(on?"Disable ":"Enable ")+m[1];if(w!==l)e.setAttribute("aria-label",w)}});
+  document.querySelectorAll('div,span').forEach(e=>{if(e.children.length===0&&/^Updated /.test(e.textContent||"")&&e.style.whiteSpace!=="normal"){e.style.whiteSpace="normal";e.style.textOverflow="clip";e.style.overflow="visible"}});
+  if(/\/settings\/hosts\/[^/]+\/host$/.test(location.pathname))document.querySelectorAll("input[type=text],input:not([type])").forEach(e=>{if(!e.maxLength||e.maxLength<0)e.maxLength=60});
+}
 // icon-only buttons get a hover tooltip from their accessible name
 new MutationObserver(()=>{document.querySelectorAll('[aria-label]:not([title])').forEach(e=>{if(!(e.innerText||'').trim())e.title=e.getAttribute('aria-label')})}).observe(document.documentElement,{childList:true,subtree:true});
 }catch(e){try{console.warn("agent-hub ux layer",e)}catch(_){}}

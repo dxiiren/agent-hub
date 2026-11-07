@@ -18,6 +18,7 @@ export function friendly(e: string): string {
   if (/name must match/i.test(t)) return S.badName;
   if (/--label must/i.test(t)) return S.badLabel;
   if (/--slots must/i.test(t)) return S.badSlots;
+  if (/is not an added provider/i.test(t)) return S.gone;
   if (/ENOENT|[.]tmp/.test(t) && /name|json|tmp|open /i.test(t)) return S.badNameLong;
   return t.replace(/\s*requestType=\S+\s*code=\S+/g, "").replace(/[A-Za-z]:\\[^\s'")]+/g, "<path>");
 }
@@ -26,6 +27,8 @@ const askRemove = async (n: string): Promise<boolean> => {
   return c ? !!(await c({ title: S.removeTitle(n), message: S.removeConfirm, confirmLabel: S.remove, destructive: true })) : window.confirm(S.removeTitle(n) + " - " + S.removeConfirm);
 };
 const OFF = "off";
+// Settings > Host > Overview has the one Restart action (it asks first); this opens that page and starts it
+const restartNow = () => { const h = (location.pathname.match(/\/hosts\/([^/]+)/) || [])[1]; if (h) location.assign(`/settings/hosts/${h}/host?ah-restart=1`); };
 
 function Screen() {
   const rpc = useRpc(providersRpc);
@@ -55,7 +58,7 @@ function Screen() {
   const [loadingModels, setLoadingModels] = useState(false);
   const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; restart?: boolean } | null>(null);
   const [formKey, setFormKey] = useState(0);
   // the form is shown only after the first describe answered: "loading" -> "ready" | "error" (with a Retry), never an empty form
   const [load, setLoad] = useState<{ state: "loading" | "ready" | "error"; error?: string }>({ state: "loading" });
@@ -78,6 +81,13 @@ function Screen() {
   useEffect(() => { void refresh(); }, [refresh]);
   const reload = () => { setLoad({ state: "loading" }); void refresh(); };
 
+  // leaving or reloading with a half-filled form asks first (the browser's own prompt; an in-app Back is not covered)
+  const dirty = !!(name.trim() || vals.url?.trim() || vals.label?.trim()) && !busy;
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h); return () => window.removeEventListener("beforeunload", h);
+  }, [dirty]);
   const k = kinds.find((x) => x.type === kind);
   const reset = () => { setCustom(false); setModelErr(null); setEditing(null); setVals({}); setName(""); setSlots("2"); setAccount(""); setTwin(true); setPos({}); setModels([]); setFormKey((n) => n + 1); };
   // The model list loads by itself: CLI kinds at once, endpoint kinds as soon as the link (and key) are typed. Nothing to guess.
@@ -118,7 +128,7 @@ function Screen() {
     const r: any = await call({ verb: editing ? "edit" : "add", args });
     setBusy(false);
     if (r.error) return setMsg({ ok: false, text: friendly(r.error) });
-    setMsg({ ok: true, text: (r.login ? S.loginOnce(r.login) + " " : "") + (r.needsRestart ? S.needsRestart : S.noRestart) });
+    setMsg({ ok: true, text: (r.login ? S.loginOnce(r.login) + " " : "") + (r.needsRestart ? S.needsRestart : S.noRestart), restart: !!r.needsRestart });
     reset(); await refresh();
   };
   const startEdit = (a: Added) => {
@@ -130,7 +140,7 @@ function Screen() {
     setBusy(true);
     const r: any = await call({ verb: "remove", args: { name: n } });
     setBusy(false);
-    setMsg(r.error ? { ok: false, text: friendly(r.error) } : { ok: true, text: S.removed(n) });
+    setMsg(r.error ? { ok: false, text: friendly(r.error) } : { ok: true, text: S.removed(n), restart: true });
     if (editing === n) reset();
     await refresh();
   };
@@ -143,7 +153,7 @@ function Screen() {
     load.state !== "ready" ? (
       <SettingsSection title={S.navTitle}>
         <SettingsCard>
-          {load.state === "loading" ? <SettingsRow label={S.loading} /> : <>
+          {load.state === "loading" ? <SettingsRow label={S.loadingKinds} /> : <>
             <SettingsRow label={S.loadFailed} error={load.error} />
             <SettingsAction label={S.navTitle} actionLabel={S.retry} onPress={reload} />
           </>}
@@ -160,7 +170,7 @@ function Screen() {
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
               onChangeText={(t) => setVals((v) => ({ ...v, [f.id]: t }))} />
           ))}
-          <SettingsAction label={S.model} hint={loadingModels ? S.loading : modelErr ? undefined : models.length ? S.found(models.length) : S.modelsWait} actionLabel={loadingModels ? S.loading : modelErr ? S.retry : S.reload} disabled={loadingModels} onPress={() => setRetry((n) => n + 1)} />
+          <SettingsAction label={S.modelList} hint={loadingModels ? S.loading : modelErr ? undefined : models.length ? S.found(models.length) : S.modelsWait} actionLabel={loadingModels ? S.loading : modelErr ? S.retry : S.reload} disabled={loadingModels} onPress={() => setRetry((n) => n + 1)} />
           {modelErr ? <SettingsRow label={S.modelsFailed} error={modelErr} /> : null}
           <SettingsSelect label={S.model} value={custom || (vals.model && !models.some((m) => m.id === vals.model)) ? CUSTOM : vals.model ?? ""} options={modelOptions}
             onValueChange={(v) => { if (v === CUSTOM) { setCustom(true); setVals((x) => ({ ...x, model: "" })); } else { setCustom(false); setVals((x) => ({ ...x, model: v })); } }} />
@@ -176,6 +186,7 @@ function Screen() {
           <SettingsAction label={editing ? `${S.save}: ${editing}` : S.add} actionLabel={busy ? S.adding : editing ? S.save : S.add} disabled={busy} onPress={() => void submit()} />
           {editing ? <SettingsAction label={editing} actionLabel={S.cancelEdit} onPress={reset} /> : null}
           {msg ? (msg.ok ? <SettingsRow label={msg.text} /> : <SettingsRow label={S.failed} error={msg.text} />) : null}
+          {msg?.ok && msg.restart ? <SettingsAction label={S.restartHint} actionLabel={S.restartNow} onPress={restartNow} /> : null}
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title={S.existing}>

@@ -64,7 +64,7 @@ export function kindOfProvider(name, label, base, local = {}, rec = {}) {
   if (t) return KIND_LABEL[t] ?? t;
   const words = label.trim().split(/\s+/);
   const host = hostOfUrl(base), last = words[words.length - 1];
-  const where = words.length > 1 && (last === host || /^\d{1,3}(\.\d{1,3}){3}$/.test(last) || /^[\w-]+(\.[\w-]+)+$/.test(last) || LOOPBACK.includes(host));
+  const where = words.length > 1 && !/^\d+$/.test(last) && (last === host || /^\d{1,3}(\.\d{1,3}){3}$/.test(last) || /^[\w-]+(\.[\w-]+)+$/.test(last) || LOOPBACK.includes(host));
   return where ? words.slice(0, -1).join(" ") : label;
 }
 export const kindId = (kind) => kind.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "kind";

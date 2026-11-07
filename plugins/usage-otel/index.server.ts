@@ -62,7 +62,7 @@ export default function contribute(server: PluginServerContext) {
   for (const [id, kind] of kinds) {
     server.registerUsageSource({
       id: `selfhosted-${id}`,
-      label: kind,
+      label: "Endpoint check",
       input: z.object({ id: z.string() }),
       discover: async () => (selfHostedProviders(readJson(join(paseoHome(), "config.json")), readLocal()).some((x) => kindId(x.kind) === id) ? [{ key: id, label: kind, harness: "Self-hosted", input: { id } }] : []), // no providers of this kind now = no card
       fetch: async (input: { id: string }) => { try { return await selfHostedReport(input.id); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
@@ -84,7 +84,7 @@ export default function contribute(server: PluginServerContext) {
   // Hub task totals for every provider, the same numbers as `agent-hub usage --all` (all time) plus the last 7 days
   server.registerUsageSource({
     id: "hub-tasks",
-    label: "Hub tasks",
+    label: "Agent Hub task log",
     input: z.object({}),
     discover: async () => [{ key: "all", label: "Hub tasks", harness: "Agent Hub", input: {} }],
     fetch: async () => { try { let feed = ""; try { feed = readFileSync(join(usageDir(), "usage.jsonl"), "utf8"); } catch { /* none yet */ } return hubTasksReport(feed); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },

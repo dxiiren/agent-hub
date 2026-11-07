@@ -149,9 +149,9 @@ test('schedule form hint lists exactly what is missing, nothing for a heartbeat 
   const ctx = vm.createContext({}); vm.runInContext(grab(edit('schedule-missing-fn').replace, '__AhMissing') + ';this.f=__AhMissing;', ctx); const F = (a, b) => [...ctx.f(a, b)]; // same realm for deepEqual
   const full = { targetKind: 'new', workingDir: '/p', selectedProvider: 'x', selectedModel: 'm', prompt: 'do', submitCadence: { type: 'cron' } };
   assert.deepEqual(F(full, null), []);
-  assert.deepEqual(F({ ...full, workingDir: ' ', selectedModel: '' }, null), ['a project', 'a model']);
-  assert.deepEqual(F({ ...full, prompt: '', submitCadence: null }, null), ['a prompt', 'a valid cadence']);
-  assert.deepEqual(F(full, 'bad cron'), ['a valid cadence']);
+  assert.deepEqual(F({ ...full, workingDir: ' ', selectedModel: '' }, null), ['Choose a project', 'Choose a model']);
+  assert.deepEqual(F({ ...full, prompt: '', submitCadence: null }, null), ['Write a prompt', 'Fix the cadence (for example 0 9 * * * runs every day at 09:00)']);
+  assert.deepEqual(F(full, 'bad cron'), ['Fix the cadence (for example 0 9 * * * runs every day at 09:00)']);
   assert.deepEqual(F({ targetKind: 'agent' }, null), []);
 });
 test('the switch read-back edit refetches the plugin list again after the daemon has applied the change', () => {
@@ -200,5 +200,32 @@ test('Add model picker: only models the provider does not already offer (case-in
   assert.deepEqual(ctx.f(m('office/Qwen3', 'Other'), ['Qwen3']).map((x) => x.id), ['Other'], 'provider prefix ignored');
   assert.deepEqual(ctx.f(m('a'), ['a']), [], 'everything already offered -> empty');
   assert.deepEqual(ctx.f([{ id: '' }, null, { id: 'z' }], undefined).map((x) => x.id), ['z'], 'junk rows dropped');
-  assert.ok(src.includes('All models from this provider are already added') && src.includes('Custom model id...'), 'empty state text + custom entry kept');
+  assert.ok(src.includes('All models from this provider are already added') && src.includes('Other model (type its id)'), 'empty state text + custom entry kept');
+});
+
+test('schedule Max runs: whole numbers 1-999999 or empty; anything else is named in the hint and blocks Create', () => {
+  const ctx = vm.createContext({}); vm.runInContext(grab(edit('schedule-missing-fn').replace, '__AhMissing') + ';this.f=__AhMissing;' + grab(edit('schedule-missing-fn').replace, '__AhBad') + ';this.b=__AhBad;', ctx);
+  const full = { targetKind: 'new', workingDir: '/p', selectedProvider: 'x', selectedModel: 'm', prompt: 'do', submitCadence: { type: 'cron' } };
+  for (const ok of ['', '1', '10', '999999']) { assert.equal(ctx.b({ ...full, maxRuns: ok }), false, ok); assert.deepEqual([...ctx.f({ ...full, maxRuns: ok }, null)], [], ok); }
+  for (const bad of ['0', 'abc', '-5', '1.5', '99999999999999999999', '1000000']) { assert.equal(ctx.b({ ...full, maxRuns: bad }), true, bad); assert.match(ctx.f({ ...full, maxRuns: bad }, null)[0], /^Max runs must be a whole number from 1 to 999999/, bad); }
+});
+test('model pickers hide providers that cannot run; the newest model becomes the default', () => {
+  const pick = edit('picker-hide-broken').replace; assert.ok(pick.includes('"error"!==o.status') && pick.includes('"unavailable"!==o.status'));
+  const ctx = vm.createContext({}); vm.runInContext(grab(edit('default-newest').replace, '__ahNew') + ';this.f=__ahNew;', ctx);
+  const rows = [{ id: 'o5', description: 'Opus 5 - Previous release', isDefault: true }, { id: 'o55', description: 'Opus 5.5 - Latest release' }];
+  assert.deepEqual(ctx.f(rows).map((r) => [r.id, !!r.isDefault]), [['o5', false], ['o55', true]]);
+  assert.deepEqual(ctx.f([{ id: 'a', isDefault: true }]).map((r) => r.id), ['a'], 'no release note: unchanged');
+});
+test('custom model sheet: ids over 200 characters, custom duplicates and models the provider already offers are refused', () => {
+  const v = edit('custom-model-valid').replace; assert.ok(v.includes('P.length<=200') && v.includes('__ahHave'));
+  assert.ok(edit('custom-model-msg').replace.includes('__AhMsg(P,R)') && edit('model-picker-component').replace.includes('This provider already offers that model.'));
+});
+test('Overview starts the restart dialog when opened with ah-restart=1 (the provider form Restart now button)', () => {
+  const r = edit('overview-auto-restart').replace; assert.ok(r.includes('ah-restart=1') && r.includes('D(!1)') && r.includes('replaceState'));
+});
+test('diagnostic text: PATH hidden, user names and long log lines shortened', () => {
+  const src = readFileSync(new URL('../../patches/paseo-0.15.2/ux-layer.js', import.meta.url), 'utf8'); const a = src.indexOf('globalThis.__ahDiag='); const g = {}; const B = String.fromCharCode(92);
+  vm.runInContext(src.slice(a, src.indexOf(String.fromCharCode(10), a)), vm.createContext({ globalThis: g, String }));
+  const out = g.__ahDiag(['  PATH: C:' + B + 'a;C:' + B + 'b', '  Paseo home: C:' + B + 'Users' + B + 'bob' + B + 'x', '  {"level":30,"m":"' + 'z'.repeat(400) + '"}'].join(String.fromCharCode(10)));
+  assert.match(out, /PATH: .hidden, 2 folders./); assert.ok(out.includes('C:' + B + 'Users' + B + '<user>' + B + 'x') && !out.includes('bob')); assert.ok(out.split(String.fromCharCode(10))[2].length < 260);
 });

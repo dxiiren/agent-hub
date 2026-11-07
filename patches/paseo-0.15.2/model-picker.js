@@ -1,4 +1,4 @@
-/*agent-hub-rev:10*/function __AhFresh(list,have){const k=s=>String(s==null?"":s).toLowerCase().replace(/\s*\([^)]*\)\s*$/,"").replace(/^[a-z0-9_-]+\//,"").trim(),h=new Set((have||[]).map(k));return(list||[]).filter(m=>m&&m.id&&!h.has(k(m.id)))}function __AhPick(p){
+/*agent-hub-rev:12*/function __AhFresh(list,have){const k=s=>String(s==null?"":s).toLowerCase().replace(/\s*\([^)]*\)\s*$/,"").replace(/^[a-z0-9_-]+\//,"").trim(),h=new Set((have||[]).map(k));return(list||[]).filter(m=>m&&m.id&&!h.has(k(m.id)))}function __AhMsg(P,R){let m=null;if(P.length>200)m="Model ids are at most 200 characters.";else if(R.some(e=>e.id===P))m="This id is already in your custom models.";else if((globalThis.__ahHave||[]).includes(P))m="This provider already offers that model.";return m?(0,z.jsx)(t.Text,{style:L.errorText,children:m}):null}function __AhPick(p){
   // Add custom model (Settings > Providers > provider > Add model): a picker instead of a free-text box.
   // Source of the list: the agent-hub-providers plugin RPC "provider-models" (endpoint kinds: the endpoint's /v1/models, fetched by the daemon so keys stay server-side);
   // anything else: the daemon's own model list for that provider (the same catalog behind "N models"). Free text only through the last entry.
@@ -19,6 +19,7 @@
       let have=(p.__e||[]).map(x=>x.id);
       if(dl)have=have.concat(dl.map(x=>x&&x.id));else if(!err&&cl){try{const q=await cl.listProviderModels(p.__p);if(q&&Array.isArray(q.models))have=have.concat(q.models.map(x=>x&&x.id))}catch(e){}} // one daemon call when the daemon list is also the source
       if(!live)return;
+      globalThis.__ahHave=have.map(x=>String(x));
       if(err)setSt({s:"err",err});
       else setSt({s:"ok",list:__AhFresh(list,have)})
     })();
@@ -36,7 +37,7 @@
     (0,z.jsxs)("select",{"data-testid":"model-picker",style:box,value:pick,onChange:ev=>{const v=ev.target.value;setPick(v);p.__t(v==="__custom__"?"":v)},children:[
       (0,z.jsx)("option",{value:"",children:st.list.length?"Choose a model ("+st.list.length+")":"All models from this provider are already added"}),
       ...st.list.map(m=>(0,z.jsx)("option",{value:m.id,children:m.label&&m.label!==m.id?m.label+" ("+m.id+")":m.id},m.id)),
-      (0,z.jsx)("option",{value:"__custom__",children:"Custom model id..."})]}),
+      (0,z.jsx)("option",{value:"__custom__",children:"Other model (type its id)"})]}),
     custom?p.__f:null]});
 }
 function B(s){const n=(0,o.c)(65),{provider:l,serverId:f,visible:m,onClose:h,refresh:v}=s
