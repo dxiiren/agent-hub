@@ -1,366 +1,123 @@
-<!--
-  AUDIENCE - answer this before filling the README, then delete this comment:
-  Who will read this README, and what do they need to know first?
-    - future you / a portfolio viewer -> what it does, the stack, how to run it, what you learned
-    - teammates / new hires           -> setup, architecture, runbooks, who owns what
-    - strangers (open source)         -> install, usage, contributing, licence
-  Write for that reader and drop the sections they do not need (/ground-project resolves it).
-  Adapted from claude-code-templates cli-tool/components/skills/productivity/crafting-effective-readmes
-  ("Always ask: Who will read this, and what do they need to know?") at 8b1f883, MIT,
-  (c) 2025 Daniel (San) Avila.
--->
 # Agent Hub
 
-Agent Hub configures and extends the [Paseo](https://github.com/getpaseo/paseo) agent daemon so that any AI client (Claude Code, Codex, Qoder, OpenCode, Qwen Code) can hand a task to any agent provider (Codex, Qoder, Claude, Qwen Code, an office SGLang server, a laptop llama.cpp server) and get a verdict plus a diff back. It adds provider config templates, a gate plugin (secret scan, diff-size and path check, two-failure return), a usage plugin with an OTel/Prometheus/Grafana stack, a routing table, a laptop pre-flight, and install scripts for Windows and Linux.
+Agent Hub lets any AI client (Claude Code, Codex, Qoder, OpenCode, Qwen Code) hand a task to any agent provider (Codex, Claude, Qoder, a Qwen model on your own server, a local llama.cpp model) and get an answer or a diff back. It is a set of config templates, plugins and scripts on top of the [Paseo](https://github.com/getpaseo/paseo) agent daemon: a **routing table** picks the provider, a **gate** checks every edit (secret scan, diff size, forbidden paths, your test command), and a **usage** view shows tokens, credits and cost. There is no server of its own: you install it, start the daemon, and use the `agent-hub` command or the web page.
 
-> **New developer? Start with [`.docs/tldr.md`](.docs/tldr.md)** — every doc summarised on one
-> page. The full guide lives in [`.docs/`](.docs/README.md).
+```mermaid
+flowchart LR
+  C["Your client or script<br/>agent-hub route ..."] --> R["Routing table<br/>config/routes"]
+  R --> D["Paseo daemon<br/>127.0.0.1:6767"]
+  D --> P1["Codex"]
+  D --> P2["Claude"]
+  D --> P3["Qoder"]
+  D --> P4["Qwen endpoint / local model"]
+  D --> G["Gate: secrets, size, paths, your test"]
+  G --> C
+  D --> U["Usage: tokens, credits, cost"]
+```
 
-| Paseo web UI: agents and a task | Paseo web UI: diff of a finished task |
-| --- | --- |
-| ![Paseo web UI: workspace list with two finished demo tasks and the agent reply for the fix-percent task](docs/images/agents.png) | ![Paseo web UI diff view of a finished task: a three-line fix to calc.py](docs/images/task-result.png) |
-
-| `just doctor` (add `--deep` to run one tiny task on every provider) | Statusline `hub` line |
-| --- | --- |
-| ![just doctor output: daemon, MCP and every provider check passing, laptop provider disabled by the GPU guard](docs/images/doctor.png) | ![Claude Code statusline with a second line showing tokens per provider, credits and estimated cost for the session](docs/images/statusline.png) |
-
-| Grafana usage dashboard (demo data) |
-| --- |
-| ![Grafana dashboard with tokens per provider, model and dev as bars, and a per-day stacked chart by provider](docs/images/grafana-usage.png) |
-
-Screenshots are real captures from a throwaway demo daemon and demo data (the Paseo web UI, `just doctor`, the statusline script and Grafana); site: https://dxiiren.github.io/agent-hub/.
+New here? Read the [quick start](#quick-start-5-steps), then [`.docs/tldr.md`](.docs/tldr.md). AI agent working on or with this repo? Read [`AGENTS.md`](AGENTS.md).
 
 ## Prerequisites
 
-| Tool | Version | Installed by |
-| --- | --- | --- |
-| PowerShell + winget | Windows 10/11 stock | — (the only true prerequisites) |
-| Node.js | >= 20 | `setup.ps1` / `setup.sh` |
-| Git | any recent | `setup.ps1` / `setup.sh` |
-| just | any recent | `setup.ps1` |
-| gitleaks | exactly 8.30.1 (pinned) | you: the gate and the reply scan use it for every secret check and refuse to pass without it. `winget install Gitleaks.Gitleaks --version 8.30.1`, `brew install gitleaks` (then check `gitleaks version`), or unzip the release from https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1 into `tools/gitleaks/` (or point `AGENT_HUB_GITLEAKS` at the binary; the lookup order is `AGENT_HUB_GITLEAKS`, then `tools/gitleaks/`, then PATH). Without it `npm test` skips the gitleaks-dependent suites with a message naming this step and ends with `PASSED WITH SKIPS (7 suites skipped: gitleaks not found)` instead of `ALL SUITES PASSED` (exit code 0 either way, so a fresh clone can run it; a real failure exits 1); the gate itself still refuses at runtime. `just doctor` checks it. Rules: `config/gitleaks.toml` (the default rules plus a few of ours) |
-| Claude Code CLI | latest | `setup.ps1` (optional, for AI-assisted dev) |
-
-## Quick start
-
-No `just` yet? Run `powershell -ExecutionPolicy Bypass -File install-just.ps1`, open a new
-terminal, then `just install` (it runs `setup.ps1`).
-
-```powershell
-# 1. One-time machine setup (idempotent — safe to re-run)
-pwsh ./setup.ps1
-
-# 2. Close and reopen PowerShell so PATH updates land
-
-# 3. Install dependencies and validate every config template
-just deps && just test
-```
-
-There is no dev server: `just test` exiting 0 means the full suite passed: every config template parses and holds placeholders only, plus the gate, routing, usage and hook tests. Linux and macOS use `sh ./setup.sh` (or `just install`) instead of step 1.
-
-## Benchmarks
-
-Measured 5 November 2026 through the installed hub: each task runs in a throwaway worktree and is judged by its own gate (never by the agent's say-so). Set A = 7 easy edits, set B = 10 hard code edits, set C = 3 tasks (log summary, test scaffold that must kill 3 mutants, code review). Latest version of each model is shown; most cells are n=1 or 2, so one task of difference is noise. Full method, per-tier Qoder credits, harness comparison and history are in the [guide](https://dxiiren.github.io/agent-hub/#bench).
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B. Partial rows count the cells done so far and are marked (partial).
-
-| Model | Harness | Set A (7) | Set B (10) | Set C (3) | Median s | Performance |
-|---|---|---|---|---|---|---|
-| Codex gpt-6.1-sol | Codex | 7/7 | 10/10 | 3/3 | 82 | 0.98 |
-| Qoder Kimi-K3.1-Pro | Qoder | 7/7 | 9/10 | 3/3 | 87 | 0.92 |
-| Claude Sonnet 5.5 | Claude | 5/7 | 10/10 | 3/3 | 80 | 0.92 |
-| Claude Haiku 5.5 | Claude | 7/7 | 9/10 | 3/3 | 92 | 0.92 |
-| Codex gpt-6-astra * | Codex | 6/7 | 10/10 | 3/3 | 136 | 0.92 |
-| Qoder GLM-5.3 | Qoder | 6/7 | 9/10 | 3/3 | 70 | 0.91 |
-| Qoder DeepSeek-Flash | Qoder | 7/7 | 10/10 | 2/3 | 83 | 0.91 |
-| Qoder Fast | Qoder | 6/7 | 10/10 | 2/3 | 64 | 0.90 |
-| Codex gpt-6.1-terra | Codex | 6/7 | 10/10 | 2/3 | 67 | 0.90 |
-| Claude Opus 5.5 | Claude | 6/7 | 10/10 | 2/3 | 70 | 0.90 |
-| Qoder Efficient | Qoder | 7/7 | 10/10 | 2/3 | 179 | 0.87 |
-| Codex gpt-6-luna | Codex | 5/7 | 8/10 | 3/3 | 73 | 0.83 |
-| Qwen3.8-27B-NVFP (2-node cluster) | Qwen Code | 6/7 | 9/10 | 2/3 | 109 | 0.81 |
-| Qoder Qwen3.8-Flash | Qoder | 7/7 | 8/10 | 2/3 | 99 | 0.80 |
-| Qoder MiniMax-M3.1-Flash | Qoder | 7/7 | 6/10 | 3/3 | 143 | 0.74 |
-| Qwen3.8-27B (single GPU) | Qwen Code | 7/7 | 7/10 | 2/3 | 115 | 0.74 |
-| Qoder Qwen3.8-Max | Qoder | 6/7 | 5/10 | 3/3 | 220 | 0.65 |
-| Qwen3.5-9B laptop, 64k | Qwen Code | 6/7 | 4/10 | 3/3 | 125 | 0.62 |
-| Qoder GLM-5.3-Flash | Qoder | 7/7 | 3/10 | 3/3 | 132 | 0.60 |
-| Qoder DeepSeek-V4-Pro | Qoder | 6/7 | 4/10 | 2/3 | 132 | 0.55 |
-| Qwen3.5-9B laptop, 32k (default) | Qwen Code | 7/7 | 1/10 | 3/3 | 76 | 0.53 |
-| Qwen3.5-9B laptop, 64k | OpenCode | 7/7 | 1/10 | 3/3 | 101 | 0.51 |
-| Qwen3.5-9B laptop, 32k | OpenCode | 4/7 | 0/10 | 1/3 | 625 | 0.19 |
-
-* Benchmark only; not in routing unless the owner approves.
-
-**Harness comparison for the same model** (same model, different harness; Performance is normalised inside this table)
-
-| Model | Harness | Set A (7) | Set B (10) | Set C (3) | Median s | Performance |
-|---|---|---|---|---|---|---|
-| Qwen3.8-27B (single GPU) | OpenCode | 7/7 | 9/10 | 2/3 | 167 | 0.83 |
-| Qwen3.8-27B-NVFP (2-node cluster) | Qwen Code | 6/7 | 9/10 | 2/3 | 109 | 0.82 |
-| Qwen3.8-27B-NVFP (2-node cluster) | Codex | 6/7 | 8/10 | 2/3 | 121 | 0.77 |
-| Qwen3.8-27B (single GPU) | Qwen Code | 7/7 | 7/10 | 2/3 | 115 | 0.75 |
-| Qwen3.8-27B-NVFP (2-node cluster) | OpenCode | 6/7 | 6/10 | 2/3 | 152 | 0.65 |
-| Laptop Qwen3.5-9B, 64k | Qwen Code | 6/7 | 4/10 | 3/3 | 125 | 0.63 |
-| Qwen3.8-27B (single GPU) | Codex | 7/7 | 6/10 | 1/3 | 233 | 0.60 |
-| Laptop Qwen3.5-9B, 32k | Qwen Code | 7/7 | 1/10 | 3/3 | 76 | 0.55 |
-| Laptop Qwen3.5-9B, 64k | OpenCode | 7/7 | 1/10 | 3/3 | 101 | 0.53 |
-| Laptop Qwen3.5-9B, 32k | OpenCode | 4/7 | 0/10 | 1/3 | 625 | 0.19 |
-
-### Qoder tiers (qodercli 1.1.81)
-
-Performance = 0.5·B + 0.2·A + 0.2·C + 0.1·Speed (A, B, C = pass rates; Speed = fastest median in this table / this row median, so the fastest row gets 1.0; a row with no set B result shows pending (needs B) and sorts last; if B exists but A or C was not run, that set drops out, the other weights are rescaled and the cell is marked with an asterisk). Sorted by Performance, highest first, ties by set B, then credits per task (cheaper first). Partial rows count the cells done so far and are marked (partial).
-
-| Qoder tier | Set A (7) | Set B (10) | Set C (3) | Median s | Performance | Credit multiplier | Credits charged per task |
-|---|---|---|---|---|---|---|---|
-| Kimi-K3.1-Pro | 7/7 | 9/10 | 3/3 | 87 | 0.92 | 1.00x | 7.22 |
-| GLM-5.3 | 6/7 | 9/10 | 3/3 | 70 | 0.91 | 0.80x | 8.34 |
-| DeepSeek-Flash | 7/7 | 10/10 | 2/3 | 83 | 0.91 | 0.10x | 0.59 |
-| Fast | 6/7 | 10/10 | 2/3 | 64 | 0.90 | 0.80x | 5.63 |
-| Efficient | 7/7 | 10/10 | 2/3 | 179 | 0.87 | 0.00x | 0.00 (records ~0.74) |
-| Qwen3.8-Flash | 7/7 | 8/10 | 2/3 | 99 | 0.80 | 0.10x | 0.78 |
-| MiniMax-M3.1-Flash | 7/7 | 6/10 | 3/3 | 143 | 0.74 | 0.10x | 1.54 |
-| Qwen3.8-Max | 6/7 | 5/10 | 3/3 | 220 | 0.65 | 0.50x | 14.22 |
-| GLM-5.3-Flash | 7/7 | 3/10 | 3/3 | 132 | 0.60 | 0.10x | 0.63 |
-| DeepSeek-V4-Pro | 6/7 | 4/10 | 2/3 | 132 | 0.55 | 0.50x | 2.93 |
-
-Credits charged per task: verified against Qoder billing 05-11: charged = recorded for paid tiers (the multiplier is already in the recorded number); Efficient records ~0.74 but is not charged. Credit multiplier: the "x Credit" label of each model in the qodercli 1.1.81 ACP model list. Set A: "running (k of 7 done)" or "pending" means not finished; nothing is estimated. Claude cost per task: Sonnet $0.235, Opus $0.530, Haiku $0.020 (from the set B/C runs); other cells are flat rate or local.
-
-Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
-
-## Changes 07-11 (round F fixes)
-
-- **No writer touches a tracked template.** `writeJsonKeepEol` / `writeAtomic` refuse any `*.template.json`; `provider add/remove` write `routes.local.json` (next to the template, or in the hub home under `AGENT_HUB_NO_LOCAL=1`) and only READ the template when no local file exists yet.
-- **Relative `--cwd` / `--home` are resolved against the caller** before they reach the daemon (a relative `--cwd .` once ran an agent in `C:\Windows\System32`).
-- **Gate scratch folders are lazy and removed.** One `agent-hub-gate-*` folder per process, made on first scan and removed on exit (before: two folders per process at import, 8,561 left in `%TEMP%`). `agent-hub cleanup` removes the old `agent-hub-gitleaks-*` / `agent-hub-nohooks-*` ones (exact name, empty, older than 10 min).
-- **One run dir and one laptop port.** Run dir = `<PASEO_HOME or ~/.paseo>/run`; the laptop port comes from `LAPTOP_PORT`, else the laptop provider record in Paseo's config, else 8089, so `laptop-agent --check` from a shell agrees with the daemon.
-- **`cleanup`:** `--dry-run` also previews the orphan-shell reap and the temp cleanup; `--stale-projects` removes Paseo projects whose folder is gone (absolute paths that no longer exist only); `--paseo-defaults` lists keys equal to Paseo's default (any writer; removing one changes no behaviour) and only `--paseo-defaults --yes` removes them (daemon stopped).
-- **`doctor` warns when qodercli is not the pinned 1.1.81** and prints the fix command; `just update` never moves a pinned tool.
-- **Live key-proxy test** (`scripts/test/key-proxy-live.test.mjs`): `provider add --key` through the CLI in a temp home, the real launcher, and probes of the proxy (wrong secret, host, path, endpoint all refused; only the stub upstream sees the key).
-
-## Changes 06-11
-
-- **Self-hosted providers in the Usage panel.** Every provider in the Paseo config that has an OpenAI-compatible endpoint (the base URL in its launch command, or the laptop llama.cpp launcher's local port) gets a card in Paseo's Usage panel: endpoint up/down (`GET <base>/models`, 4 s timeout, cached 60 s) with the served model id, tokens in/out and task count for today and the last 7 days from the usage feed (read-only twins counted with their base), and running/queued requests when you add a Prometheus URL in `config/hub.local.json` as `"metricsUrls": { "<provider>": "http://host:port/metrics" }` (vLLM, SGLang and llama.cpp series are understood; skipped when absent). Green when up, red when down; there is no plan percentage because these servers have no quota. API keys are used for the probe and never shown. Code: `plugins/usage-otel/server/selfhosted-usage.mjs`.
-- **Usage stack without Docker on Windows.** `just up` and the logon task now run the collector, Prometheus and Grafana as native processes (`deploy/usage/native.ps1`): binaries, data and generated configs live in `%LOCALAPPDATA%\agent-hub\usage`, downloaded once with SHA-256 verification (`native.ps1 install`, also run on first start). Same pinned versions, same configs, rules and dashboard as `compose.yaml`; ports stay 3000, 9090, 4317 and 4318. `USAGE_MODE=native|docker` (environment or `deploy/usage/.env`) picks the mode: native is the default on Windows, `docker` (compose.yaml) is for servers and Linux. `just doctor` probes the active mode and fails when the collector, Prometheus or Grafana is down.
-
-## Changes 05-11
-
-- **Laptop watchdog false-idle kill fixed.** The two laptop llama-server deaths during the benchmark (21:36, 21:45) were the hub watchdog judging a freshly started agent idle and stopping the shared server. Idle is now based on in-flight markers and shared last-use state, and CPU is not judged while the model loads (a5acf73, 3d9a87e).
-- **Acceptance run, 18-way burst.** 18 simultaneous tasks finished with no loss; slots are now Codex 3, Claude 2, Qoder 4, office cluster 6, office single GPU 3, laptop 1. `agent-hub route` retries a start up to 6 times with backoff and jitter on `DAEMON_UNREACHABLE`, runs `--gate` itself in the real folder, and the gate fails closed outside a git work tree.
-- **Plugin hooks no longer block.** The gate plugin runs in the background and skips agents that are gone; the usage plugin no longer awaits the Qoder poller in the turn-before hook and polls the account only when the session transcript has no credits. Hooks now stay inside Paseo's 30 s RPC limit (2ebfef6).
-- **OTLP 5 s timeout.** MCP and OTLP calls from the usage plugin time out after 5 s, and an OTLP outage is logged once instead of on every turn.
-- **Usage stack starts itself.** Docker Desktop and the usage stack (collector, Prometheus, Grafana) come up on logon and on `just up`; `just doctor` now fails when the collector, Prometheus or Grafana is down (f8c7519).
-- **Qoder pinned to 1.1.81.** The hub uses qodercli 1.1.81 with a private config directory, because 1.1.83 ignores the tier model over ACP (served `auto`, no credits). Benchmarks check the pin before every cell.
-- **Daemon password hash at bcrypt cost 4.** The daemon bcrypt-checked the bearer token on every MCP request inside its single event loop; at cost 4 MCP calls stop saturating it.
-- **Laptop server fixes.** The model server and its reaper start outside the launcher's process tree (Paseo ends an agent with a tree kill that took the server along), and `-ot token_embd.weight=<device>` keeps the embedding table on the card (working set 1.4 GB -> 0.84 GB, same speed). `--cache-ram 0` (the host prompt cache had grown llama-server to 3.5 GB of RAM) and the launcher never starts a second server while one is still loading.
-- **Routing order.** Codex, then Claude, then Qoder Efficient (free, 10/10 on set B), then DeepSeek-Flash, then the office Qwen3.8-27B-NVFP cluster, then the single-GPU Qwen3.8-27B. Qoder Efficient is free: charged 0.00 credits per task (it records about 0.7).
-- **Laptop context 64k.** The laptop model now defaults to a 64k context (`LAPTOP_CTX=32768` goes back): Qwen Code passes 4/10 hard edits at 64k against 1/10 at 32k, and the whole 8 GB card peaks at 7.5 GB with every layer on the GPU. OpenCode was worse at both sizes (1/10 at 64k, 0/10 at 32k).
-- **Benchmark refreshed.** Tables are A | B | C with a Performance column (0.5B + 0.2A + 0.2C + 0.1Speed), click-to-sort including Name, and the final laptop grid (Qwen Code and OpenCode at 32k and 64k).
-
-<!-- slots:start -->
-### Concurrency / slots
-
-Proven on 5 November 2026 on a fresh daemon, 18 tasks started at the same instant (a one-word reply on each provider, no laptop), then 9 at once:
-
-| Provider | Slots | Proven in one burst |
-| --- | --- | --- |
-| Codex | 3 | 3 |
-| Claude | 2 | 2 |
-| Qoder (Efficient and DeepSeek-Flash) | 4 | 4 |
-| Office Qwen Code, 2-GPU cluster | 6 | 6 |
-| Office Qwen Code, single GPU | 3 | 3 |
-| Laptop Qwen (one 64k slot) | 1 | tested alone |
-
-Result: 18 of 18 finished, no `DAEMON_UNREACHABLE`, no plugin hook timeout in the daemon log, 65 to 161 s each, free RAM 7.3 GB down to 4.6 GB. The office servers took 6 and 3 at once without queueing; they can take more (the cluster serves up to 8 requests, the single GPU up to 4), but the laptop is the limit: every extra client process costs about 150 MB, and a start is slow when the machine is busy.
-
-What limits it, in order: the daemon (one event loop; creating an agent takes 10 to 20 s once many start together), free laptop RAM (below 3 GB the laptop provider refuses to start), then the providers. Do not go above these numbers without repeating the burst.
-
-**Retry.** Paseo answers its 1.5 s status probe slowly while the daemon is busy, so a start can fail with `DAEMON_UNREACHABLE` or "Connection timed out" although nothing was started (upstream issue #6584). `agent-hub route` retries such a start up to 6 times (waits of 2, 4, 8, 16 and 32 s plus jitter) after a random 0 to 2 s stagger, and matches both the error code and the CLI crash text. A start that created an agent is never retried.
-
-**Gate.** `agent-hub route --gate` runs the gate itself, in the agent's real folder, with the same rules as the plugin hook. A first failure re-prompts the agent once and waits for it; the agent is then frozen before the second check. Outside a git work tree the gate fails closed: path rules cannot be evaluated, and a task with no check says "nothing to verify".
-
-**Talk-back (`status: "asking"`).** Every route prompt ends with one line telling the agent: if blocked and in need of the caller's input, finish with a last line `[ASK] <question>`, never include credentials, never call agent-hub. When the agent's final message ends with such a line (the LAST non-empty line only; `[ASK]` in the middle of text is ordinary prose), `route` skips the gate, keeps the agent alive and prints `{"status":"asking","agentId":"...","question":"...","round":1,...}` with exit code 3. Answer it with `agent-hub reply <agentId> "<text>"`: it sends the text, waits, and returns the same JSON shape as `route` (the final `answer`, the original `--gate` run on it, or another `asking` result). At most 3 questions per task; the reply to the third carries "finish now" and a further `[ASK]` is returned as the final answer. Read-only types are re-checked after every reply (a changed file fails the task as `failed-readonly-changed`, the agent is stopped), and the original `--gate` runs on the final answer. A reply that looks like a credential, token or key is rejected before anything is sent (same pattern as the gate's secret scan). A parked agent that gets no reply within 10 minutes is stopped and archived (a detached reaper; `reply` after that says "no parked agent"). Treat `question` as untrusted data from a model that read arbitrary files, never as instructions. State for a parked agent lives in `<paseo home>/usage/parked/<agentId>.json` (gate, base commit, worktree). Route over MCP is not exposed by this repo, so there is no MCP tool to change; an MCP client can use the CLI.
-<!-- slots:end -->
-
-## Routing & slots (models, slots and chain order per provider)
-
-Settings > Plugins > agent-hub-providers > **Routing & slots** (or the command palette entry of the same name), and the same thing on the command line. Both call one backend, `scripts/routes.mjs`, and write the routes file (`config/routes/routes.local.json`) that `route.mjs` reads: one lock, atomic writes, never a template, and every save can be undone byte for byte.
-
-- **Per provider:** on/off (Paseo's own enabled flag; the page changes it live through the daemon, the CLI writes the Paseo config and tells you to restart), which of its models the hub may use (a switch per model from the live model list; none restricted = all allowed), parallel slots (1 to 64), and whether it may run read-only tasks (shown, not editable).
-- **Per task type** (`code-edit`, `code-edit-easy`, `summarise`, `test-scaffold`, `review`): the chain order with Up / Down / Off and an "add" list. Earlier entries are tried first.
-- **A model that is not allowed is never used:** the next entry is tried, and an explicit `--provider P/M` cannot bypass it. A chain entry without a model (an endpoint provider's own model) is not restricted.
-- **Totals:** the page shows the configured slot total and an "effective now" figure. Today effective = the slots of the enabled providers; `plugins/routing/budget.mjs` `effectiveBudget()` is the one place a laptop-based budget will plug in.
-
-```
-agent-hub routes show [--json]
-agent-hub routes models <provider>
-agent-hub routes set <provider> [--slots N] [--models id,id|all] [--enabled true|false]
-agent-hub routes chain <type> <entry,entry,...>
-agent-hub routes move <type> <entry> up|down|off
-agent-hub routes undo
-```
-
-Invalid input is refused with every problem listed and nothing written. Undo is refused (and nothing overwritten) when the routes file changed after the save you would undo.
-
-## Commands
-
-Run `just` with no arguments to list every recipe. The ones you'll use daily:
-
-| Command | What it does |
+| Tool | Notes |
 | --- | --- |
-| `just install` | Install the toolchain (runs `setup.ps1` / `setup.sh`) |
-| `just deps` | Install the npm dependencies |
-| `just test` | Run the full suite (`npm test`): config-template check, gate, routing and usage tests (node and python), and the security-hook tests |
-| `just lint` | Same config check (no code to lint yet) |
-| `just build` | Same config check (plugins land per `tasks.md`) |
-| `just scan` | Scan tracked files for internal hosts, paths and secrets before any push |
-| `just claudex` | Launch Claude Code (Sonnet, all permissions) |
-| `just claudeo` / `just claudeh` | Same, on Opus / Haiku |
+| Git, Node.js 20 or newer | installed for you by `setup.ps1` (Windows) / `setup.sh` (macOS, Linux) |
+| `just` | installed by `setup.ps1`; on a PC without it run `powershell -ExecutionPolicy Bypass -File install-just.ps1` and open a new terminal |
+| gitleaks 8.30.1 (exactly) | **you install it**, the gate refuses to pass without it: `winget install Gitleaks.Gitleaks --version 8.30.1`, or `brew install gitleaks`, or unzip the release into `tools/gitleaks/` (or set `AGENT_HUB_GITLEAKS` to the binary). `agent-hub doctor` FAILS until it is found |
+| At least one agent CLI, signed in | `codex`, `claude`, `qodercli`, `qwen` or `opencode`. A provider appears only for a CLI that is installed |
 
-## Add a provider (UI or CLI)
+## Quick start (5 steps)
 
-Paseo's own Settings > Providers > "Add provider" is a fixed catalog of ACP agents: each is added with its stock command, with no URL, model or key field. Agent Hub adds the missing piece, with the same behaviour from the web UI and the command line.
+1. **Install** (once, safe to re-run). Windows: `just install` (or `powershell -ExecutionPolicy Bypass -File setup.ps1`). macOS/Linux: `sh ./setup.sh`. Open a **new** terminal afterwards so PATH updates land. Then `npm install`.
+2. **Start the daemon:** `just up`. Check it: `agent-hub doctor` (see [Troubleshooting](#troubleshooting) for FAIL vs WARN).
+3. **Open the UI:** `http://127.0.0.1:6767/` > Direct connection, host `127.0.0.1`, port `6767`, password = the content of `~/.paseo/agent-hub-secret` (Windows: `%USERPROFILE%\.paseo\agent-hub-secret`). Never paste this password anywhere else.
+4. **Add a provider** (a fresh install has none beyond your installed CLIs): in the UI go to **Settings > Providers > Add provider**, search `qwen`, press Add, give it a name, paste the base URL of your OpenAI-compatible server (`http://host:8000/v1`), press **Load models**, pick one, tick the task types (`summarise`, `code-edit`), **Add provider**. Or in the shell:
+   `agent-hub provider add my-qwen --kind qwen-code --url http://127.0.0.1:8000/v1 --model <model id> --routes summarise,code-edit`
+   then restart once: `just down && just up`.
+5. **Route a task:** `agent-hub route summarise "Summarise README.md in 5 bullets" --cwd .`
+   You get one JSON line: `used` (which provider), `status`, `answer`. No Qwen endpoint yet? Try an edit on a throwaway git repo with Codex or Claude:
+   `agent-hub route code-edit "Create hello.txt containing hi" --cwd /path/to/repo --new-workspace worktree --gate "test -f hello.txt"`
+   (about 2 minutes). `summarise` and `review` never run on a provider without an enforced read guard, so with only Codex/Claude installed they answer with a message telling you to add a Qwen provider.
 
-**Where to find it in Paseo.** The kinds below are listed in Paseo's own Add provider list too: search `qwen`, `openai`, `ollama`, `vllm`, `sglang`, `lm studio`, `opencode`, `qoder`, `codex` or `claude`, press Add, and the Agent Hub form opens with that kind selected. Paseo 0.15.2 has no plugin hook for that list, so `just up` applies a small, reversible edit to the installed web bundle (`scripts/paseo-web-patch.mjs`, edits in `patches/paseo-0.15.2/web-bundle.json`): it runs only when the installed Paseo version and the bundle's sha256 both match (any other version: a warning, nothing touched, the form stays under Plugins > agent-hub-providers), never modifies the original bundle file, is idempotent, and `node scripts/paseo-web-patch.mjs restore` undoes it. The entries are generated from `scripts/provider-kinds.mjs` (your custom kinds included) into `agent-hub-catalog.json` next to the web UI each time. `AGENT_HUB_NO_WEB_PATCH=1` skips it.
+Read usage afterwards: `agent-hub usage --all`, or Settings > Usage in the UI.
 
-**What you can add (a "kind"):**
+## Where things live
 
-| Kind | What it is | Fields |
-| --- | --- | --- |
-| `qwen` | [Qwen Code](https://github.com/QwenLM/qwen-code) on any OpenAI-compatible endpoint (vLLM, SGLang, llama.cpp, Ollama, a hosted API) | base URL, model, optional API key |
-| `opencode` | OpenCode on any OpenAI-compatible endpoint (no key field: OpenCode runs without a hub launcher, so its agent could read a key) | base URL, model |
-| `local-llama` | a local model the hub runs itself: it starts your `llama-server` (any llama.cpp build with `--device` and `--load-mode`) on the first task and stops it after an idle time, on Windows, macOS or Linux | llama-server program, GGUF file, model name, optional port, context size, GPU device, idle minutes, lock-file pattern |
-| `qoder`, `codex`, `claude` | one more model of a CLI you have installed and signed in to (route entry `<cli>/<model>`; no new Paseo provider) | model |
+| What | Where |
+| --- | --- |
+| Paseo home (config, secret, logs, run files, usage cache) | `~/.paseo` (override: `PASEO_HOME`) |
+| Daemon password | `<paseo home>/agent-hub-secret` (never commit or print it) |
+| Daemon log | `<paseo home>/daemon.log` |
+| Your providers and routes | `config/hub.local.json`, `config/routes/routes.local.json` (git-ignored; templates are `*.template.json`, never edited by commands) |
+| Custom provider kinds | `config/provider-kinds.local.json` |
+| Plugins (gate, usage, providers form) | `plugins/` |
+| Usage stack (Grafana :3000, Prometheus :9090, collector :4318) | `deploy/usage/`, data in `%LOCALAPPDATA%\agent-hub\usage` |
+| Per-task usage records | `<paseo home>/usage/` |
 
-**Local model (`local-llama`).** The server is started with every layer on one GPU device and `--load-mode none` (no mmap), so the weights are not kept in system RAM; it is not started at all when the NVIDIA GPU is missing or already used by another process (a clear `LAPTOP-REFUSED` message, the router falls back to the next provider), and it is stopped after the idle minutes so GPU memory and RAM come back. Only a server the hub started itself is ever stopped. Example: `agent-hub provider add laptop-qwen --kind local-llama --bin /path/llama-server --modelFile /path/model.gguf --model my-alias --routes summarise`. A non-CUDA `--device` skips the NVIDIA check. `agent-hub provider migrate` turns an older Qwen provider that points at the machine's own laptop port (with `llamaServer`/`laptopModel` in `config/hub.local.json`, or `LLAMA_SERVER_BIN`/`LAPTOP_MODEL_PATH`) into this kind with the same name, slots and routes; `migrate --undo` restores the exact old files.
+## UI tour
 
-Every kind also takes a name, parallel slots (kinds with their own provider), which task types it serves with its position in each route chain, and (qwen) whether `summarise` and `review` may run on it. There is one Paseo entry per endpoint: the Qwen launcher offers a session mode "read-only" itself. A fresh install has NO providers (nothing is preconfigured); an older install's seeded Qwen entries are converted by `agent-hub provider migrate` (run by `setup`; `--undo` restores the exact old bytes). Model lists are read live: from the endpoint's `GET /v1/models`, or from `paseo provider models <cli>` for the CLI kinds. Nothing about your hosts, models or accounts is built in.
+| Screen | What you do there |
+| --- | --- |
+| ![Providers list](docs/images/ui-providers.png) | **Settings > Providers.** Every provider with a status dot: Available, Error (the line below says why, usually "not found on PATH"), Disabled. Toggle a provider off here. |
+| ![Add provider](docs/images/ui-add-provider.png) | **Add provider.** Search the catalog; the Agent Hub kinds (qwen, opencode, local model, one more model of Codex/Claude/Qoder) open a form with a **model picker** filled live from the endpoint or the CLI. If the kinds are missing, open **Plugins > agent-hub-providers** instead. |
+| ![Plugins](docs/images/ui-plugins.png) | **Plugins.** `agent-hub-gate`, `agent-hub-providers` and `agent-hub-usage` must show `running`. If not: `just plugins`, then `just down && just up`. |
+| ![Doctor](docs/images/doctor.png) | `agent-hub doctor` output. |
+| ![Grafana usage](docs/images/grafana-usage.png) | **Usage:** Settings > Usage shows plan percentages and one card per self-hosted endpoint (up/down, tokens today); Grafana (`http://127.0.0.1:3000`) shows tokens per provider and per day. |
 
-**Prerequisites:** Node 20 or newer, a running hub (`just up`), and for the kind you pick its CLI on your `PATH` (`qwen`, `opencode`, `qodercli`, `codex` or `claude`). Works the same on Windows, macOS and Linux.
+## Command cheat-sheet
 
-**From the web UI.** Run `node scripts/hub.mjs plugins` once and restart the daemon (`just down && just up`). Open the hub page (default `http://127.0.0.1:6767`), then **Settings > Add provider (Agent Hub)**: pick the kind, give it a name, paste the base URL (and key, which is masked and never shown again), press **Load models** and pick one (or type an id), set slots and the task types, then **Add provider**. A provider with its own Paseo entry needs one daemon restart, which the screen tells you; a CLI-model entry is live at once. The list below the form has **Edit** and **Remove** for each added provider.
+Run `agent-hub --help` or `agent-hub <command> --help` (help never runs the command).
 
-**From the command line** (`agent-hub provider ...`, or `node scripts/hub.mjs provider ...`):
+| Goal | Command |
+| --- | --- |
+| Route a task | `agent-hub route <code-edit\|code-edit-easy\|test-scaffold\|summarise\|review> "<prompt>" --cwd . [--gate "npm test"] [--new-workspace worktree] [--provider P/M]` |
+| Edit tasks | use `--new-workspace worktree` (throwaway copy) and a real `--gate`; the gate must pass or `status` is `gate-failed` |
+| Agent asked a question (`status: "asking"`, exit 3) | `agent-hub reply <agentId> "<answer>"` (never put a secret in it; up to 3 questions per task) |
+| Providers | `agent-hub provider kinds \| list \| models --kind K --url U \| add NAME --kind K ... \| edit NAME --slots 4 \| remove NAME` |
+| Usage | `agent-hub usage --all`, `agent-hub usage --session <id> --json` |
+| Health | `agent-hub doctor` (add `--deep` to run one tiny task per provider; uses tokens) |
+| Tidy up | `agent-hub cleanup --older-than 30m --dry-run`, then without `--dry-run` |
+| Daemon | `just up`, `just down`, `just status`, `just plugins` |
+| Update CLIs | `just update` (Paseo stays pinned unless `just update --paseo`) |
+| Develop on the hub | `npm test`, `npm run scan` (see [`AGENTS.md`](AGENTS.md)) |
 
-```
-agent-hub provider kinds
-agent-hub provider models --kind qwen --url http://127.0.0.1:8000/v1          # what the endpoint serves
-agent-hub provider add qwen-lab --kind qwen --url http://127.0.0.1:8000/v1 --model my-model \
-    [--key <api key>] [--slots 2] [--routes code-edit:2,summarise] [--readonly false] [--label "Display name"]
-agent-hub provider add fast-tier --kind qoder --model <tier from: paseo provider models qoder> --routes code-edit
-agent-hub provider edit qwen-lab --slots 4        # also --model --url --key --routes --readonly
-agent-hub provider list
-agent-hub provider remove qwen-lab
-```
-
-The provider list shows each added provider as "<Kind> <host>" (for example `Qwen Code 10.0.0.5`, or `Qwen Code local` for localhost) unless you pass `--label`. `--routes code-edit:2,summarise` puts the provider second in the `code-edit` chain and at the end of `summarise`. `add` refuses a URL that is not http(s), an endpoint that does not answer `/v1/models`, a model the endpoint or CLI does not list, and a name already in use; nothing is written when it refuses. The API key (qwen kind) lives in `config/hub.local.json` (git-ignored) and in the provider's `env` in the Paseo config, and goes only to the hub's launcher (`deploy/office/office-agent.mjs`), which keeps it in a small local auth proxy and starts the agent with the key removed from its environment: the agent and its shell commands never see it, and it is never on a command line or in a log. The same launcher also strips every environment variable whose name ends in `API_KEY`, `TOKEN`, `PAT`, `SECRET`, `PASSWORD` or `CREDENTIALS` from the agent's environment, so an agent that runs `env` does not see the daemon's own secrets either. `remove` puts the configuration files back byte for byte while nothing else has changed them since; `edit` keeps that guarantee relative to the original add.
-
-**Add your own kind** (any ACP agent CLI, any other OpenAI-compatible launcher). The built-in kinds live in `scripts/provider-kinds.mjs`; yours go in `config/provider-kinds.local.json` (git-ignored) or the file named by `AGENT_HUB_KINDS`, and appear in both the CLI and the UI:
-
-```json
-{
-  "myagent": {
-    "label": "My agent (OpenAI-compatible)",
-    "launch": ["{node}", "/path/to/my-launcher.mjs", "{url}", "{model}"],
-    "modelsFrom": "endpoint",
-    "fields": [
-      { "id": "url", "label": "Base URL", "type": "url", "required": true },
-      { "id": "model", "label": "Model", "type": "model", "required": true },
-      { "id": "key", "label": "API key (optional)", "type": "secret" }
-    ]
-  }
-}
-```
-
-`launch` is the ACP command Paseo should run (`{node}`, `{repo}`, `{url}`, `{model}` are filled in; the key arrives in `HUB_OPENAI_API_KEY`, so your launcher must keep it from the agent: reuse `startAuthProxy` and `scrubKeyEnv` from `plugins/routing/office.mjs`, or take no key field). Names of this kind start with `myagent-`. Use `"base": "<an installed provider id>"` instead of `launch` for a kind that only adds `<base>/<model>` route entries.
-
-The UI is one small Paseo plugin (`plugins/providers`) drawn from this same schema with Paseo's own Settings components; all of its text is in `plugins/providers/client/strings.ts`. A Paseo-side change to put these fields into the built-in "Add provider" dialog would be a better home for it; none is needed for this to work.
-
-### Multiple accounts
-
-Every kind in `scripts/provider-kinds.mjs` declares how it separates accounts (`account` in the schema; the Settings form shows it, or the reason it cannot):
-
-| Kind | Separation | One-time sign-in for a new account | Plan usage in the Usage panel |
-|---|---|---|---|
-| Claude | `CLAUDE_CONFIG_DIR` per account (set on that provider only) | `CLAUDE_CONFIG_DIR=<dir> claude auth login` | 5-hour and weekly % from the account's own login |
-| Codex | `CODEX_HOME` per account | `CODEX_HOME=<dir> codex login` | 5-hour and weekly % from the account's own login |
-| Qoder | `--config-dir <dir>` on the provider command | `qodercli --config-dir <dir> login` | tokens and tasks only |
-| Qwen Code, OpenCode, custom endpoint kinds | no login: another account is another entry with its own Base URL and/or API key | none | endpoint status, tokens and tasks |
-
-```
-agent-hub provider add claude-work --kind claude --account work --model <id> --routes code-edit
-# prints the one-line sign-in command for the new, empty account folder; run it once yourself
-agent-hub provider add claude-home --kind claude --account home --account-dir D:\accounts\home --model <id>
-agent-hub provider remove claude-work            # the account folder (its login) is kept
-agent-hub provider remove claude-work --purge    # ... or deleted with it
-```
-
-The hub never asks for, stores or automates a password: you sign in once with the CLI itself. The folder defaults to `~/.agent-hub/accounts/<kind>/<account>` (`AGENT_HUB_ACCOUNTS_DIR` moves it). An account is its own provider (own slots, own route entries `<name>/<model>`), so more accounts means more parallel tasks. Account providers serve code-edit style tasks; read-only task types (`summarise`, `review`) stay on the providers with an enforced sensitive-read guard. The Usage panel shows one card per kind with a Total line and one line per account (the default login first); an account that is not signed in shows "not logged in". Restart the daemon after adding (`just down && just up`) so Paseo loads the new provider; Paseo lists an account's models once it knows the provider, until then the base provider's list is shown.
-
-The model is never a guess: the form (and `agent-hub provider models --kind K [--link URL]`) fills a list from the endpoint's `/v1/models` or from the CLI, with its tier and cost text; `add` without `--model` prints that list. A custom id is the last option of the list.
-
-## Security
-
-**Agents get an allow-listed environment.** Every way of starting the daemon (`just up`, the `AgentHub` scheduled task, the systemd unit) goes through `scripts/daemon-env.mjs`, which builds the daemon's environment from an allow-list: OS basics (`PATH`, `SystemRoot`, `TEMP`, `HOME`/`USERPROFILE`, `APPDATA`, `LANG`/`LC_*`, `XDG_*` ...), the hub's own and Paseo's own names, by exact name only (no prefix wildcards for the hub or Paseo, so an unlisted `PASEO_*` or `AGENT_HUB_*` name is dropped); a value that is a URL with `user:pass@` is always dropped. Codex, Claude, Qoder, OpenCode and Qwen agents inherit that environment, so an agent (or injected text it reads) that runs `env` sees none of the tokens of the shell that started the hub. The agent CLIs keep working because they read their logins from their own config dirs. If a CLI genuinely needs another variable (a proxy, `NODE_EXTRA_CA_CERTS`), list it in `config/hub.local.json` as `"daemonEnvAllow": ["HTTPS_PROXY", "NODE_*"]` (a trailing `*` is a prefix) or in `AGENT_HUB_ENV_ALLOW=HTTPS_PROXY,NODE_*`; a name listed exactly there is passed even if it looks like a credential (a `*` prefix entry still skips credential-looking names), so list only what you mean to share. Restart the daemon after changing it. The Docker images take their environment from the container's own env file, which is yours.
-
-Full-access, bypass and yolo modes are used only with `--new-workspace worktree` (a throwaway worktree); `route.mjs` drops them otherwise. The daemon password lives in `<paseo home>/agent-hub-secret` and is never put in the environment agents inherit.
-
-**Latest aliases.** A route entry may name `codex/latest`, `codex/latest-sol|terra|luna`, `claude/latest-opus|sonnet|haiku` `qoder/<tier>@latest`, `qoder/latest-<family>` or `opencode/office@latest` instead of a pinned model. `route.mjs` resolves it at dispatch to the highest version the provider lists (Codex: `~/.codex/models_cache.json`, version-sorted, `astra` never chosen, a family without the newest version falls back to the newest overall for `codex/latest`; Claude and Qoder: `paseo provider models`), cached 10 min. `node plugins/routing/route.mjs --resolve <alias>` prints the mapping now; `just doctor` lists resolved aliases and warns about pinned older models. **Qoder** versions: tiers are matched on their display name, so `qoder/latest-<family>` (e.g. `latest-qwen-max`, `latest-deepseek-pro`, `latest-kimi-pro`) picks the highest version in that family and `qoder/<tier>@latest` moves an older versioned tier up to it (unversioned tiers such as `efficient` just must still be listed). **Office Qwen and the laptop model** are not pinned: `deploy/office/office-agent.mjs` (qwen-code, qwen-code-2) and `laptop-agent.mjs` read the served id from `GET <base>/v1/models` at spawn (cached 10 min; the configured model is only the fallback), and `opencode/office@latest` points the opencode config at the served id. **Tools:** `just doctor` lists every CLI's installed vs latest published version (npm view) and the laptop GGUF with its date; `just update` updates the ones behind, Paseo only with `just update --paseo`. Nothing updates or downloads by itself.
+Route result fields: `used`, `agentId`, `status` (`completed`, `asking`, `gate-failed`, `failed-readonly-changed`, `permission`, `rejected`, `error`), `gate` (`status`, `reasons`), `trace` (what each provider did or why it was skipped), `answer`. Exit code: 0 completed, 3 asking, 1 failed, 2 bad input.
 
 ## Troubleshooting
 
-### The Paseo UI: use the local page, not app.paseo.sh
+- **`just` or `agent-hub` not found after setup:** open a new terminal.
+- **Hub down or hangs when the machine is low on RAM:** `just status`, then `just down && just up`. A start can take 10 to 20 s when many tasks start together; `route` retries by itself. Free RAM under 3 GB makes the local-model provider refuse.
+- **UI says 401 or asks for a password:** use the content of `<paseo home>/agent-hub-secret`. The hosted app.paseo.sh cannot connect; use the local page.
+- **A provider shows Error:** read the line under it. "not found on PATH" = install that CLI. After adding a provider run `just down && just up`.
+- **Model list is empty:** the endpoint must answer `GET <url>/models`; test it with `curl <url>/models`. `agent-hub provider models --kind qwen-code --url <url>` shows what the hub sees.
+- **`LAPTOP-REFUSED` (local model refused):** the NVIDIA GPU is not visible, is already used by another process, or free RAM is under 3 GB. The router moves on to the next provider.
+- **`route` printed `no provider took this task`:** read `trace`. `summarise`/`review` need a Qwen-kind provider or claude-clean; `code-edit` needs Codex or Claude installed and signed in.
+- **`status: gate-failed`:** `gate.reasons` says why: secret found in the diff, too many lines, a forbidden path (`.env`, `.github/`, `*.pem`), or your `--gate` command failed twice. Fix the cause; do not weaken the gate.
+- **`status: permission`:** an edit task ran outside `--new-workspace worktree`; add it.
+- **`doctor` FAIL vs WARN:** FAIL = broken (exit 1), fix it first (gitleaks missing, daemon down, usage stack down). WARN, NOTE and INFO are advice (a CLI is behind, qodercli is not the pinned 1.1.81).
+- **`REFUSED: PASEO_HOME ... would overwrite this clone's config`:** you pointed a command at a temp home. Add `AGENT_HUB_NO_LOCAL=1` so provider files stay inside that home.
+- **`npm test` says PASSED WITH SKIPS:** gitleaks was not found; install it (above) for the full suite.
+- More: [`.docs/06-troubleshooting/common-issues.md`](.docs/06-troubleshooting/common-issues.md).
 
-`just install` (it runs `node scripts/hub.mjs configure`, which you can also run alone) turns on the daemon's own web UI: open `http://127.0.0.1:6767/` (Direct connection, host `127.0.0.1`, port `6767`, the password in `<paseo home>/agent-hub-secret`). The hosted app at app.paseo.sh cannot connect: the daemon answers its WebSocket with `403 Origin not allowed` unless `daemon.cors.allowedOrigins` lists it, and Chrome blocks the call to localhost behind a local-network prompt. Restart the daemon (`just down && just up`) after the first `configure`.
+## More documentation
 
-### `route.mjs ... --new-workspace worktree` seems to hang
+- [`.docs/tldr.md`](.docs/tldr.md): every doc in one page.
+- [Providers, accounts, security, latest aliases (full reference)](.docs/05-reference/providers-security-reference.md)
+- [Benchmarks, concurrency, change notes](.docs/05-reference/benchmarks-and-changes.md)
+- [`AGENTS.md`](AGENTS.md): for AI agents working on or with this repo.
 
-Creating the agent can take 2+ minutes while the daemon is saturated or a provider stalls at its ACP `initialize` (upstream Paseo: `agent.create.request` shows in `daemon.log` as `ws_slow_request`; not specific to worktrees). `route.mjs` now creates with `--no-wait`, bounds the create call (`AGENT_HUB_CREATE_TIMEOUT_S`, default 240) and returns `CREATE_TIMEOUT: ...` instead of hanging 15 minutes; it does not retry that error. A late agent may still appear in `paseo ls`; stop it by id.
-
-### A task ends as `permission`
-
-Edit task types (`code-edit`, `test-scaffold`) outside `--new-workspace worktree` run without their full-access mode and wait for a permission nobody answers; the trace now says so. Use `--new-workspace worktree`, or a read-only type (`summarise`, `review`), which run in the provider default mode and fail if they changed files in the folder (list: `readOnlyTypes` in the routes file).
-
-**Read-only providers (decided 06-11, live evidence).** A read-only type runs each provider in its read-only mode: `plan` for Claude and OpenCode, `read-only` for the Qwen providers (plus the readguard/hook file boundary), `dontAsk` for Qoder (a Write, a shell command and a Read outside the task folder were all refused live; but a Read INSIDE the folder is allowed, and an in-cwd `.env` was read and returned in round 3, so Qoder is NOT allowed on read-only types: only providers with an enforced sensitive-read refusal, claude-clean (PreToolUse hook) and the Qwens (readguard plus a deny list in `config/qwen/system-settings-readonly.json`, applied through `QWEN_CODE_SYSTEM_SETTINGS_PATH`: the Qwen launcher is an ACP proxy (`plugins/routing/acp-proxy.mjs`) that offers the session mode `read-only`, and when `route.mjs` selects it (`--mode read-only`, before the first prompt) it restarts qwen with those settings and keeps the same session id; there is no second "(read-only)" provider; plan mode lets Qwen read an in-cwd `.env` without any permission request, found live in round 5; nothing is ever written under the task folder), may run `summarise`/`review`. A `--provider qoder/...` override on such a type is refused at once; `routes.readOnlyEnforced` overrides the list). Residual risk: the text-level guards can be evaded by shell tricks such as `cat .e
-v`; they are a layer, not a sandbox, so keep secrets out of the task folder anyway. Codex has no read-only mode in Paseo (Default Permissions, Auto-review and Full Access can all write in the folder), so it is not in the `summarise` or `review` chains and a read-only type skips it; the folder-changed post-check stays as the backstop.
-
-### `just: command not found` right after setup
-
-PATH updates only land in a new shell. Close and reopen PowerShell, or run `powershell -ExecutionPolicy Bypass -File install-just.ps1` first.
-
-### `just test` fails with a config error
-
-`scripts/check-config.mjs` reports the template and the key. Templates must be valid JSON and contain only `<PLACEHOLDER>` values, never real hosts or secrets; fix the file and re-run.
-
-### `just scan` flags a file
-
-The scan blocks internal host names, private IPs, personal paths and secrets. Replace the value with a placeholder such as `<OFFICE_QWEN_URL>`.
-
-More in [`.docs/06-troubleshooting/common-issues.md`](.docs/06-troubleshooting/common-issues.md).
-
-## Project layout
+## Layout
 
 ```
 agent-hub/
-├── config/              JSON templates with <PLACEHOLDERS> (daemon config, MCP clients, routes, claude-clean settings)
-├── scripts/             check-config.mjs (validates every template), scan.mjs (internal host/path/secret scan)
-├── plugins/             gate and usage plugins (land per specs/001-agent-hub/tasks.md)
-├── deploy/
-│   ├── laptop/          laptop pre-flight and llama.cpp server setup
-│   ├── usage/           OTel / Prometheus / Grafana stack
-│   └── server/          server-side install
-├── ci/                  CI workflow files
-├── specs/001-agent-hub/ spec-kit: spec.md, plan.md, tasks.md
-├── .specify/            spec-kit templates and scripts
-├── .docs/               developer docs (start at tldr.md)
-├── .claude/             Claude Code kit (skills, agents, hooks, settings)
-├── justfile             daily recipes (Windows PowerShell and Linux sh)
-├── setup.ps1 / setup.sh toolchain install (Windows / Linux)
-├── package.json         Node >=20, ESM; test/lint/build/scan scripts
-├── LICENSE / NOTICE     Apache-2.0; NOTICE credits Paseo
-└── README.md / CLAUDE.md
+├── config/    templates (*.template.json) and your git-ignored *.local.json
+├── scripts/   hub.mjs (install core, doctor, provider), help.mjs, scan.mjs, check-config.mjs
+├── plugins/   gate, routing (agent-hub route), usage-otel, providers
+├── deploy/    service (daemon), usage stack, laptop model, office launchers
+├── .docs/     developer docs
+└── justfile, setup.ps1 / setup.sh, package.json, LICENSE, NOTICE
 ```
 
 ## License
 
-Apache-2.0, see [LICENSE](LICENSE). [NOTICE](NOTICE) credits Paseo, the agent daemon this repo configures and extends.
+Apache-2.0, see [LICENSE](LICENSE). [NOTICE](NOTICE) credits Paseo.

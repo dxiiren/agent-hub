@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { providersRpc, routingRpc } from "./shared/rpc";
+import { providersRpc } from "./shared/rpc";
 
 /** The repo that holds scripts/provider.mjs: AGENT_HUB_REPO, else two levels above this plugin, else the install path recorded in the Paseo config. */
 function repoRoot(): string {
@@ -31,14 +31,14 @@ async function call(verb: string, args: Record<string, unknown> = {}): Promise<R
   if (r.crashed) return { error: `The provider tool stopped unexpectedly (exit ${r.code}). Check the Providers page in case it was saved, then press Save again; if it keeps happening, run \`node scripts/provider.mjs doctor\` or restart the daemon.` };
   return r;
 }
-function callOnce(verb: string, args: Record<string, unknown> = {}, script = "provider.mjs"): Promise<Record<string, unknown>> {
+function callOnce(verb: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   return new Promise((ok) => {
     let out = "";
     let err = "";
     let child;
     // The plugin host may not be node itself: use process.execPath only when it is node, else `node` from PATH.
     const node = /(^|[\\/])node(\.exe)?$/i.test(process.execPath) ? process.execPath : "node";
-    try { child = spawn(node, [join(repoRoot(), "scripts", script), "api"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }); }
+    try { child = spawn(node, [join(repoRoot(), "scripts", "provider.mjs"), "api"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }); }
     catch (e: any) { return ok({ error: String(e?.message ?? e) }); }
     const timer = setTimeout(() => child.kill(), 90_000);
     child.stdout.on("data", (d) => (out += d));
@@ -49,23 +49,7 @@ function callOnce(verb: string, args: Record<string, unknown> = {}, script = "pr
   });
 }
 
-/** Daemon-side "enabled": patch REPLACES the whole providers map, so read it, flip the flags and send the full map back. */
-async function applyEnabled(paseo: any, changes: Record<string, boolean>) {
-  const cur: any = await paseo.config.get();
-  const providers = { ...(cur?.config?.providers ?? cur?.providers ?? {}) };
-  for (const [id, enabled] of Object.entries(changes)) providers[id] = { ...(providers[id] ?? {}), enabled };
-  await paseo.config.patch({ providers });
-}
-
 export default function contribute(server: PluginServerContext) {
   server.handle(providersRpc, async (input) => call(input.verb, input.args as Record<string, unknown>));
-  server.handle(routingRpc, async (input, context: any) => {
-    const r: any = await callOnce(input.verb, (input.args ?? {}) as Record<string, unknown>, "routes.mjs");
-    const ch = r?.enabledChanges as Record<string, boolean> | undefined;
-    if (!r?.error && ch && Object.keys(ch).length) {
-      try { await applyEnabled(context.paseo, ch); } catch (e: any) { return { ...r, error: `Saved, but the daemon refused the enabled change: ${String(e?.message ?? e)}` }; }
-    }
-    return r;
-  });
   return () => {};
 }

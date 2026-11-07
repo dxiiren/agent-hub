@@ -3,7 +3,6 @@
 //   node scripts/hub.mjs mcp add|remove     register / remove the agent-hub MCP server in each installed client
 //   node scripts/hub.mjs unconfigure       remove the providers, wrappers and secret that configure wrote
 //   node scripts/hub.mjs provider add|list|remove   add an OpenAI-compatible endpoint as a provider (scripts/provider.mjs)
-//   node scripts/hub.mjs routes show|set|chain|move|undo   Routing & slots: models, slots and chain order per provider (scripts/routes.mjs)
 //   node scripts/hub.mjs doctor [--deep]    PASS/FAIL per check and per provider; --deep runs one tiny task each
 //   node scripts/hub.mjs update [--paseo]   update every CLI that is behind (Paseo only with --paseo; decision 38)
 // Env: AGENT_HUB_HOME (Paseo home, default ~/.paseo), AGENT_HUB_PORT (default 6767),
@@ -318,7 +317,6 @@ else if (cmd === 'mcp' && (arg === 'add' || arg === 'remove')) mcp(arg);
 else if (cmd === 'unconfigure') unconfigure();
 else if (cmd === 'plugins') plugins();
 else if (cmd === 'provider') process.exit(await (await import('./provider.mjs')).main(process.argv.slice(3)));
-else if (cmd === 'routes') process.exit(await (await import('./routes.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'update') (await import('./tools.mjs')).update(process.argv.includes('--paseo'));
 else if (cmd === 'doctor') await doctor(process.argv.includes('--deep'));
 else if (cmd === 'reap-laptop') { const r = await reapLaptop(process.argv.includes('--now')); console.log(r.length ? `stopped ${r.map((x) => `pid ${x.pid} (port ${x.port})`).join(', ')}` : 'no idle orphaned laptop llama-server'); const o = (await import('../plugins/routing/orphans.mjs')).reapAgentOrphans(); if (o.length) console.log(`stopped ${o.length} orphaned agent shell snapshot process(es): ${o.join(', ')}`); }

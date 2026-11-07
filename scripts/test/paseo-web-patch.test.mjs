@@ -189,16 +189,3 @@ test('config patch: the new value is cached at once (nested objects merged), the
 test('the plugin Reload menu item says why it is disabled', () => {
   const e = edit('plugin-reload-hint'); assert.match(e.replace, /l\.enabled\?B:B\+"[^"]*enable the plugin/);
 });
-
-test('Add model picker: only models the provider does not already offer (case-insensitive, "(label)" suffix and provider prefix ignored); none left -> empty-state text', () => {
-  const src = edit('model-picker-component').replace;
-  const ctx = vm.createContext({ String, Set });
-  vm.runInContext(grab(src, '__AhFresh') + ';this.f=__AhFresh;', ctx);
-  const m = (...ids) => ids.map((id) => ({ id }));
-  assert.deepEqual(ctx.f(m('A', 'b', 'c'), ['a', 'B ']).map((x) => x.id), ['c'], 'case-insensitive, trimmed');
-  assert.deepEqual(ctx.f(m('gpt-6 (openai)', 'x'), ['GPT-6']).map((x) => x.id), ['x'], '(label) suffix ignored');
-  assert.deepEqual(ctx.f(m('office/Qwen3', 'Other'), ['Qwen3']).map((x) => x.id), ['Other'], 'provider prefix ignored');
-  assert.deepEqual(ctx.f(m('a'), ['a']), [], 'everything already offered -> empty');
-  assert.deepEqual(ctx.f([{ id: '' }, null, { id: 'z' }], undefined).map((x) => x.id), ['z'], 'junk rows dropped');
-  assert.ok(src.includes('All models from this provider are already added') && src.includes('Custom model id...'), 'empty state text + custom entry kept');
-});

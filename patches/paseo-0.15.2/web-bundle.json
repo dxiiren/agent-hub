@@ -109,5 +109,5 @@
    "replace": "{onSelect:l.enabled?v:()=>{},disabled:p,status:H,pendingLabel:R,children:l.enabled?B:B+\" (enable the plugin first)\"}"
   }
  ],
- "rev": 9
+ "rev": 8
 }

@@ -42,18 +42,22 @@ export function localSpec(a) {
 export function paths(env = process.env) {
   const home = resolve(env.AGENT_HUB_HOME || paseoHome(env)); // AGENT_HUB_HOME (the launcher copies it to PASEO_HOME), else PASEO_HOME, else ~/.paseo
   const routesDir = join(REPO, 'config', 'routes');
+  const dflt = join(homedir(), '.paseo').toLowerCase();
+  const elsewhere = [env.AGENT_HUB_HOME, env.PASEO_HOME].filter(Boolean).some((h) => resolve(h).toLowerCase() !== dflt);
+  if (elsewhere && env.AGENT_HUB_NO_LOCAL !== '1' && !(env.AGENT_HUB_LOCAL && env.AGENT_HUB_ROUTES)) // a temp home must never write the clone's own config/*.local.json (it once replaced a real hub's providers)
+    throw new Error(`REFUSED: PASEO_HOME/AGENT_HUB_HOME points at ${[env.AGENT_HUB_HOME, env.PASEO_HOME].filter(Boolean)[0]}, not ~/.paseo, so this command would overwrite this clone's config/*.local.json. Set AGENT_HUB_NO_LOCAL=1 to keep the provider files inside that home instead.`);
   return { local: env.AGENT_HUB_LOCAL || (env.AGENT_HUB_NO_LOCAL === '1' ? join(home, 'hub.local.json') : join(REPO, 'config', 'hub.local.json')), paseo: join(home, 'config.json'),
     routes: env.AGENT_HUB_ROUTES || (env.AGENT_HUB_NO_LOCAL === '1' ? join(home, 'routes.local.json') : join(routesDir, 'routes.local.json')) }; // always a local file: the tracked template is only a read fallback (rdr)
 }
 const rd = readJsonStrict; // BOM-safe; missing file = default; unparsable = throws, so add/remove never overwrite a config they could not read
 /** Routes reader: a missing local file reads the shipped template (never written, see isTemplatePath). */
-export const rdr = (p, d) => (existsSync(p.routes) ? rd(p.routes, d) : rd(join(REPO, 'config', 'routes', 'routes.template.json'), d));
+const rdr = (p, d) => (existsSync(p.routes) ? rd(p.routes, d) : rd(join(REPO, 'config', 'routes', 'routes.template.json'), d));
 const wr = writeJsonKeepEol; // keeps the file's own line endings
-export const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
-export const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
+const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
+const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
 const FILES = ['local', 'paseo', 'routes'];
 /** The one lock every read-modify-write of the three files takes (cross-process; re-entrant in a call chain). Next to hub.local.json, so it matches .gitignore *.local.*. */
-export const lockOf = (p) => join(dirname(p.local), 'hub.local.lock');
+const lockOf = (p) => join(dirname(p.local), 'hub.local.lock');
 const basePath = (p) => join(dirname(p.local), 'hub.local.undo-base.json'); // the files as they were before the FIRST added provider
 const undoPath = (p, name) => join(dirname(p.local), `hub.local.undo-${name}.json`); // matches .gitignore *.local.*
 

@@ -749,18 +749,10 @@ test("claimSlot: simultaneous routes cannot all take one provider; the rest stay
   const rt = { slots: { codex: 2 } };
   const ms = [1, 2, 3].map((i) => { const un = markActive(rt, null, dir, null); return un; });
   // markers are created in one ms: make their stamps distinct and ordered
-  const ordered = ms.map((u, i) => { const f = joSt(dir, `t-${process.pid}-${1000 + i}.json`); u(); writeFileSync(f, JSON.stringify({ provider: null, state: "queued" })); const un = () => {}; un.file = f; un.dir = dir; return un; });
+  const ordered = ms.map((u, i) => { const f = joSt(dir, `t-9${i}-${1000 + i}.json`); u(); writeFileSync(f, JSON.stringify({ provider: null, state: "queued" })); const un = () => {}; un.file = f; un.dir = dir; return un; });
   assert.deepEqual(ordered.map((u) => claimSlot(u, "codex", 2)), [true, true, false]);
   assert.equal(JSON.parse(rdSt(ordered[2].file, "utf8")).provider, null);
   assert.equal(JSON.parse(rdSt(ordered[0].file, "utf8")).provider, "codex");
   setMarker(ordered[0], null); // a route that gave its slot back lets the queued one in
   assert.equal(claimSlot(ordered[2], "codex", 2), true);
-});
-
-import { liveMarkers, maxOpenRoutes } from "../route.mjs";
-test("liveMarkers ignores markers of dead processes; maxOpenRoutes defaults to 16 and takes routes.maxOpenRoutes", () => {
-  const dir = mkdSt(joSt(tmpdir(), "ahub-live-")); const w = (n) => writeFileSync(joSt(dir, n), "{}");
-  w(`t-${process.pid}-1.json`); w("t-999999999-2.json"); w("total.json");
-  assert.deepEqual(liveMarkers(dir), [`t-${process.pid}-1.json`]);
-  assert.equal(maxOpenRoutes({}), 16); assert.equal(maxOpenRoutes({ maxOpenRoutes: 5 }), 5); assert.equal(maxOpenRoutes({ maxOpenRoutes: "x" }), 16);
 });

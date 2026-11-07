@@ -23,4 +23,4 @@ export function violationsFile(base = process.env) {
   const f = join(mkdtempSync(join(tmpdir(), "agent-hub-violations-")), "violations.txt"); writeFileSync(f, ""); process.env.AGENT_HUB_TEST_VIOLATIONS = f; return f;
 }
 // Test files that need the gitleaks binary; `npm test` skips them (loudly) when none is found.
-export const NEEDS_GITLEAKS = new Set(["gate.test.mjs", "secrets-table.test.mjs", "secrets-table-0.test.mjs", "secrets-table-1.test.mjs", "secrets-table-2.test.mjs", "argv.test.mjs", "talkback.test.mjs", "routes.test.mjs"]);
+export const NEEDS_GITLEAKS = new Set(["gate.test.mjs", "secrets-table.test.mjs", "secrets-table-0.test.mjs", "secrets-table-1.test.mjs", "secrets-table-2.test.mjs", "argv.test.mjs", "talkback.test.mjs"]);

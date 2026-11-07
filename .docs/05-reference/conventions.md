@@ -223,7 +223,7 @@ Never a tracked `.env` (`git ls-files .env` must be empty).
 ## Git rules (MANDATORY)
 
 1. Before the first commit: `git config user.email "you@example.com"` and
-   `git config user.name "akmal"` (repo-local).
+   `git config user.name "<your name>"` (repo-local).
 2. **Conventional Commits** (`feat:`, `fix:`, `chore:`, `docs:` ...).
 3. **NO attribution trailers** — never `Co-Authored-By`, "Generated with Claude Code", or
    session links, in commit messages, PR bodies, or issue comments.
