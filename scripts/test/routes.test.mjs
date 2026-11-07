@@ -101,10 +101,10 @@ test('routing obeys the model allow-list: a model that is not allowed is never u
   const routes = JSON.parse(readFileSync(p.routes, 'utf8'));
   const runs = [];
   const fake = (a) => { if (a[0] === 'run') { runs.push(a[a.indexOf('--provider') + 1]); return { status: 'completed', agentId: 'A1' }; } return a[0] === 'ls' ? [] : a[0] === 'provider' ? [{ provider: 'codex' }, { provider: 'qoder' }] : {}; };
-  const r = runRoute({ type: 'code-edit', prompt: 'p', cwd: '/r', session: 's' }, fake, routes);
+  const r = runRoute({ type: 'code-edit', prompt: 'p', cwd: '/r', session: 's', providerState: new Map([['codex', true], ['qoder', true]]) }, fake, routes);
   assert.deepEqual(runs, ['codex/gpt-b']); assert.equal(r.used, 'codex/gpt-b');
   assert.match(r.trace[0].skip, /model gpt-a is not allowed for codex/);
-  const forced = runRoute({ type: 'code-edit', prompt: 'p', cwd: '/r', session: 's', provider: 'codex/gpt-a' }, fake, routes);
+  const forced = runRoute({ type: 'code-edit', prompt: 'p', cwd: '/r', session: 's', providerState: new Map([['codex', true], ['qoder', true]]), provider: 'codex/gpt-a' }, fake, routes);
   assert.equal(forced.used, null); assert.match(forced.trace[0].skip, /not allowed/); assert.deepEqual(runs, ['codex/gpt-b'], 'explicit --provider cannot bypass it');
   assert.equal(modelNotAllowed(routes, 'qwen-code'), null, 'entry without a model is not restricted'); assert.equal(modelNotAllowed(routes, 'qoder/anything'), null, 'provider without a list is open');
 });
