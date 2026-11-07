@@ -1,11 +1,11 @@
-// agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--home H] [--fix-model-ids]
+// agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--home H] [--fix-model-ids] [--stale-projects] [--paseo-defaults]
 // Archives finished/idle agents so none lingers "running"/"idle" after a test, doctor or fix job.
 // --mine (default): only agents agent-hub itself created = labelled route/type=<a route type> (set by route.mjs) or caller=agent-hub-doctor (doctor --deep).
 // --all: every finished agent of the daemon, including other users' (never the default). Running agents are never touched.
 import { fileURLToPath } from "node:url";
-import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { cliPaseo, withRetry, loadRoutes } from "./route.mjs";
 import { cleanModelId } from "./acp-proxy.mjs";
 
@@ -58,6 +58,32 @@ export function cleanDoctorLeftovers({ paseo, dry = false, tmp = tmpdir(), rm = 
   return { dirs, projects };
 }
 
+/** Old gate scratch folders (agent-hub-gitleaks-XXXXXX / agent-hub-nohooks-XXXXXX): one per process that imported the gate, never removed (8,561 piled up). Ours only by the exact name AND content (empty folders, or just an empty empty.gitconfig) AND age, because a live process may still use its own. */
+const GATE_TMP = /^agent-hub-(gitleaks|nohooks)-[A-Za-z0-9]{6}$/;
+function onlyEmpty(d) { // true when d holds nothing but empty folders and a zero-byte empty.gitconfig
+  let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return false; }
+  return es.every((e) => (e.isDirectory() ? onlyEmpty(join(d, e.name)) : e.name === "empty.gitconfig" && statSync(join(d, e.name)).size === 0));
+}
+export function cleanGateTemp({ tmp = tmpdir(), dry = false, minAgeMs = 10 * 60_000, now = Date.now(), rm = rmSync } = {}) {
+  let n = 0, names = []; try { names = readdirSync(tmp).filter((x) => GATE_TMP.test(x)); } catch { return 0; }
+  for (const x of names) {
+    const d = join(tmp, x);
+    try { if (now - statSync(d).mtimeMs < minAgeMs || !onlyEmpty(d)) continue; if (!dry) rm(d, { recursive: true, force: true }); n++; } catch { /* held or gone: leave it */ }
+  }
+  return n;
+}
+
+/** Paseo projects whose folder no longer exists (removed worktrees) make the daemon log "spawn git ENOENT". Only an absolute path that is GONE qualifies, so a real repo is never touched. `paseo(args)` -> parsed JSON. */
+export function staleProjects(paseo) {
+  const rows = paseo(["project", "ls"]);
+  return (Array.isArray(rows) ? rows : []).filter((p) => p.projectId && typeof p.path === "string" && isAbsolute(p.path) && !existsSync(p.path));
+}
+export function removeStaleProjects({ paseo, dry = false }) {
+  const list = staleProjects(paseo);
+  if (!dry) for (const p of list) paseo(["project", "delete", p.projectId]);
+  return list.map((p) => p.path);
+}
+
 /** Agent records written before the plain-model-id fix keep qwen's runtime id (`$runtime|openai|<id>(openai)` / `<id>(openai)`) in three model fields. Rewrites those fields to the plain served id, only where the value ends in "(openai)" (qwen's own suffix) and the agent is not running. Run with the daemon stopped (`just down`): a running daemon keeps its records in memory. Returns the number of records changed. */
 const MODEL_FIELDS = [["config", "model"], ["runtimeInfo", "model"], ["persistence", "metadata", "model"]];
 export function cleanAgentModelIds({ home = process.env.PASEO_HOME ?? join(homedir(), ".paseo"), dry = false } = {}) {
@@ -86,6 +112,8 @@ export function cleanAgentModelIds({ home = process.env.PASEO_HOME ?? join(homed
 
 const guard = await import("../../deploy/laptop/gpu-guard.mjs").catch(() => null); // optional in a trimmed install
 import { reapAgentOrphans } from "./orphans.mjs";
+import { normalizeConfigFile } from "./paseo-defaults.mjs";
+import { findServerDir } from "../../scripts/paseo-web-patch.mjs";
 
 export function main(argv, env = process.env) {
   if (argv.includes("--fix-model-ids")) { const n = cleanAgentModelIds({ home: argv.includes("--home") ? argv[argv.indexOf("--home") + 1] : env.PASEO_HOME, dry: argv.includes("--dry-run") }); console.log(`${argv.includes("--dry-run") ? "would rewrite" : "rewrote"} the model id in ${n} old agent record(s) (stop the daemon first: it keeps records in memory)`); return 0; }
@@ -98,7 +126,18 @@ export function main(argv, env = process.env) {
   console.log(`${argv.includes("--dry-run") ? "would archive" : "archived"} ${r.archived.length} agent(s), ${r.skipped} left (running, too new or not finished)${r.archived.length ? ": " + r.archived.map((i) => i.slice(0, 8)).join(" ") : ""}`);
   try { const d = cleanDoctorLeftovers({ paseo: withRetry(cliPaseo(home, env)), dry: argv.includes("--dry-run") }); if (d.dirs || d.projects) console.log(`${argv.includes("--dry-run") ? "would remove" : "removed"} ${d.dirs} leftover hub-doctor temp folder(s) and ${d.projects} of their Paseo project(s)`); } catch { /* the daemon may be down: the folders go next time */ }
   if (!argv.includes("--dry-run") && guard) { try { for (const x of guard.reapOrphans({ idleMs: Number(env.LAPTOP_IDLE_MIN || 15) * 60_000 })) console.log(`stopped an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`); } catch { /* best effort */ } }
-  if (!argv.includes("--dry-run")) { const o = reapAgentOrphans(); if (o.length) console.log(`stopped ${o.length} orphaned agent shell snapshot process(es)`); }
+  { const dry = argv.includes("--dry-run"); const o = reapAgentOrphans({ dry }); if (o.length) console.log(`${dry ? "would stop" : "stopped"} ${o.length} orphaned agent shell snapshot process(es)`); }
+  { const dry = argv.includes("--dry-run"); const g = cleanGateTemp({ dry }); if (g) console.log(`${dry ? "would remove" : "removed"} ${g} leftover agent-hub gate temp folder(s)`); }
+  if (argv.includes("--paseo-defaults")) { // keys a Paseo switch wrote with its default value; the daemon would rewrite its in-memory copy, so it must be stopped (a dry run is always fine)
+    const dry = argv.includes("--dry-run"), port = Number(env.AGENT_HUB_PORT || 6767);
+    if (!dry && guard && guard.listenerPid(port)) { console.error("cleanup: --paseo-defaults edits the Paseo config file: stop the daemon first (just down), or add --dry-run to preview"); return 2; }
+    try {
+      const server = join(env.PASEO_SERVER_DIR || findServerDir() || "", "dist", "server", "server");
+      const r = normalizeConfigFile(join(home ?? join(homedir(), ".paseo"), "config.json"), server, { dry });
+      console.log(`${dry ? "would remove" : "removed"} ${r.removed.length} default-valued key(s) from the Paseo config${r.removed.length ? ": " + r.removed.join(" ") : ""}`);
+    } catch (e) { console.error("cleanup: --paseo-defaults failed: " + e.message); return 1; }
+  }
+  if (argv.includes("--stale-projects")) { const dry = argv.includes("--dry-run"); try { const gone = removeStaleProjects({ paseo: withRetry(cliPaseo(home, env)), dry }); console.log(`${dry ? "would remove" : "removed"} ${gone.length} Paseo project(s) whose folder no longer exists${gone.length ? ": " + gone.join(" ") : ""}`); } catch (e) { console.error("cleanup: --stale-projects failed: " + e.message); } }
   return 0;
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(main(process.argv.slice(2)));

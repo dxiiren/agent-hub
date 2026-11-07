@@ -72,6 +72,6 @@ test('agent-hub.cmd: the subcommand word is cut off the arguments (SHIFT does no
   const run = (...a) => spawnSync(cmd, a, { encoding: 'utf8', shell: true });
   const bad = run('route', 'sometype', '"two words"', '--cwd', 'C:\agent-hub-no-such-dir');
   assert.equal(bad.status, 2, 'route.mjs exits 2 for a missing --cwd; the .cmd must not turn it into 0');
-  assert.match(bad.stderr, /--cwd C:\agent-hub-no-such-dir is not an existing folder/, 'route.mjs must see type/prompt/options, not a leading "route"');
+  assert.match(bad.stderr, /--cwd .*agent-hub-no-such-dir is not an existing folder/, 'route.mjs must see type/prompt/options, not a leading "route"');
   assert.equal(run('bogus').status, 2);
 });

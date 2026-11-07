@@ -10,7 +10,7 @@ import os from "node:os";
  *  Self-contained on purpose: Paseo bundles this plugin alone, it cannot import from plugins/routing. Same folder rule as plugins/routing/runstate.mjs (a test pins them together). */
 export function innerSession(outer, env = process.env) {
   try {
-    const dir = env.AGENT_HUB_RUN_DIR || join(env.PASEO_HOME || join(os.homedir(), ".agent-hub"), "run");
+    const dir = env.AGENT_HUB_RUN_DIR || join(env.PASEO_HOME || env.AGENT_HUB_HOME || join(os.homedir(), ".paseo"), "run");
     return JSON.parse(readFileSync(join(dir, `qwen-session-${String(outer).replace(/[^A-Za-z0-9-]/g, "_")}.json`), "utf8")).inner ?? null;
   } catch { return null; }
 }

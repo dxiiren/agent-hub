@@ -6,7 +6,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import path, { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
@@ -161,6 +161,9 @@ export function normCwd(p, platform = process.platform) {
   const m = /^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)(.*)$/.exec(p);
   return m ? `${m[1].toUpperCase()}:${m[2] || "/"}` : p;
 }
+
+/** A relative path option is resolved against the CALLER's folder before it is sent: the daemon would otherwise resolve it against its own (an agent once ran in C:\Windows\System32 for --cwd .). Dash-led and empty values stay as they are for inputError. */
+export function absPath(p) { return typeof p !== "string" || !p || p.startsWith("-") || path.isAbsolute(p) ? p : path.resolve(p); }
 
 /** The commit a task starts from; the gate diffs against it. Null only outside a git repo; a repo with no commits yet (unborn HEAD) gets the empty-tree hash so the gate diffs and scans everything. */
 export function headSha(cwd) {
@@ -463,7 +466,7 @@ function main(argv) {
   if (argv[0] === "reply") {
     const [, id, text, ...r] = argv;
     if (!id || !text) { console.error('usage: route.mjs reply <agentId> "<text>" [--home H]'); return 2; }
-    const home = (r.includes("--home") ? r[r.indexOf("--home") + 1] : undefined) ?? process.env.PASEO_HOME;
+    const home = absPath((r.includes("--home") ? r[r.indexOf("--home") + 1] : undefined) ?? process.env.PASEO_HOME);
     { const e = inputError({ home }); if (e) { console.error("route: " + e); return 2; } }
     try { migrate(); } catch { /* best effort */ }
     const res = runReply(id, text, withRetry(cliPaseo(home)), loadRoutes(), { dir: parkDir(home) });
@@ -473,8 +476,8 @@ function main(argv) {
   const [type, prompt, ...rest] = argv;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]'); return 2; }
-  const home = opt("--home") ?? process.env.PASEO_HOME;
-  const cwd = normCwd(opt("--cwd") ?? process.cwd());
+  const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
+  const cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
   const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
   if (early) { console.error("route: " + early); return 2; }

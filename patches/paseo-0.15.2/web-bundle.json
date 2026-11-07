@@ -106,8 +106,8 @@
   {
    "name": "plugin-reload-hint",
    "find": "{onSelect:v,disabled:k,status:H,pendingLabel:R,children:B}",
-   "replace": "{onSelect:v,disabled:k,status:H,pendingLabel:R,children:l.enabled?B:B+\" (enable the plugin first)\"}"
+   "replace": "{onSelect:l.enabled?v:()=>{},disabled:p,status:H,pendingLabel:R,children:l.enabled?B:B+\" (enable the plugin first)\"}"
   }
  ],
- "rev": 7
+ "rev": 8
 }

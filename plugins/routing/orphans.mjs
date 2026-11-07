@@ -26,8 +26,8 @@ export function listProcs(run = spawnSync) {
 }
 
 /** Stop every orphaned agent shell snapshot; returns the pids stopped. `kill` is injectable for tests. */
-export function reapAgentOrphans({ procs = listProcs(), kill = (pid) => process.kill(pid, "SIGKILL") } = {}) {
+export function reapAgentOrphans({ procs = listProcs(), kill = (pid) => process.kill(pid, "SIGKILL"), dry = false } = {}) {
   const out = [];
-  for (const pid of orphanSnapshotPids(procs)) { try { kill(pid); out.push(pid); } catch { /* already gone */ } }
+  for (const pid of orphanSnapshotPids(procs)) { if (dry) { out.push(pid); continue; } try { kill(pid); out.push(pid); } catch { /* already gone */ } }
   return out;
 }

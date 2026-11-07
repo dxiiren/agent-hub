@@ -1,6 +1,6 @@
 // Gate core: pure functions, no Paseo imports, so the unit tests run under plain node.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, rmSync, existsSync, mkdtempSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, rmSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,11 +27,18 @@ export function gitleaksBin(env = process.env) {
   const local = join(ROOT, "tools", "gitleaks", process.platform === "win32" ? "gitleaks.exe" : "gitleaks");
   return existsSync(local) ? local : "gitleaks";
 }
-const SCAN_CWD = mkdtempSync(join(tmpdir(), "agent-hub-gitleaks-")); // empty: no .gitleaks.toml or .gitleaksignore is ever picked up from the caller's folder
+/** ONE scratch folder per process, made on first use (never at import: 8,561 empty dirs piled up in %TEMP%) and removed when the process exits. */
+let WORK = null;
+function work() {
+  if (!WORK) { WORK = mkdtempSync(join(tmpdir(), "agent-hub-gate-")); process.once("exit", () => { try { rmSync(WORK, { recursive: true, force: true }); } catch { /* best effort */ } }); }
+  return WORK;
+}
+/** Empty folder: no .gitleaks.toml or .gitleaksignore is ever picked up from the caller's folder. */
+const scanCwd = () => { const d = join(work(), "scan"); mkdirSync(d, { recursive: true }); return d; };
 let verified = null;
 /** Throws "secret scanner unavailable: ..." when the binary is missing, not the pinned version, times out or errors: callers FAIL CLOSED. */
 function gl(args, input, bin, timeout) {
-  const r = spawnSync(bin, args, { input, cwd: SCAN_CWD, encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 1 << 20, windowsHide: true });
+  const r = spawnSync(bin, args, { input, cwd: scanCwd(), encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 1 << 20, windowsHide: true });
   if (r.error) throw new Error("secret scanner unavailable: " + (r.error.code === "ETIMEDOUT" ? "timed out" : r.error.message));
   return r;
 }
@@ -52,7 +59,7 @@ export function hasSecret(text, bin = gitleaksBin(), config = GITLEAKS_CONFIG) {
   // A text header first (leading binary-looking bytes must not make gitleaks skip the stream) and a random canary last: the scan counts only when gitleaks reports the canary, so a skipped or truncated scan is "unavailable", never "clean".
   const canary = "AGENTHUBCANARY" + randomBytes(16).toString("hex");
   const input = ["agent-hub secret scan input", t, lines.join(NL), lines.join(""), canary, ""].join(NL);
-  const rep = join(mkdtempSync(join(SCAN_CWD, "r-")), "report.json");
+  const rep = join(mkdtempSync(join(scanCwd(), "r-")), "report.json");
   // --ignore-gitleaks-allow: a `gitleaks:allow` comment in the scanned text must not switch the scan off
   const r = gl(["stdin", "--no-banner", "--no-color", "--log-level", "error", "--ignore-gitleaks-allow", "--exit-code", "7", "--report-format", "json", "--report-path", rep, "-c", config], input, bin, 30000 + 10000 * (input.length >> 20));
   if (r.status !== 7 && r.status !== 0) throw new Error("secret scanner unavailable: gitleaks exited " + r.status);
@@ -68,13 +75,11 @@ export function hasSecret(text, bin = gitleaksBin(), config = GITLEAKS_CONFIG) {
 }
 
 // The worktree is untrusted: its .git/config must not run code (fsmonitor, hooks, external diff, textconv) and no user/system config is read.
-const EMPTY_DIR = mkdtempSync(join(tmpdir(), "agent-hub-nohooks-"));
-const EMPTY_CFG = join(EMPTY_DIR, "empty.gitconfig");
-writeFileSync(EMPTY_CFG, "");
+const emptyDir = () => { const d = join(work(), "nohooks"); mkdirSync(d, { recursive: true }); const c = join(d, "empty.gitconfig"); if (!existsSync(c)) writeFileSync(c, ""); return d; };
 // core.autocrlf=input: a worktree checked out with the user's autocrlf=true holds CRLF files; the empty gate config would diff every one of them
-export const GIT_FLAGS = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + EMPTY_DIR, "-c", "diff.external=", "-c", "core.pager=cat", "-c", "core.longpaths=true", "-c", "core.autocrlf=input"];
-export const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: EMPTY_CFG, GIT_TERMINAL_PROMPT: "0" };
-const git = (cwd, args) => execFileSync("git", [...GIT_FLAGS, ...args], { cwd, env: GIT_ENV, encoding: "utf8", maxBuffer: 32 << 20, stdio: ["ignore", "pipe", "ignore"] });
+export const gitFlags = () => ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + emptyDir(), "-c", "diff.external=", "-c", "core.pager=cat", "-c", "core.longpaths=true", "-c", "core.autocrlf=input"];
+export const gitEnv = () => ({ ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(emptyDir(), "empty.gitconfig"), GIT_TERMINAL_PROMPT: "0" });
+const git = (cwd, args) => execFileSync("git", [...gitFlags(), ...args], { cwd, env: gitEnv(), encoding: "utf8", maxBuffer: 32 << 20, stdio: ["ignore", "pipe", "ignore"] });
 
 /** Patterns come only from the trusted routes file; cap the length so a bad config cannot build a huge regex. */
 export function rx(src) {

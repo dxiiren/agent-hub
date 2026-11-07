@@ -10,9 +10,20 @@ import { randomBytes } from "node:crypto";
 const posix = process.platform !== "win32";
 const uid = () => (posix && typeof process.getuid === "function" ? process.getuid() : null);
 
-/** <AGENT_HUB_RUN_DIR> or <PASEO_HOME>/run or ~/.agent-hub/run. Created private on first use; refused when it is a symlink or not ours. */
+/** Paseo's home, the one source of truth for run dir and laptop port: PASEO_HOME, else AGENT_HUB_HOME, else ~/.paseo (what the daemon and `hub provider` use). */
+export const paseoHome = (env = process.env) => env.PASEO_HOME || env.AGENT_HUB_HOME || join(homedir(), ".paseo");
+/** Laptop llama-server port: LAPTOP_PORT, else the LAPTOP_PORT of the laptop provider recorded in Paseo's config.json (what the daemon launches it with), else 8089. A shell and the daemon therefore agree. */
+export function laptopPort(env = process.env) {
+  if (env.LAPTOP_PORT) return String(env.LAPTOP_PORT);
+  try {
+    const provs = JSON.parse(readFileSync(join(paseoHome(env), "config.json"), "utf8").replace(/^﻿/, "")).agents?.providers ?? {};
+    for (const v of Object.values(provs)) if (v?.env?.LAPTOP_PORT && /^\d+$/.test(String(v.env.LAPTOP_PORT))) return String(v.env.LAPTOP_PORT);
+  } catch { /* no config yet: the default */ }
+  return "8089";
+}
+/** <AGENT_HUB_RUN_DIR> or <paseoHome>/run. Created private on first use; refused when it is a symlink or not ours. */
 export function runDir(env = process.env) {
-  const dir = env.AGENT_HUB_RUN_DIR || join(env.PASEO_HOME || join(homedir(), ".agent-hub"), "run");
+  const dir = env.AGENT_HUB_RUN_DIR || join(paseoHome(env), "run");
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const st = lstatSync(dir);

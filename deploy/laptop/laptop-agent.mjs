@@ -12,12 +12,12 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
-import { runDir } from '../../plugins/routing/runstate.mjs';
+import { runDir, laptopPort } from '../../plugins/routing/runstate.mjs';
 import { removeServerFiles, UNKNOWN, judge, pnpStatus, smi, listenerPid, cpuSeconds, stopPid, readOwn, writeOwn, ownedStopTarget, idleExpired, modelMatches, markInflight, clearInflight, anyInflight, sharedIdle, cpuJudgeable, llamaArgs, startRefusal, spawnOrphan, ensureReaper, ownRecord } from './gpu-guard.mjs';
 
 const READ_ONLY = takeReadOnlyFlag(process.argv); // legacy "-ro" twin entry: read-only from the start
 const E = process.env;
-const PORT = E.LAPTOP_PORT || '8089';
+const PORT = laptopPort(E);
 const ALIAS = E.LAPTOP_ALIAS || 'qwen35-9b';
 const DEVICE = E.LAPTOP_DEVICE || 'CUDA0';
 const NV = /^cuda/i.test(DEVICE); // the pnp/nvidia-smi guard only applies to an NVIDIA device

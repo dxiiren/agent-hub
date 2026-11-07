@@ -1,4 +1,4 @@
-/*agent-hub-rev:7*/function __AhPick(p){
+/*agent-hub-rev:8*/function __AhPick(p){
   // Add custom model (Settings > Providers > provider > Add model): a picker instead of a free-text box.
   // Source of the list: the agent-hub-providers plugin RPC "provider-models" (endpoint kinds: the endpoint's /v1/models, fetched by the daemon so keys stay server-side);
   // anything else: the daemon's own model list for that provider (the same catalog behind "N models"). Free text only through the last entry.

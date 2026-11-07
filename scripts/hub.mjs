@@ -174,7 +174,8 @@ async function latestChecks(conf) {
   }
   const { inventory, table } = await import('./tools.mjs');
   const rows = inventory(); console.log('\nTOOL         INSTALLED  LATEST     STATE\n' + table(rows));
-  for (const r of rows) if (r.verdict === 'UPDATE') console.log(`NOTE  ${r.name} is behind: \`just update${r.pinned ? ' --paseo' : ''}\``);
+  { const { pinWarning } = await import('./tools.mjs'); for (const r of rows) { const w = pinWarning(r); if (w) console.log(`WARN  ${w}`); } }
+  for (const r of rows) if (r.verdict === 'UPDATE' && !r.pin) console.log(`NOTE  ${r.name} is behind: \`just update${r.pinned ? ' --paseo' : ''}\``);
 }
 const retire = (id) => { paseo(['stop', id]); paseo(['archive', id]); };
 /** Stop hub-owned laptop llama-servers nobody uses (orphans of a dead reaper or launcher). `now` = stop at once (hub down); else only after the idle time. */

@@ -12,7 +12,10 @@ export function readJsonStrict(p, d) {
   if (j === null || typeof j !== "object" || Array.isArray(j)) throw new Error(`${p} is not a JSON object (top level must be { ... }). Fix or remove it; nothing was written.`);
   return j;
 }
+/** Tracked templates are shipped files: no writer may ever touch one (a hermetic env without a local file once fell back to the template). */
+export const isTemplatePath = (p) => /[.]template[.]json$/i.test(String(p));
 export function writeJsonKeepEol(p, o) {
+  if (isTemplatePath(p)) throw new Error(`refusing to write the shipped template ${p}: write the matching *.local.json next to it instead`);
   mkdirSync(dirname(p), { recursive: true });
   let t = JSON.stringify(o, null, 2) + LF;
   try { const old = readFileSync(p, "utf8"); if (old.includes(CRLF)) t = t.split(LF).join(CRLF); if (old.startsWith(BOM)) t = BOM + t; } catch { /* new file: LF, no BOM */ }
@@ -20,6 +23,7 @@ export function writeJsonKeepEol(p, o) {
 }
 /** Write temp + rename, so a concurrent reader sees the old or the new file, never half of one. Windows can refuse the rename while a reader has the target open: retry, then fall back to a direct write. */
 export function writeAtomic(p, data) {
+  if (isTemplatePath(p)) throw new Error(`refusing to write the shipped template ${p}: write the matching *.local.json next to it instead`);
   const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(tmp, data);
   for (let i = 0; i < 20; i++) {

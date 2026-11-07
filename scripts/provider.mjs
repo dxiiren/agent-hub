@@ -42,9 +42,11 @@ export function paths(env = process.env) {
   const home = resolve(env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
   const routesDir = join(REPO, 'config', 'routes');
   return { local: env.AGENT_HUB_LOCAL || (env.AGENT_HUB_NO_LOCAL === '1' ? join(home, 'hub.local.json') : join(REPO, 'config', 'hub.local.json')), paseo: join(home, 'config.json'),
-    routes: env.AGENT_HUB_ROUTES || (env.AGENT_HUB_NO_LOCAL !== '1' && existsSync(join(routesDir, 'routes.local.json')) ? join(routesDir, 'routes.local.json') : join(routesDir, 'routes.template.json')) };
+    routes: env.AGENT_HUB_ROUTES || (env.AGENT_HUB_NO_LOCAL === '1' ? join(home, 'routes.local.json') : join(routesDir, 'routes.local.json')) }; // always a local file: the tracked template is only a read fallback (rdr)
 }
 const rd = readJsonStrict; // BOM-safe; missing file = default; unparsable = throws, so add/remove never overwrite a config they could not read
+/** Routes reader: a missing local file reads the shipped template (never written, see isTemplatePath). */
+const rdr = (p, d) => (existsSync(p.routes) ? rd(p.routes, d) : rd(join(REPO, 'config', 'routes', 'routes.template.json'), d));
 const wr = writeJsonKeepEol; // keeps the file's own line endings
 const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
 const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
@@ -145,7 +147,7 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
   if ((k.own || account) && own(cfg.agents?.providers, name)) throw new Error(`${name} is already a provider in the Paseo config (not added by this tool)`);
   if (!skipVerify) await verifyKind(k, { url, model, key, ...lc }, { f, run });
   const bin = type === 'qwen-code' || k.local ? which('qwen') : null; if ((type === 'qwen-code' || k.local) && !bin) throw new Error('qwen CLI not found on PATH');
-  const routes = rd(p.routes, null); if (!routes) throw new Error(`routes file unreadable: ${p.routes}`);
+  const routes = rdr(p, null); if (!routes) throw new Error(`routes file unreadable: ${p.routes}`);
   const chains = parseRoutes(a.routes);
   { const seen = new Set(); for (const { c } of chains) { if (seen.has(c)) throw new Error(`route ${c} is listed twice`); seen.add(c); } }
   const accountDir = account ? resolve(a.accountDir || accountDirOf(type, account)) : undefined;
@@ -187,7 +189,7 @@ function baseRoutes(p) {
 function removeManual(name, p, local = rd(p.local, {})) {
   const spec = own(local.extraProviders, name); const k = kindOf(spec.type); const token = chainToken(name, spec);
   delete local.extraProviders[name]; if (!Object.keys(local.extraProviders).length) delete local.extraProviders;
-  const routes = rd(p.routes, {});
+  const routes = rdr(p, {});
   delete routes.slots?.[name]; delete routes.modes?.[name]; delete routes.readOnlyModes?.[name];
   if (routes.readOnlyEnforced) routes.readOnlyEnforced = routes.readOnlyEnforced.filter((x) => x !== name);
   // add() materialised the built-in defaults and an empty readOnlyModes: drop what is back to its default so the file returns to its pre-add form
@@ -237,7 +239,7 @@ async function editLocked(name, ch, p, o) {
   const local = rd(p.local, {}); const spec = own(local.extraProviders, name);
   if (!spec) throw new Error(`${name} is not an added provider`);
   const cur = list(p).find((x) => x.name === name); const token = chainToken(name, spec);
-  const routes = rd(p.routes, {});
+  const routes = rdr(p, {});
   const curRoutes = Object.entries(routes.routes || {}).filter(([, v]) => v.includes(token)).map(([c, v]) => `${c}:${v.indexOf(token) + 1}`).join(',');
   let u; try { u = JSON.parse(readFileSync(undoPath(p, name), 'utf8')); } catch { u = null; }
   const before = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
@@ -289,7 +291,7 @@ function migrateQwenLocked(p, { undo } = {}) {
     rmSync(mu, { force: true }); return { undone: true };
   }
   const cfg = rd(p.paseo, null); const prov = cfg?.agents?.providers; if (!prov) return { changed: false };
-  const local = rd(p.local, {}); const routes = /routes[.]template[.]json$/.test(p.routes) ? null : rd(p.routes, null); // the shipped template is never rewritten
+  const local = rd(p.local, {}); const routes = rd(p.routes, null); // the shipped template is never rewritten
   const twins = Object.keys(prov).filter((id) => id.endsWith('-ro') && prov[id.slice(0, -3)]);
   const spec = (id, e) => {
     const c = e.command ?? []; const i = c.findIndex((x) => /office-agent[.]mjs$/.test(String(x)));
@@ -376,7 +378,7 @@ export function migrate(p = paths(), { undo, env } = {}) {
 /** Added providers for display. The API key is never returned, only keySet. */
 export const list = (p = paths()) => {
   reconcile(p);
-  const routes = rd(p.routes, {});
+  const routes = rdr(p, {});
   return Object.entries(rd(p.local, {}).extraProviders || {}).map(([name, s]) => { const { key, ...rest } = s; const isOwn = ownish(kindOf(s.type), s); const token = chainToken(name, s);
     return { name, ...rest, ...(key ? { keySet: true } : {}), slots: own(routes.slots, name),
       routes: Object.entries(routes.routes || {}).filter(([, v]) => v.some((x) => (isOwn ? x.split('/')[0] === name : x === token))).map(([c]) => c) }; });
@@ -384,7 +386,7 @@ export const list = (p = paths()) => {
 
 /** What the Settings screen needs to draw its form: kinds with fields, the route types and the current providers. */
 export const describe = (p = paths()) => ({ kinds: Object.entries(KINDS).map(([type, k]) => ({ type, label: k.label, fields: k.fields, slots: k.slots, readOnlyTwin: k.twin, nameHelp: k.nameHelp, ownProvider: k.own, account: k.account })),
-  routeTypes: Object.fromEntries(Object.entries(rd(p.routes, {}).routes || {}).map(([c, v]) => [c, v.length])), providers: list(p) });
+  routeTypes: Object.fromEntries(Object.entries(rdr(p, {}).routes || {}).map(([c, v]) => [c, v.length])), providers: list(p) });
 
 function whichBin(name) { // PATH lookup on Windows, macOS and Linux
   const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8' });

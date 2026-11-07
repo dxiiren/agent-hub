@@ -128,6 +128,16 @@ Credits charged per task: verified against Qoder billing 05-11: charged = record
 
 Superseded versions (Codex gpt-6-sol, gpt-5.6 family) are in the guide under History. The hub's own overhead was measured too: after hashing the daemon password at bcrypt cost 4, ten parallel MCP clients drop from a 15.5 s to a 4.7 s median per task (details in the guide).
 
+## Changes 07-11 (round F fixes)
+
+- **No writer touches a tracked template.** `writeJsonKeepEol` / `writeAtomic` refuse any `*.template.json`; `provider add/remove` write `routes.local.json` (next to the template, or in the hub home under `AGENT_HUB_NO_LOCAL=1`) and only READ the template when no local file exists yet.
+- **Relative `--cwd` / `--home` are resolved against the caller** before they reach the daemon (a relative `--cwd .` once ran an agent in `C:\Windows\System32`).
+- **Gate scratch folders are lazy and removed.** One `agent-hub-gate-*` folder per process, made on first scan and removed on exit (before: two folders per process at import, 8,561 left in `%TEMP%`). `agent-hub cleanup` removes the old `agent-hub-gitleaks-*` / `agent-hub-nohooks-*` ones (exact name, empty, older than 10 min).
+- **One run dir and one laptop port.** Run dir = `<PASEO_HOME or ~/.paseo>/run`; the laptop port comes from `LAPTOP_PORT`, else the laptop provider record in Paseo's config, else 8089, so `laptop-agent --check` from a shell agrees with the daemon.
+- **`cleanup`:** `--dry-run` also previews the orphan-shell reap and the temp cleanup; `--stale-projects` removes Paseo projects whose folder is gone (absolute paths that no longer exist only); `--paseo-defaults` removes default-valued keys Paseo's switches wrote (daemon stopped).
+- **`doctor` warns when qodercli is not the pinned 1.1.81** and prints the fix command; `just update` never moves a pinned tool.
+- **Live key-proxy test** (`scripts/test/key-proxy-live.test.mjs`): `provider add --key` through the CLI in a temp home, the real launcher, and probes of the proxy (wrong secret, host, path, endpoint all refused; only the stub upstream sees the key).
+
 ## Changes 06-11
 
 - **Self-hosted providers in the Usage panel.** Every provider in the Paseo config that has an OpenAI-compatible endpoint (the base URL in its launch command, or the laptop llama.cpp launcher's local port) gets a card in Paseo's Usage panel: endpoint up/down (`GET <base>/models`, 4 s timeout, cached 60 s) with the served model id, tokens in/out and task count for today and the last 7 days from the usage feed (read-only twins counted with their base), and running/queued requests when you add a Prometheus URL in `config/hub.local.json` as `"metricsUrls": { "<provider>": "http://host:port/metrics" }` (vLLM, SGLang and llama.cpp series are understood; skipped when absent). Green when up, red when down; there is no plan percentage because these servers have no quota. API keys are used for the probe and never shown. Code: `plugins/usage-otel/server/selfhosted-usage.mjs`.
