@@ -90,14 +90,14 @@ export function RoutingScreen() {
               <SettingsSwitch label={`${p.label} (${p.id})`} value={p.enabled} disabled={busy} onValueChange={(v) => void setProv(p.id, { enabled: v })} />
               <SettingsRow label={R.status} hint={`${p.status ?? R.unknown}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />
               <SettingsInput label={R.slots(data.maxSlots)} hint={p.slots == null ? R.unlimited : undefined} initialValue={slots[p.id] ?? ""} onChangeText={(t) => setSlots((s) => ({ ...s, [p.id]: t }))} />
-              <SettingsAction label={p.id} actionLabel={R.saveSlots} disabled={busy || (slots[p.id] ?? "") === (p.slots == null ? "" : String(p.slots))} onPress={() => void setProv(p.id, { slots: (slots[p.id] ?? "").trim() })} />
+              <SettingsAction label={R.slotsAction} actionLabel={R.saveSlots} disabled={busy || (slots[p.id] ?? "") === (p.slots == null ? "" : String(p.slots))} onPress={() => void setProv(p.id, { slots: (slots[p.id] ?? "").trim() })} />
               <SettingsRow label={R.models} hint={m.loading ? R.loading : m.error ? undefined : m.known ? (p.models ? R.someModels(p.models.length, m.list!.length) : R.allModels) : R.noList} />
               {m.error ? <SettingsRow label={R.modelsFailed} error={m.error} /> : null}
-              {m.error ? <SettingsAction label={p.id} actionLabel={R.retry} onPress={() => void loadModels(p.id)} /> : null}
+              {m.error ? <SettingsAction label={R.modelsFailed} actionLabel={R.retry} onPress={() => void loadModels(p.id)} /> : null}
               {m.known ? m.list!.map((x) => (
                 <SettingsSwitch key={x.id} label={x.label && x.label !== x.id ? `${x.label} (${x.id})` : x.id} value={!p.models || p.models.includes(x.id)} disabled={busy} onValueChange={(v) => toggleModel(p, x.id, v)} />
               )) : null}
-              {m.known && p.models ? <SettingsAction label={p.id} actionLabel={R.useAll} disabled={busy} onPress={() => void setProv(p.id, { models: "all" })} /> : null}
+              {m.known && p.models ? <SettingsAction label={R.useAllLabel} actionLabel={R.useAll} disabled={busy} onPress={() => void setProv(p.id, { models: "all" })} /> : null}
               {p.models ? <SettingsRow label={R.restricted(p.models.join(", "))} /> : null}
             </SettingsCard>
           );
@@ -111,12 +111,12 @@ export function RoutingScreen() {
               {chain.length === 0 ? <SettingsRow label={R.emptyChain} /> : null}
               {chain.map((e, i) => (
                 <SettingsRow key={e} label={`${i + 1}. ${e}`}>
-                  <SettingsAction label={e} actionLabel={R.up} disabled={busy || i === 0} onPress={() => void setChain(t, move(chain, i, -1))} />
-                  <SettingsAction label={e} actionLabel={R.down} disabled={busy || i === chain.length - 1} onPress={() => void setChain(t, move(chain, i, 1))} />
-                  <SettingsAction label={e} actionLabel={R.off} disabled={busy} onPress={() => void setChain(t, chain.filter((x) => x !== e))} />
+                  <SettingsAction label="" actionLabel={R.up} disabled={busy || i === 0} onPress={() => void setChain(t, move(chain, i, -1))} />
+                  <SettingsAction label="" actionLabel={R.down} disabled={busy || i === chain.length - 1} onPress={() => void setChain(t, move(chain, i, 1))} />
+                  <SettingsAction label="" actionLabel={R.off} disabled={busy} onPress={() => void setChain(t, chain.filter((x) => x !== e))} />
                 </SettingsRow>
               ))}
-              <SettingsSelect label={R.addEntry} value={ADD} options={addOptions(t)} onValueChange={(v) => { if (v !== ADD) void setChain(t, [...chain, v]); }} />
+              <SettingsSelect label={R.addLabel} value={ADD} options={addOptions(t)} onValueChange={(v) => { if (v !== ADD) void setChain(t, [...chain, v]); }} />
             </SettingsCard>
           </SettingsSection>
         );
