@@ -16,7 +16,7 @@ import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
 import { batchAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
-import { runDir } from "./runstate.mjs";
+import { runDir, readStateJson, tryWriteState } from "./runstate.mjs";
 import { effectiveBudget, chainOrder, costGb, laptopNow, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -203,6 +203,34 @@ export function headSha(cwd) {
   return r.status === 0 ? r.stdout.trim() : EMPTY_TREE;
 }
 
+/** In-place edit guard: "" when cwd is a git work tree with nothing uncommitted (git can revert whatever the agent does), else the reason it is not. */
+export function cleanGitReason(cwd) {
+  const g = (a) => spawnSync("git", a, { cwd, encoding: "utf8" });
+  if (g(["rev-parse", "--is-inside-work-tree"]).status !== 0) return "not a git work tree";
+  const s = g(["status", "--porcelain"]);
+  return s.status !== 0 ? "git status failed" : s.stdout.trim() ? "has uncommitted changes" : "";
+}
+/** { branch, headSha } of a folder, {} when it is not a git work tree: lets a caller cherry-pick without grepping. */
+export function gitInfo(dir) {
+  const g = (a) => { const r = spawnSync("git", a, { cwd: dir, encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() : ""; };
+  const headSha = g(["rev-parse", "--verify", "HEAD"]); if (!headSha) return {};
+  const branch = g(["rev-parse", "--abbrev-ref", "HEAD"]);
+  return { ...(branch && branch !== "HEAD" ? { branch } : {}), headSha };
+}
+/** A failed attempt that says the account is out of quota / at its usage limit (not a transient rate limit, which withRetry handles). */
+export const LIMIT_RE = /usage limit|quota|hit your limit|limit reached|exceeded your|out of (extra )?usage|insufficient credits/i;
+/** When that limit lifts, from the message ("try again at Nov 11th, 2026 9:00 AM", "resets on 2026-11-11", "in 3 hours"), else one hour after `now`. */
+export function limitUntil(text, now = Date.now()) {
+  const t = String(text ?? "");
+  const rel = /\bin (\d+)\s*(hour|hr|minute|min|day)/i.exec(t);
+  if (rel) return now + Number(rel[1]) * { hour: 3.6e6, hr: 3.6e6, minute: 6e4, min: 6e4, day: 864e5 }[rel[2].toLowerCase()];
+  const abs = /(?:until|at|on|resets?(?: at| on)?)\s+([A-Z][a-z]{2,8}\.? \d{1,2}(?:st|nd|rd|th)?,? (?:\d{4},? ?)?\d{1,2}:\d{2}\s*(?:[AP]M)?|\d{4}-\d{2}-\d{2}[T ]?[\d:.Z+-]*)/.exec(t);
+  const d = abs ? Date.parse(abs[1].replace(/(\d)(st|nd|rd|th)/, "$1")) : NaN;
+  return Number.isFinite(d) && d > now ? d : now + 36e5;
+}
+const limitsFile = (o) => join(o.limitsDir ?? (() => { try { return runDir(); } catch { return os.tmpdir(); } })(), "limits.json");
+const readLimits = (o) => readStateJson(limitsFile(o)) ?? {};
+
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
 export function snapshot(dir, max = 5000) {
   const out = []; const walk = (d) => { let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
@@ -346,7 +374,7 @@ export const knownModes = (routes = {}) => new Set([routes.mode, ...Object.value
 export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate, routes = {} }) {
   const m = mode ?? "provider default";
   if (ro) return `read-only task ${o.type} (mode ${m}) asked for a permission it may not have (it can only read plain files inside the task folder; sensitive files, writes and shell are refused)`;
-  if (!o.worktree) return `edit task ${o.type} ran outside a worktree (mode ${m}) and asked for a permission the provider default mode does not grant: pass --new-workspace worktree (full-access is dropped outside one, decision 21)`;
+  if (!o.worktree) return `edit task ${o.type} ran outside a worktree (mode ${m}) and asked for a permission the provider default mode does not grant: pass --new-workspace worktree, or --cwd a clean git work tree (full-access is dropped in a dirty or non-git folder, decision 21)`;
   const why = [];
   try { const g = gate(wt.path, gateOpts(routes, wt.path, undefined, o.base)); why.push(...(g?.reasons ?? []).filter((r) => /secret/i.test(r))); } catch { /* the gate result is only an explanation */ }
   try { const pend = paseo(["pending"]); for (const p of (Array.isArray(pend) ? pend : []).filter((x) => x.agentId === agentId)) why.push(`pending ${p.name ?? p.kind ?? "request"}${p.paths?.length ? " on " + p.paths.join(", ") : ""}`); } catch { /* optional */ }
@@ -390,7 +418,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
     dropProjects(wt);
   };
-  const done = (r, wt) => { retire(r.agentId, wt); return r; };
+  // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
+  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path } : {}) }; retire(r.agentId, wt); return { ...r, ...info }; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
@@ -401,6 +430,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
     if (installed && !installed.has(base(prov))) { trace.push({ provider: prov, skip: "provider not configured: add it in Settings > Providers" }); continue; }
     if (state && state.get(base(prov)) === false) { trace.push({ provider: prov, skip: "provider disabled or unavailable in Paseo (Settings > Providers)" }); continue; }
+    { const until = Number(readLimits(o)[base(prov)]); if (until > (o.now ?? Date.now)()) { trace.push({ provider: prov, skip: `${base(prov)}: usage limit until ${new Date(until).toISOString()}, skipped` }); continue; } }
     { const na = modelNotAllowed(routes, prov); if (na) { trace.push({ provider: prov, skip: na }); continue; } } // Routing & slots model allow-list
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
@@ -446,8 +476,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       args[2] = wt.path;
       writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base);
     }
-    if (mode && (o.worktree || !unsafeMode(mode))) args.push("--mode", mode);
-    else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: needs --new-workspace worktree` });
+    // an unsafe mode also runs in place when --cwd is a git work tree with nothing uncommitted (git can revert it); dirty or non-git stays on the provider default, with the reason
+    const inPlaceWhy = mode && !o.worktree && unsafeMode(mode) ? cleanGitReason(o.cwd) : null;
+    if (mode && (o.worktree || !unsafeMode(mode) || inPlaceWhy === "")) args.push("--mode", mode);
+    else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: ${inPlaceWhy ? `--cwd ${inPlaceWhy}, in-place edits need a clean git work tree or ` : "needs "}--new-workspace worktree` });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
@@ -466,6 +498,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint), ...why });
+    { const t = trace.at(-1); const msg = t.error ?? "";
+      if (j.status !== "completed" && j.status !== "permission" && LIMIT_RE.test(msg)) { // remember it: every later route skips this provider until the reset
+        const until = limitUntil(msg, (o.now ?? Date.now)()); tryWriteState(limitsFile(o), { ...readLimits(o), [base(prov)]: until });
+        t.error = `${msg} (${base(prov)}: usage limit until ${new Date(until).toISOString()}, skipped from now on)`; } }
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
       return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);

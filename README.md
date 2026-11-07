@@ -90,7 +90,7 @@ Run `agent-hub --help` or `agent-hub <command> --help` (help never runs the comm
 | Goal | Command |
 | --- | --- |
 | Route a task | `agent-hub route <code-edit\|code-edit-easy\|test-scaffold\|summarise\|review> "<prompt>" --cwd . [--gate "npm test"] [--new-workspace worktree] [--provider P/M]` |
-| Edit tasks | use `--new-workspace worktree` (throwaway copy) and a real `--gate`; the gate must pass or `status` is `gate-failed` |
+| Edit tasks | use `--new-workspace worktree` (throwaway copy), or `--cwd` a clean git work tree to edit in place (a dirty or non-git folder keeps the provider default mode and the trace says why), and a real `--gate`; the gate must pass or `status` is `gate-failed` |
 | Agent asked a question (`status: "asking"`, exit 3) | `agent-hub reply <agentId> "<answer>"` (never put a secret in it; up to 3 questions per task) |
 | Routing & slots | `agent-hub routes show \| set <provider> --slots N --models a,b \| chain <type> a,b \| move <type> <entry> up\|down\|off \| undo` |
 | Providers | `agent-hub provider kinds \| list \| models --kind K --url U \| add NAME --kind K ... \| edit NAME --slots 4 \| remove NAME` |
@@ -101,7 +101,7 @@ Run `agent-hub --help` or `agent-hub <command> --help` (help never runs the comm
 | Update CLIs | `just update` (Paseo stays pinned unless `just update --paseo`) |
 | Develop on the hub | `npm test`, `npm run scan` (see [`AGENTS.md`](AGENTS.md)) |
 
-Route result fields: `used`, `agentId`, `status` (`completed`, `asking`, `gate-failed`, `failed-readonly-changed`, `permission`, `rejected`, `error`), `gate` (`status`, `reasons`), `trace` (what each provider did or why it was skipped), `answer`. Exit code: 0 completed, 3 asking, 1 failed, 2 bad input.
+Route result fields: `used`, `agentId`, `status` (`completed`, `asking`, `gate-failed`, `failed-readonly-changed`, `permission`, `rejected`, `error`), `gate` (`status`, `reasons`), `trace` (what each provider did or why it was skipped), `answer`. Edit types (`code-edit`, `code-edit-easy`, `test-scaffold`) also return `branch` and `headSha` of the folder the agent worked in (and `worktree`, its path, when the hub made one with `--new-workspace worktree`), so you can cherry-pick the commit without grepping. A provider that answers with a quota or usage-limit error is remembered until its reset time (about 1 h when the message gives none) and skipped at once by later routes (`trace`: `codex: usage limit until <time>, skipped`); the chain order is not changed. Exit code: 0 completed, 3 asking, 1 failed, 2 bad input.
 
 ## Troubleshooting
 
