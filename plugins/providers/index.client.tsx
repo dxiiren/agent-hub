@@ -164,7 +164,7 @@ function Screen() {
         <SettingsCard>
           <SettingsRow label={S.intro} />
           <SettingsSelect label={S.kind} value={kind} options={kinds.map((x) => ({ label: x.label, value: x.type }))} disabled={!!editing} onValueChange={(v) => { setKind(v); setModels([]); setVals({}); setFormKey((n) => n + 1); }} />
-          <SettingsInput key={`n${formKey}`} label={S.name} hint={k?.nameHelp ?? S.nameHint} initialValue={name} disabled={!!editing} placeholder={S.namePlaceholder} onChangeText={setName} />
+          <SettingsInput key={`n${formKey}`} label={S.name} hint={editing ? S.nameLocked : k?.nameHelp ?? S.nameHint} initialValue={name} disabled={!!editing} placeholder={S.namePlaceholder} onChangeText={setName} />
           {k?.ownProvider ? <SettingsInput key={`l${formKey}`} label={S.label} hint={S.labelHint} initialValue={vals.label ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, label: t }))} /> : null}
           {k?.fields.filter((f) => f.type !== "model").map((f) => (
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
@@ -183,8 +183,8 @@ function Screen() {
           {Object.keys(routeTypes).map((c) => (
             <SettingsSelect key={c} label={c} value={pos[c] ?? OFF} options={posOptions(c)} onValueChange={(v) => setPos((p) => ({ ...p, [c]: v }))} />
           ))}
-          <SettingsAction label={editing ? `${S.save}: ${editing}` : S.add} actionLabel={busy ? S.adding : editing ? S.save : S.add} disabled={busy} onPress={() => void submit()} />
-          {editing ? <SettingsAction label={editing} actionLabel={S.cancelEdit} onPress={reset} /> : null}
+          <SettingsAction label={editing ? S.editing(editing) : S.add} actionLabel={busy ? S.adding : editing ? S.save : S.add} disabled={busy} onPress={() => void submit()} />
+          {editing ? <SettingsAction label={S.discardHint} actionLabel={S.cancelEdit} onPress={reset} /> : null}
           {msg ? (msg.ok ? <SettingsRow label={msg.text} /> : <SettingsRow label={S.failed} error={msg.text} />) : null}
           {msg?.ok && msg.restart ? <SettingsAction label={S.restartHint} actionLabel={S.restartNow} onPress={restartNow} /> : null}
         </SettingsCard>

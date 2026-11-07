@@ -36,12 +36,12 @@ const MAP=[[/\(clean MCP\)/g,"(hub tasks)"],[/\(no user MCP\)/g,"(hub tasks)"],[
  [/^Provider (.+) is not installed\.?$/,"$1 is not installed on this computer."],
  [/^(.+?) \(([a-z0-9. -]+)\)$/i,(m,a,b)=>a.toLowerCase().includes(b.toLowerCase())&&a.length>b.length?a:m]];
 const LONG=[[/^Request failed: Plugin manifest is missing:.*$/s,"That is not a plugin folder: it has no paseo-plugin.json file. Choose the plugin's own folder, a Git URL or an npm package that is a Paseo plugin."],
- [/Plugin ID "([^"]+)" is already configured.*$/s,"A plugin with the ID $1 is already installed. Remove it first, or install a different plugin."],
+ [/^.*Plugin ID "([^"]+)" is already configured.*$/s,"A plugin with the ID $1 is already installed. Remove it first, or install a different plugin."],
  [/^Request failed: .*code=handler_error.*$/s,"The plugin could not be installed. Check the folder, URL or package name and try again."],
  [/^npm error.*$/s,"The package could not be downloaded from npm. Check the name and your internet connection."]];
 function rewrite(root){
   const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n;
-  while((n=w.nextNode())){const v=n.nodeValue;if(!v)continue;let o=v;if(v.length>200){if(v.length<4000)for(const [re,to] of LONG)o=o.replace(re,to);if(o!==v)n.nodeValue=o;continue}for(const [re,to] of MAP)o=o.replace(re,to);if(o!==v){try{if(/mono|courier/i.test(getComputedStyle(n.parentElement).fontFamily))continue}catch(e){}n.nodeValue=o}}
+  while((n=w.nextNode())){const v=n.nodeValue;if(!v||v.length>4000)continue;let o=v;for(const [re,to] of LONG)o=o.replace(re,to);if(o!==v){n.nodeValue=o;continue}if(v.length>200)continue;for(const [re,to] of MAP)o=o.replace(re,to);if(o!==v){try{if(/mono|courier/i.test(getComputedStyle(n.parentElement).fontFamily))continue}catch(e){}n.nodeValue=o}}
 }
 // an address that shows nothing: say so and offer a way back
 let lastPath="",timer=0;
@@ -62,6 +62,9 @@ function offlineRetry(){
   fetch("/api/health",{cache:"no-store"}).then(r=>{if(r.ok){try{sessionStorage.setItem("ah-off-c",String(c+1))}catch(e){}location.reload()}}).catch(()=>{});
 }
 let strikes=0;
+// a short note while the page greys out (plugin Reload takes a moment and disables the whole list)
+function toast(msg,ms){const e=document.createElement("div");e.setAttribute("data-testid","ah-toast");e.setAttribute("role","status");e.style.cssText="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147482000;background:#18181b;color:#fff;border-radius:10px;padding:10px 16px;font:14px system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)";e.textContent=msg;document.body.appendChild(e);setTimeout(()=>e.remove(),ms||3500)}
+document.addEventListener("click",ev=>{try{const t=ev.target&&ev.target.closest&&ev.target.closest('[role="menuitem"]');if(t&&/\/plugins$/.test(location.pathname)){const x=(t.textContent||"").trim();if(x==="Reload")toast("Reloading the plugin: the list is greyed out for a few seconds.");else if(x==="Remove")toast("Removing the plugin...")}}catch(e){}},true);
 let connAt=0;
 function connectingHint(){
   const t=document.body.innerText||"",busy=/^\s*Connecting( to)? \S+/m.test(t)&&t.length<400;
@@ -92,6 +95,8 @@ setInterval(()=>{try{check();offlineRetry();connectingHint()}catch(e){}},1200);
 // polish applied to elements as they appear
 function polish(){
   const path=location.pathname;
+  // a provider that is switched off cannot load models, so the useless Retry button next to that message is hidden
+  document.querySelectorAll('[data-testid="model-picker-error"]').forEach(e=>{if(/switched off/.test(e.textContent||"")){const b=e.parentElement&&e.parentElement.querySelector("button");if(b&&b.style.display!=="none")b.style.display="none"}});
   // Providers page: a status that is only a word gets an explanation on hover, and a jump link to the "Add provider" list (it sits far down)
   if(/\/providers$/.test(path)){
     document.querySelectorAll("div").forEach(e=>{if(e.children.length)return;const t=(e.textContent||"").trim();if(t==="Disabled")e.title="Switched off. Turn the switch on to use this provider.";else if(t==="Not installed")e.title="The program for this provider is not on this computer."});

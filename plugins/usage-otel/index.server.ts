@@ -49,7 +49,7 @@ export default function contribute(server: PluginServerContext) {
     id: "qoder",
     label: "Qoder",
     input: z.object({}),
-    discover: async () => [{ key: "account", label: "Qoder", harness: "Qoder", input: {} }],
+    discover: async () => [{ key: "account", label: "Qoder account", harness: "Qoder", input: {} }],
     fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
   const local: any = readLocal();
@@ -62,9 +62,9 @@ export default function contribute(server: PluginServerContext) {
   for (const [id, kind] of kinds) {
     server.registerUsageSource({
       id: `selfhosted-${id}`,
-      label: "Endpoint check",
+      label: kind,
       input: z.object({ id: z.string() }),
-      discover: async () => (selfHostedProviders(readJson(join(paseoHome(), "config.json")), readLocal()).some((x) => kindId(x.kind) === id) ? [{ key: id, label: kind, harness: "Self-hosted", input: { id } }] : []), // no providers of this kind now = no card
+      discover: async () => (selfHostedProviders(readJson(join(paseoHome(), "config.json")), readLocal()).some((x) => kindId(x.kind) === id) ? [{ key: id, label: "Checked from this computer", harness: "Self-hosted", input: { id } }] : []), // no providers of this kind now = no card
       fetch: async (input: { id: string }) => { try { return await selfHostedReport(input.id); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
     });
   }
@@ -86,7 +86,7 @@ export default function contribute(server: PluginServerContext) {
     id: "hub-tasks",
     label: "Agent Hub task log",
     input: z.object({}),
-    discover: async () => [{ key: "all", label: "Hub tasks", harness: "Agent Hub", input: {} }],
+    discover: async () => [{ key: "all", label: "From the hub task log", harness: "Agent Hub", input: {} }],
     fetch: async () => { try { let feed = ""; try { feed = readFileSync(join(usageDir(), "usage.jsonl"), "utf8"); } catch { /* none yet */ } return hubTasksReport(feed); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
   });
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
