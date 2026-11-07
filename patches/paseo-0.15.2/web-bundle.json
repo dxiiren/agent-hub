@@ -239,5 +239,5 @@
    "replace": "let M,w,A,__d;return!0?(M=(__d=b.filter(q=>!y.some(c=>c.id===q.id))).length>0?(0,z.jsxs)(e.View,{style:L.section,children:[(0,z.jsx)(R,{title:d(\"settings.providers.models.discovered\"),count:__d.length}),(0,z.jsx)(e.View,{style:_.settingsStyles.card,children:__d.map(H)})]}):null,"
   }
  ],
- "rev": 10
+ "rev": 11
 }
