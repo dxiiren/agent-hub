@@ -82,6 +82,9 @@ function Screen() {
   const reload = () => { setLoad({ state: "loading" }); void refresh(); };
 
   // leaving or reloading with a half-filled form asks first (the browser's own prompt; an in-app Back is not covered)
+  // A model this kind already serves with the same login (same Base URL and key for endpoints, same account for CLI kinds) is not offered again.
+  const norm = (u?: string) => (u ?? "").trim().replace(/\/+$/, "").toLowerCase();
+  const taken = (id: string) => added.some((a) => a.name !== editing && a.type === kind && a.model === id && (a.account || "") === (account.trim() || "") && !k?.fields.some((f) => f.id === "url"));
   const dirty = !!(name.trim() || vals.url?.trim() || vals.label?.trim()) && !busy;
   useEffect(() => {
     if (!dirty) return;
@@ -104,7 +107,8 @@ function Screen() {
       setLoadingModels(false);
       if (r.error) { setModels([]); return setModelErr(r.error); }
       setModels(r.models);
-      setVals((v) => (v.model || !r.models[0] ? v : { ...v, model: r.models[0].id }));
+      const first = r.models.find((m: any) => !taken(m.id));
+      setVals((v) => (v.model || !first ? v : { ...v, model: first.id }));
     }, endpoint ? 700 : 0);
     return () => { live = false; clearTimeout(t); setLoadingModels(false); };
   }, [kind, k, vals.url, vals.key, editing, call, retry]);
@@ -147,7 +151,8 @@ function Screen() {
 
   const posOptions = (c: string) => [{ label: S.off, value: OFF }, { label: S.end, value: "end" },
     ...Array.from({ length: (routeTypes[c] ?? 0) + 1 }, (_, i) => ({ label: S.position(i + 1), value: String(i + 1) }))];
-  const modelOptions = [...models.map((m) => ({ label: [m.label === m.id ? m.id : `${m.label} (${m.id})`, m.hint].filter(Boolean).join(" - "), value: m.id })), { label: S.customModel, value: CUSTOM }];
+  const freeModels = models.filter((m) => !taken(m.id));
+  const modelOptions = [...freeModels.map((m) => ({ label: [m.label === m.id ? m.id : `${m.label} (${m.id})`, m.hint].filter(Boolean).join(" - "), value: m.id })), { label: S.customModel, value: CUSTOM }];
 
   return (
     load.state !== "ready" ? (
@@ -170,11 +175,11 @@ function Screen() {
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
               onChangeText={(t) => setVals((v) => ({ ...v, [f.id]: t }))} />
           ))}
-          <SettingsAction label={S.modelList} hint={loadingModels ? S.loading : modelErr ? undefined : models.length ? S.found(models.length) : k?.fields.some((f) => f.id === "url") ? S.modelsWait : S.modelsCli} actionLabel={loadingModels ? S.loading : modelErr ? S.retry : S.reload} disabled={loadingModels} onPress={() => setRetry((n) => n + 1)} />
+          <SettingsAction label={S.modelList} hint={loadingModels ? S.loading : modelErr ? undefined : models.length ? S.found(freeModels.length, models.length - freeModels.length) : k?.fields.some((f) => f.id === "url") ? S.modelsWait : S.modelsCli} actionLabel={loadingModels ? S.loading : modelErr ? S.retry : S.reload} disabled={loadingModels} onPress={() => setRetry((n) => n + 1)} />
           {modelErr ? <SettingsRow label={S.modelsFailed} error={modelErr} /> : null}
-          <SettingsSelect label={S.model} value={custom || (vals.model && !models.some((m) => m.id === vals.model)) ? CUSTOM : vals.model ?? ""} options={modelOptions}
+          <SettingsSelect label={S.model} value={custom || (vals.model && !freeModels.some((m) => m.id === vals.model)) ? CUSTOM : vals.model ?? ""} options={modelOptions}
             onValueChange={(v) => { if (v === CUSTOM) { setCustom(true); setVals((x) => ({ ...x, model: "" })); } else { setCustom(false); setVals((x) => ({ ...x, model: v })); } }} />
-          {custom || (vals.model && !models.some((m) => m.id === vals.model)) ? <SettingsInput key={`m${formKey}`} label={S.modelType} initialValue={vals.model ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, model: t }))} /> : null}
+          {custom || (vals.model && !freeModels.some((m) => m.id === vals.model)) ? <SettingsInput key={`m${formKey}`} label={S.modelType} initialValue={vals.model ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, model: t }))} /> : null}
           {k?.account?.by === "config-dir" && !editing ? <SettingsInput key={`a${formKey}`} label={S.account} hint={S.accountHint(k.account.env ?? k.account.arg ?? "")} initialValue={account} onChangeText={setAccount} /> : null}
           {k?.account && k.account.by !== "config-dir" ? <SettingsRow label={S.account} hint={k.account.by === "endpoint" ? k.account.help : `${S.noAccounts} ${k.account.none ?? ""}`} /> : null}
           {k?.slots ? <SettingsInput key={`s${formKey}`} label={S.slots} initialValue={slots} onChangeText={setSlots} /> : null}

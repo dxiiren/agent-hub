@@ -17,7 +17,7 @@ export const S = {
   loadingKinds: "Loading the provider kinds (this can take a few seconds)...",
   retry: "Retry",
   reload: "Reload list",
-  found: (n: number) => `${n} model${n === 1 ? "" : "s"} found`,
+  found: (n: number, hidden = 0) => `${n} model${n === 1 ? "" : "s"} to choose from${hidden ? ` (${hidden} already added, not listed)` : ""}`,
   modelsWait: "The list fills in by itself once the Base URL is entered.",
   modelsCli: "The list comes from the command-line tool and fills in by itself.",
   servesNone: "serves no task type yet: press Edit and choose one",

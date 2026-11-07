@@ -91,7 +91,7 @@ test('model list: CLI kinds carry the CLI tier/cost text, an account lists its o
   const run = (c, a) => { calls.push(a[2]); return a[2] === 'claude-work' ? { stdout: '[]' } : { stdout: JSON.stringify([{ id: 'efficient', model: 'Efficient', description: 'Vision · 0.00x Credit' }]) }; };
   const m = await discover('qoder', { provider: 'claude-work' }, { run });
   assert.deepEqual(m, [{ id: 'efficient', label: 'Efficient', hint: 'Vision · 0.00x Credit' }]); assert.deepEqual(calls, ['claude-work', 'qoder']);
-  await assert.rejects(discover('claude', {}, { run: () => ({ stdout: '' }) }), /Fix: install Claude, sign in/);
+  await assert.rejects(discover('claude', {}, { run: () => ({ stdout: '' }) }), /Fix: install Claude and sign in/);
   const ep = await discover('qwen-code', { url: 'http://h.example:8000/v1' }, { f: async () => ({ ok: true, json: async () => ({ data: [{ id: 'q1' }, { id: 'q2' }] }) }) });
   assert.deepEqual(ep.map((x) => x.id), ['q1', 'q2']);
   await assert.rejects(discover('qwen-code', { url: 'http://h.example:8000/v1' }, { f: async () => { throw new Error('ECONNREFUSED'); } }), /endpoint check failed/);

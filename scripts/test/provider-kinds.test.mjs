@@ -75,7 +75,7 @@ test('input validation: non-http urls, bad route positions, unreachable endpoint
   await assert.rejects(add({ name: 'qwen-a', kind: 'qwen', url: 'file:///etc/passwd', model: 'm' }, p, { which: () => 'q' }), /http\(s\)/);
   assert.throws(() => parseRoutes('summarise:0'), /position/);
   await assert.rejects(discover('qwen-code', { url: URL1 }, { f: async () => { throw new Error('ECONNREFUSED'); } }), /endpoint check failed/);
-  await assert.rejects(discover('codex', {}, { run: () => ({ stdout: '' }) }), /listed nothing/);
+  await assert.rejects(discover('codex', {}, { run: () => ({ stdout: '' }) }), /found no models/);
   assert.ok(modelListed('latest-sonnet', []) && modelListed('Efficient', [{ id: 'efficient', label: 'Efficient' }]) && !modelListed('x', []));
 });
 

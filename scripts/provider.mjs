@@ -162,6 +162,9 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
     if (!Array.isArray(own(routes.routes, c))) throw new Error(`unknown route type ${c} (known: ${Object.keys(routes.routes || {})})`);
     if (routes.routes[c].includes(token)) throw new Error(`route ${c} already lists ${token}`);
   }
+  // A CLI kind (claude, codex, qoder) is one model of one login: a second entry for the same model and account does nothing new. Endpoint kinds may repeat (more slots, another key).
+  const dup = k.own || skipVerify ? undefined : Object.entries(local.extraProviders || {}).find(([, x]) => x.type === type && x.model === model && (x.account || '') === (account || ''));
+  if (dup) throw new Error(`${dup[0]} already serves ${model}${account ? ` for account ${account}` : ''}. Edit ${dup[0]} instead, or choose another model or account.`);
   const hubDir = hubDirOf(p.paseo);
   if (ownish(k, spec) && type !== 'opencode') { // display names are unique: a taken one is refused, a taken auto-default gets " #2", " #3" ...
     const taken = new Set(Object.values(cfg.agents?.providers ?? {}).map((x) => String(x?.label ?? '').toLowerCase()));

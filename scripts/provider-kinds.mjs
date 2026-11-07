@@ -109,7 +109,7 @@ export async function discover(type, { url, key, provider } = {}, { f = fetch, r
     try { l = JSON.parse(run('paseo', ['provider', 'models', prov, '--json']).stdout); } catch { l = undefined; }
     if (Array.isArray(l) && l.length) break;
   }
-  if (!Array.isArray(l) || !l.length) throw new Error(`${k.base} model list failed: \`paseo provider models ${k.base}\` listed nothing. Fix: install ${k.label.split(' ')[0]}, sign in (for an extra account run its login command once), and make sure the daemon is running (\`just up\`).`);
+  if (!Array.isArray(l) || !l.length) throw new Error(`${k.base} model list is empty: the hub found no models for ${k.base}. Fix: install ${k.label.split(' ')[0]} and sign in (for an extra account run its login command once), and make sure the hub is running.`);
   return l.map((m) => ({ id: m.id, label: m.model || m.id, ...(m.description ? { hint: m.description } : {}) }));
 }
 function defaultRun(cmd, args) { return spawnSyncSafe(cmd, args, { encoding: 'utf8', timeout: 60000 }); }
