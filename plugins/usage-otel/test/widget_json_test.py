@@ -78,7 +78,7 @@ class WidgetJson(unittest.TestCase):
         self.assertEqual(by["codex"]["kind"], "codex")
         self.assertEqual(by["codex"]["text"], "1.0k today\n1.0k in 7 days")
         self.assertNotIn("up", by["codex"])  # no endpoint: nothing to probe
-        self.assertEqual(by["claude_clean"]["name"], "Claude (clean MCP)")
+        self.assertEqual(by["claude_clean"]["name"], "Claude")
         self.assertEqual(by["claude_clean"]["kind"], "claude")
         self.assertTrue(by["mylocal"]["up"])
         self.assertEqual(by["mylocal"]["kind"], "custom")
@@ -94,6 +94,33 @@ class WidgetJson(unittest.TestCase):
         w.build(self.d, config, now)
         w.build(self.d, config, now + 60)
         self.assertEqual(Models.hits, 1)
+
+    def test_clean_display_names_and_idle_laptop(self):
+        model = os.path.join(self.d, "m.gguf")
+        open(model, "w").close()
+        env = {"LLAMA_SERVER_BIN": model, "LAPTOP_MODEL_PATH": model, "LAPTOP_PORT": "1"}
+        config = {"agents": {"providers": {
+            "codex": {}, "claude-clean": {"extends": "claude", "label": "Claude (clean MCP)"},
+            "opencode": {}, "qoder": {"label": "Qoder (no user MCP)"},
+            "mytool": {"label": "my tool (x)"},
+            "qwen-code-laptop": {"command": ["node", "x"], "env": env}}}}
+        real = w.shutil.which
+        w.shutil.which = lambda name: "nvidia-smi"
+        try:
+            out = {s["id"]: s for s in w.build(self.d, config, 1)["sources"]}
+            self.assertEqual([out[i]["name"] for i in ("codex", "claude_clean", "opencode", "qoder")],
+                             ["Codex", "Claude", "OpenCode", "Qoder"])
+            self.assertEqual(out["mytool"]["name"], "My Tool")
+            lap = out["qwen_laptop"]
+            self.assertTrue(lap["idle"] and "up" not in lap)
+            self.assertTrue(lap["text"].startswith("idle (starts on demand)\n"))
+            w.shutil.which = lambda name: None  # no GPU driver: it cannot start, so it is down
+            w.os.remove(os.path.join(self.d, "widget-probe.json"))
+            lap = {s["id"]: s for s in w.build(self.d, config, 1)["sources"]}["qwen_laptop"]
+            self.assertEqual(lap["up"], False)
+            self.assertNotIn("idle", lap)
+        finally:
+            w.shutil.which = real
 
     def test_nothing_configured_is_an_empty_list_not_an_error(self):
         self.assertEqual(w.build(self.d, {}, 1)["sources"], [])

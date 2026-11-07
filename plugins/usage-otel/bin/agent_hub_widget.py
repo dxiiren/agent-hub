@@ -12,7 +12,7 @@ usage.jsonl. No percentage is invented for providers that have no plan quota.
 
 Output: {"version":1,"generated":<unix>,"sources":[{"id","name","kind","text"(two lines, \n),"percent"?,"up"?}]}
 """
-import json, os, re, sys, time, urllib.request
+import json, os, re, shutil, sys, time, urllib.request
 from datetime import datetime, timezone
 
 
@@ -78,6 +78,25 @@ def kind_of(name, p):
     return "custom"
 
 
+# Clean tile names for the kinds the hub knows; a "custom" provider keeps its own label.
+KIND_NAMES = {"qoder": "Qoder", "codex": "Codex", "claude": "Claude", "opencode": "OpenCode"}
+
+
+def display_name(name, p, kind):
+    if kind in KIND_NAMES:
+        return KIND_NAMES[kind]
+    label = re.sub(r"\s*\(.*?\)", "", str(p.get("label") or name)).strip()
+    label = re.sub(r"\b\d+\.\d+\.\d+\.(\d+)\b", r".\1", label)
+    return label if label != label.lower() else label.title()
+
+
+def can_start(p):
+    """The hub starts the laptop server on demand: it can when the binary and the model file exist and a GPU driver is there."""
+    env = p.get("env") or {}
+    paths = [env.get("LLAMA_SERVER_BIN"), env.get("LAPTOP_MODEL_PATH")]
+    return all(paths) and all(os.path.exists(x) for x in paths) and shutil.which("nvidia-smi") is not None
+
+
 def providers(config):
     """Every provider the hub config lists (not disabled, no -ro twin), whatever its kind."""
     out = []
@@ -95,9 +114,9 @@ def providers(config):
             pid, label = "qwen_" + safe_id(tag), "Qwen " + (("." + tag) if tag.isdigit() else tag)
         else:
             pid = safe_id(name)
-            label = re.sub(r"\b\d+\.\d+\.\d+\.(\d+)\b", r".\1", str(p.get("label") or name))
+            label = display_name(name, p, kind)
         out.append({"provider": name, "id": pid, "name": label, "kind": kind, "base": base,
-                    "key": (p.get("env") or {}).get("HUB_OPENAI_API_KEY")})
+                    "key": (p.get("env") or {}).get("HUB_OPENAI_API_KEY"), "startable": can_start(p)})
     seen = {}
     for ep in out:  # two providers on one id keep distinct ids and names
         n = seen[ep["id"]] = seen.get(ep["id"], 0) + 1
@@ -171,8 +190,13 @@ def build(usage_dir, config, now=None):
         src = {"id": ep["id"], "name": ep["name"], "kind": ep["kind"], "text": text}
         if ep["base"]:
             up = probe(ep, cache, now, ttl)
-            src["up"] = up
-            src["text"] = "%s - %s" % ("up" if up else "down", text)
+            if not up and ep["startable"]:
+                # started on demand, stopped after 15 min idle: not running is not down
+                src["idle"] = True
+                src["text"] = "idle (starts on demand)\n%s today - %s in 7d" % (fmt(today), fmt(week))
+            else:
+                src["up"] = up
+                src["text"] = "%s - %s" % ("up" if up else "down", text)
         while src["id"] in ids:
             src["id"] += "_2"
         ids.add(src["id"])
