@@ -187,7 +187,8 @@ def build(usage_dir, config, now=None):
             continue  # the saved quota already is this provider's tile
         today, week = tally(feed, ep["provider"], now)
         text = "%s today\n%s in 7 days" % (fmt(today), fmt(week))
-        src = {"id": ep["id"], "name": ep["name"], "kind": ep["kind"], "text": text}
+        src = {"id": ep["id"], "name": ep["name"], "kind": ep["kind"], "text": text,
+               "tokens_today": today, "tokens_7d": week}  # numbers: the widget sums a kind's providers into one tile
         if ep["base"]:
             up = probe(ep, cache, now, ttl)
             if not up and ep["startable"]:

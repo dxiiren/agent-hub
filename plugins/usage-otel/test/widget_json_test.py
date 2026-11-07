@@ -55,6 +55,7 @@ class WidgetJson(unittest.TestCase):
         self.assertEqual(by["qoder"]["text"], "49.2% - resets 28 Nov\n6.3k used - 6.5k left")
         self.assertEqual(by["qwen_laptop"]["text"], "up - 1.5k today\n3.5k in 7 days")
         self.assertNotIn("percent", by["qwen_laptop"])
+        self.assertEqual((by["qwen_laptop"]["tokens_today"], by["qwen_laptop"]["tokens_7d"]), (1500, 3500))
         down = [s for s in out["sources"] if s["id"].startswith("qwen") and not s["up"]]
         self.assertEqual(len(down), 1)  # the -ro twin is folded away
         self.assertTrue(down[0]["text"].startswith("down"))
