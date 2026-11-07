@@ -477,6 +477,13 @@ export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?
   } catch { return () => {}; }
 }
 const markerAge = 30 * 60 * 1000;
+const pidUp = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; } };
+/** Live route markers (name t-<pid>-<ms>.json): fresh enough AND their process still exists, so a killed route never holds a slot or a queue place. */
+export function liveMarkers(dir, now = Date.now()) {
+  try { return readdirSync(dir).filter((n) => n.startsWith("t-") && now - statSync(join(dir, n)).mtimeMs < markerAge && pidUp(Number(n.split("-")[1]))); } catch { return []; }
+}
+/** Global admission: how many route processes may be open at once. Each waiting route is a node process that holds RAM, so beyond the cap a new call is refused at once with a retry message instead of piling up (40 open routes at 1.2 GB free starved each other). */
+export const maxOpenRoutes = (routes = {}) => Number.isInteger(routes.maxOpenRoutes) && routes.maxOpenRoutes > 0 ? routes.maxOpenRoutes : 16;
 /** Set what this route holds: a provider (a slot, state "run") or null (queued, waiting for one). Best effort. */
 export function setMarker(un, provider) { try { if (un?.file) writeFileSync(un.file, JSON.stringify({ provider: provider ?? null, state: provider ? "run" : "queued" })); } catch { /* best effort */ } }
 /**
@@ -488,7 +495,7 @@ export function claimSlot(un, provider, slots) {
   setMarker(un, provider);
   try {
     const stamp = (n) => Number(n.split("-")[2]?.replace(".json", "")) || 0;
-    const live = readdirSync(un.dir).filter((n) => n.startsWith("t-") && Date.now() - statSync(join(un.dir, n)).mtimeMs < markerAge)
+    const live = liveMarkers(un.dir)
       .filter((n) => { try { return JSON.parse(readFileSync(join(un.dir, n), "utf8")).provider === provider; } catch { return false; } })
       .sort((a, b) => stamp(a) - stamp(b) || a.localeCompare(b));
     const rank = live.indexOf(basename(un.file));
@@ -528,6 +535,8 @@ function main(argv) {
   try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed
   const routes = loadRoutes();
   { const me = modeError(opt("--mode"), routes); if (me) { console.error("route: " + me); return 2; } }
+  { const open = liveMarkers(join(process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage", "active")).length, cap = maxOpenRoutes(routes);
+    if (open >= cap) { console.log(JSON.stringify({ used: null, status: "busy", error: `hub busy: ${open} routes are already open (limit ${cap}, routes.maxOpenRoutes). Nothing was started; retry in a minute.`, trace: [] })); return 75; } }
   const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)));
   const unmark = markActive(routes, opt("--provider"), undefined, pstate);
   let res;
