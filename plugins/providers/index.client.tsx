@@ -4,6 +4,8 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { SettingsAction, SettingsCard, SettingsInput, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { providersRpc } from "./shared/rpc";
 import { S } from "./client/strings";
+import { RoutingScreen } from "./client/routing";
+import { R } from "./client/routing-strings";
 
 type Field = { id: string; label: string; type: string; required?: boolean; help?: string };
 type Kind = { type: string; label: string; fields: Field[]; slots: boolean; readOnlyTwin: boolean; nameHelp: string; ownProvider: boolean; account?: { by?: string; env?: string; arg?: string; help?: string; none?: string } };
@@ -180,5 +182,7 @@ export default function contribute(client: PluginClientContext) {
   const screen = client.addSettingsScreen({ id: "providers", title: S.navTitle, icon: "Server", Component: Screen });
   // Paseo has no extension point on its Providers page or its "Add provider" dialog (see docs/paseo-upstream-notes.md), so the form is also one command-palette entry away.
   const command = client.addCommandCenterItem({ id: "add-provider", title: S.navTitle, icon: "Server", keywords: ["provider", "endpoint", "model", "add"], context: "global", onSelect: (c) => c.openSettings("providers") });
-  return () => { screen(); command(); };
+  const routing = client.addSettingsScreen({ id: "routing", title: R.title, icon: "Server", Component: RoutingScreen });
+  const routingCommand = client.addCommandCenterItem({ id: "routing-slots", title: R.title, icon: "Server", keywords: ["routing", "slots", "models", "chain", "provider"], context: "global", onSelect: (c) => c.openSettings("routing") });
+  return () => { screen(); command(); routing(); routingCommand(); };
 }

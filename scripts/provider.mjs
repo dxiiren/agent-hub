@@ -47,13 +47,13 @@ export function paths(env = process.env) {
 }
 const rd = readJsonStrict; // BOM-safe; missing file = default; unparsable = throws, so add/remove never overwrite a config they could not read
 /** Routes reader: a missing local file reads the shipped template (never written, see isTemplatePath). */
-const rdr = (p, d) => (existsSync(p.routes) ? rd(p.routes, d) : rd(join(REPO, 'config', 'routes', 'routes.template.json'), d));
+export const rdr = (p, d) => (existsSync(p.routes) ? rd(p.routes, d) : rd(join(REPO, 'config', 'routes', 'routes.template.json'), d));
 const wr = writeJsonKeepEol; // keeps the file's own line endings
-const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
-const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
+export const sha = (b) => (b ? createHash('sha256').update(b).digest('hex') : null);
+export const bytes = (p) => { try { return readFileSync(p); } catch { return null; } };
 const FILES = ['local', 'paseo', 'routes'];
 /** The one lock every read-modify-write of the three files takes (cross-process; re-entrant in a call chain). Next to hub.local.json, so it matches .gitignore *.local.*. */
-const lockOf = (p) => join(dirname(p.local), 'hub.local.lock');
+export const lockOf = (p) => join(dirname(p.local), 'hub.local.lock');
 const basePath = (p) => join(dirname(p.local), 'hub.local.undo-base.json'); // the files as they were before the FIRST added provider
 const undoPath = (p, name) => join(dirname(p.local), `hub.local.undo-${name}.json`); // matches .gitignore *.local.*
 
