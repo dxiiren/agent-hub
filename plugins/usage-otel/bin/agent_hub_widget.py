@@ -2,12 +2,15 @@
 
     python agent_hub_widget.py [--dir D] [--config F]
 
+Every provider in the hub config (not disabled, no -ro twin) becomes one source, whatever its kind
+(qwen-code, local llama, qoder, codex, claude, opencode, custom), so a provider added in the hub shows up
+with no widget change.
 Qoder: the last quota the hub already polled (usage/qoder-last.json); this command never polls Qoder.
-Self-hosted Qwen endpoints: up/down from GET <base>/v1/models (cached on disk, default 300 s, so a widget
-that asks every few minutes adds no load) plus tokens today (UTC day) and over the last 7 days from usage.jsonl.
-No percentage is invented for endpoints that have no plan quota.
+A provider with an HTTP endpoint: up/down from GET <base>/v1/models (cached on disk, default 300 s, so a
+widget that asks every few minutes adds no load). All: tokens today (UTC day) and over the last 7 days from
+usage.jsonl. No percentage is invented for providers that have no plan quota.
 
-Output: {"version":1,"generated":<unix>,"sources":[{"id","name","text"(two lines, \nn),"percent"?,"up"?}]}
+Output: {"version":1,"generated":<unix>,"sources":[{"id","name","kind","text"(two lines, \n),"percent"?,"up"?}]}
 """
 import json, os, re, sys, time, urllib.request
 from datetime import datetime, timezone
@@ -54,30 +57,49 @@ def qoder_source(usage_dir, now):
     return src
 
 
-def endpoints(config):
+def host_tag(base):
+    host = re.sub(r"^https?://", "", base).split("/")[0].split(":")[0]
+    if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) and host != "127.0.0.1":
+        return host.split(".")[-1]
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return "laptop"
+    return host.split(".")[0]
+
+
+def safe_id(name):
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def kind_of(name, p):
+    text = " ".join([name, str(p.get("extends") or "")] + [str(a) for a in (p.get("command") or [])]).lower()
+    for kind in ("qoder", "qwen", "codex", "claude", "opencode"):
+        if kind in text:
+            return kind
+    return "custom"
+
+
+def providers(config):
+    """Every provider the hub config lists (not disabled, no -ro twin), whatever its kind."""
     out = []
     for name, p in (config.get("agents", {}).get("providers", {}) or {}).items():
-        if name.endswith("-ro") or not re.match(r"^qwen", name):
+        if name.endswith("-ro") or p.get("enabled") is False:
             continue
         cmd = [str(a) for a in (p.get("command") or [])]
         base = next((a for a in cmd if re.match(r"^https?://", a, re.I)), None)
         port = (p.get("env") or {}).get("LAPTOP_PORT")
         if not base and port:
             base = "http://127.0.0.1:%s/v1" % port
-        if not base:
-            continue
-        host = re.sub(r"^https?://", "", base).split("/")[0].split(":")[0]
-        if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) and host != "127.0.0.1":
-            tag = host.split(".")[-1]
-        elif host in ("127.0.0.1", "localhost", "::1"):
-            tag = "laptop"
+        kind = kind_of(name, p)
+        if kind == "qwen" and base:  # keep the short ids/names the first version used
+            tag = host_tag(base)
+            pid, label = "qwen_" + safe_id(tag), "Qwen " + (("." + tag) if tag.isdigit() else tag)
         else:
-            tag = host.split(".")[0]
-        out.append({"provider": name, "id": "qwen_" + re.sub(r"[^a-z0-9]+", "_", tag.lower()),
-                    "name": "Qwen " + (("." + tag) if tag.isdigit() else tag), "base": base,
+            pid = safe_id(name)
+            label = re.sub(r"\b\d+\.\d+\.\d+\.(\d+)\b", r".\1", str(p.get("label") or name))
+        out.append({"provider": name, "id": pid, "name": label, "kind": kind, "base": base,
                     "key": (p.get("env") or {}).get("HUB_OPENAI_API_KEY")})
     seen = {}
-    for ep in out:  # two endpoints on one host tag keep distinct ids and names
+    for ep in out:  # two providers on one id keep distinct ids and names
         n = seen[ep["id"]] = seen.get(ep["id"], 0) + 1
         if n > 1:
             ep["id"] += "_%d" % n
@@ -133,15 +155,28 @@ def build(usage_dir, config, now=None):
     sources = []
     q = qoder_source(usage_dir, now)
     if q:
+        q["kind"] = "qoder"
         sources.append(q)
     cache_path = os.path.join(usage_dir, "widget-probe.json")
     cache = read_json(cache_path)
     ttl = float(os.environ.get("AGENT_HUB_WIDGET_PROBE_TTL", "300"))
-    for ep in endpoints(config):
-        up = probe(ep, cache, now, ttl)
-        today, week = tally(os.path.join(usage_dir, "usage.jsonl"), ep["provider"], now)
-        sources.append({"id": ep["id"], "name": ep["name"], "up": up,
-                        "text": "%s - %s today\n%s in 7 days" % ("up" if up else "down", fmt(today), fmt(week))})
+    feed = os.path.join(usage_dir, "usage.jsonl")
+    listed = providers(config)
+    ids = {s["id"] for s in sources}
+    for ep in listed:
+        if ep["kind"] == "qoder" and q:
+            continue  # the saved quota already is this provider's tile
+        today, week = tally(feed, ep["provider"], now)
+        text = "%s today\n%s in 7 days" % (fmt(today), fmt(week))
+        src = {"id": ep["id"], "name": ep["name"], "kind": ep["kind"], "text": text}
+        if ep["base"]:
+            up = probe(ep, cache, now, ttl)
+            src["up"] = up
+            src["text"] = "%s - %s" % ("up" if up else "down", text)
+        while src["id"] in ids:
+            src["id"] += "_2"
+        ids.add(src["id"])
+        sources.append(src)
     try:
         os.makedirs(usage_dir, exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as f:

@@ -59,6 +59,35 @@ class WidgetJson(unittest.TestCase):
         self.assertEqual(len(down), 1)  # the -ro twin is folded away
         self.assertTrue(down[0]["text"].startswith("down"))
 
+    def test_every_provider_kind_becomes_a_tile_and_disabled_or_ro_ones_do_not(self):
+        now = time.time()
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        self.write("usage.jsonl", json.dumps({"ts": day + "T01:00:00Z", "provider": "codex", "in": 700, "out": 300}) + "\n"
+                   + json.dumps({"ts": day + "T02:00:00Z", "provider": "seen-only", "in": 5, "out": 5}) + "\n")
+        config = {"agents": {"providers": {
+            "codex": {"models": []},
+            "claude-clean": {"extends": "claude", "label": "Claude (clean MCP)", "command": ["claude.cmd"]},
+            "opencode": {"enabled": True},
+            "copilot": {"enabled": False},
+            "qwen-code-10-0-0-9": {"label": "Qwen Code 10.0.0.9", "command": ["node", "x", "http://127.0.0.1:%d/v1" % self.port]},
+            "qwen-code-10-0-0-9-ro": {"command": ["node", "x"]},
+            "mylocal": {"label": "My llama", "command": ["node", "y", "http://127.0.0.1:%d" % self.port]}}}}
+        out = w.build(self.d, config, now)
+        by = {s["id"]: s for s in out["sources"]}
+        self.assertEqual(set(by), {"codex", "claude_clean", "opencode", "qwen_laptop", "mylocal"})
+        self.assertEqual(by["codex"]["kind"], "codex")
+        self.assertEqual(by["codex"]["text"], "1.0k today\n1.0k in 7 days")
+        self.assertNotIn("up", by["codex"])  # no endpoint: nothing to probe
+        self.assertEqual(by["claude_clean"]["name"], "Claude (clean MCP)")
+        self.assertEqual(by["claude_clean"]["kind"], "claude")
+        self.assertTrue(by["mylocal"]["up"])
+        self.assertEqual(by["mylocal"]["kind"], "custom")
+        self.assertEqual(by["seen_only"]["text"], "10 today\n10 in 7 days")
+
+    def test_label_ip_is_shortened_to_the_last_octet(self):
+        config = {"agents": {"providers": {"x": {"label": "Box 192.168.1.50 main", "command": ["c"]}}}}
+        self.assertEqual(w.build(self.d, config, 1)["sources"][0]["name"], "Box .50 main")
+
     def test_probe_is_cached_so_repeat_calls_add_no_load(self):
         self.write("usage.jsonl", "")
         config = {"agents": {"providers": {"qwen-code-local": self.local}}}
