@@ -290,13 +290,12 @@ async function doctor(deep) {
 }
 
 // ---------- plugins: enable plugins in the daemon config, then install the gate and usage plugins (daemon must be running)
-function plugins() {
+async function plugins() {
   const f = join(HOME, 'config.json'); const c = readJson(f, {});
   if (!c.pluginsEnabled) { c.pluginsEnabled = true; writeJson(f, c); ok('pluginsEnabled set; restart the daemon (just down ; just up) if the installs below fail'); }
-  for (const d of ['gate', 'usage-otel', 'providers', 'reaper']) {
-    const r = paseo(['plugin', 'install', join(REPO, 'plugins', d)]);
-    (r.status === 0 ? ok : (m) => console.log('[FAIL] ' + m))(`plugin ${d}: ${out(r).split(String.fromCharCode(10)).pop()}`);
-  }
+  const { ensurePlugins } = await import('./daemon-ctl.mjs'); // installs the missing ones, reloads the failed ones, then checks all four
+  const r = await ensurePlugins({ paseo: (a) => paseo(a) });
+  if (!r.ok) process.exitCode = 1;
 }
 
 function unconfigure() {
@@ -316,7 +315,7 @@ const [cmd, arg] = process.argv.slice(2);
 if (cmd === 'configure') configure();
 else if (cmd === 'mcp' && (arg === 'add' || arg === 'remove')) mcp(arg);
 else if (cmd === 'unconfigure') unconfigure();
-else if (cmd === 'plugins') plugins();
+else if (cmd === 'plugins') await plugins();
 else if (cmd === 'provider') process.exit(await (await import('./provider.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'routes') process.exit(await (await import('./routes.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'update') (await import('./tools.mjs')).update(process.argv.includes('--paseo'));

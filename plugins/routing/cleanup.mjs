@@ -98,6 +98,23 @@ export function removeStaleProjects({ paseo, dry = false, junk = false, tmp = tm
 const real = (p) => { try { return realpathSync.native(p); } catch { return resolve(p); } }; // 8.3 short names (C:\Users\KOLLEC~1) and long names compare equal
 const norm = (p) => real(p).replace(/[\\/]+$/, "").toLowerCase();
 const within = (p, root) => { if (!root) return false; const a = norm(p), b = norm(root); return a === b || a.startsWith(b + "\\") || a.startsWith(b + "/"); };
+/** Workspaces (what the daemon runs `git status` on at every start): a folder that is gone, or a test leftover (system/temp folder, `_junk`, `*-hdad-*`). A workspace a live agent works in is never listed; an unreadable agent list means none is. `paseo(args)` -> parsed JSON. */
+export function staleWorkspaces(paseo, { tmp = tmpdir(), sys = process.env.SystemRoot ?? process.env.windir } = {}) {
+  const rows = paseo(["workspace", "ls"]);
+  const ag = paseo(["ls"]); if (!Array.isArray(ag)) return [];
+  const busy = ag.filter((a) => /^(running|permission|initializing|pending)$/i.test(String(a.status ?? "")) && typeof a.cwd === "string").map((a) => a.cwd.replace(/^~/, homedir()));
+  return (Array.isArray(rows) ? rows : []).filter((w) => {
+    if (!w.workspaceId || typeof w.cwd !== "string" || !isAbsolute(w.cwd) || KEEP.test(basename(w.cwd))) return false;
+    if (busy.some((c) => within(c, w.cwd) || within(w.cwd, c))) return false;
+    return !existsSync(w.cwd) || within(w.cwd, sys) || within(w.cwd, tmp) || norm(w.cwd).split(/[\\/]/).includes("_junk") || /(^|-)hdad-/i.test(basename(w.cwd));
+  });
+}
+export function removeStaleWorkspaces({ paseo, dry = false, tmp = tmpdir(), sys = process.env.SystemRoot ?? process.env.windir }) {
+  const list = staleWorkspaces(paseo, { tmp, sys });
+  if (!dry) for (const w of list) paseo(["workspace", "archive", w.workspaceId]);
+  return list.map((w) => w.cwd);
+}
+
 /** Never junk, whatever else matches: the owner's real repos. Only folders no pattern below names are ever listed, this is a second belt. */
 const KEEP = /^(agent-hub|Claude-Code-Usage-Monitor)$/i;
 /** Test leftovers in the Paseo project list (for --stale-projects): the system folder and the temp folder (a Paseo project made from a bare cwd), anything in or under a `_junk` scratch folder, and per-run `*-hdad-*` worktrees. Folders that still exist qualify here, so only these name patterns do; a real repo never matches. */
@@ -172,6 +189,7 @@ export async function main(argv, env = process.env) {
     } catch (e) { console.error("cleanup: --paseo-defaults failed: " + e.message); return 1; }
   }
   if (argv.includes("--stale-projects")) { const dry = argv.includes("--dry-run"); try { const gone = removeStaleProjects({ paseo: withRetry(cliPaseo(home, env)), dry, junk: true }); console.log(`${dry ? "would remove" : "removed"} ${gone.length} Paseo project(s) whose folder is gone or that are test leftovers (system/temp folder, _junk, hdad-*)${gone.length ? ": " + gone.join(" ") : ""}`); } catch (e) { console.error("cleanup: --stale-projects failed: " + e.message); } }
+  if (argv.includes("--stale-projects")) { const dry = argv.includes("--dry-run"); try { const gone = removeStaleWorkspaces({ paseo: withRetry(cliPaseo(home, env)), dry }); console.log(`${dry ? "would archive" : "archived"} ${gone.length} Paseo workspace(s) whose folder is gone or that are test leftovers (each costs a git status at every daemon start)`); } catch (e) { console.error("cleanup: workspace pruning failed: " + e.message); } }
   return 0;
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(await main(process.argv.slice(2)));

@@ -23,6 +23,11 @@ function Invoke-WebPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_WEB_PA
 function Invoke-ServerPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_SERVER_PATCH -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\paseo-server-patch.mjs') apply --quiet 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { Write-Host "[WARN] paseo server patch: $_" } }
 # Who asked for this start/stop: one line (requester process chain) in <home>/restart-requests.log. Never fails the action.
 function Write-RestartLog { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_RESTART_LOG -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\restart-log.mjs') $Action 2>&1 | Out-Null } catch { } }
+# Reliable restart (scripts/daemon-ctl.mjs): `down` proves the daemon is gone (stops the pid in <home>/paseo.pid when `paseo daemon stop` fails), `up` prints [OK] only when HTTP
+# and `paseo ls` answer and all four plugins run. Skipped under the fake-paseo test hook unless AGENT_HUB_CTL=1.
+function Use-Ctl { return (-not $env:AGENT_HUB_PASEO) -or $env:AGENT_HUB_CTL -eq '1' }
+function Invoke-Ctl { param([string]$Step) $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { & node (Join-Path $PSScriptRoot '..\..\scripts\daemon-ctl.mjs') $Step 2>&1 | ForEach-Object { "$_" } | Out-Host; return ($LASTEXITCODE -eq 0) } finally { $ErrorActionPreference = $old } }
 if ($Action -in 'start','stop') { Write-RestartLog }
 switch ($Action) {
   'install' {
@@ -36,7 +41,10 @@ switch ($Action) {
     Write-Host "[OK] task '$Task' registered (logon + every minute, IgnoreNew)"
   }
   'uninstall' { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue; Invoke-Paseo @('daemon','stop','--home',$Home_); Unregister-ScheduledTask -TaskName $Task -Confirm:$false; Write-Host "[OK] task '$Task' removed" } else { Write-Host "[OK] task '$Task' not present" } }
-  'start'     { Invoke-WebPatch; Invoke-ServerPatch; Start-UsageStack; if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[OK] task '$Task' started" } else { Invoke-Paseo @('daemon','start','--home',$Home_) -Scrub } }
-  'stop'      { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $Task | Out-Null; Stop-ScheduledTask -TaskName $Task }; Invoke-Paseo @('daemon','stop','--home',$Home_); if (-not $env:AGENT_HUB_PASEO) { & node (Join-Path $PSScriptRoot '..\..\scripts\hub.mjs') reap-laptop --now 2>&1 | Out-Host } }  # disabled so the 1-minute trigger cannot revive it; start re-enables
+  'start'     { Invoke-WebPatch; Invoke-ServerPatch; Start-UsageStack
+    if (Use-Ctl) { Invoke-Ctl 'heal' | Out-Null }
+    if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[..] task '$Task' started, waiting for the daemon" } else { Invoke-Paseo @('daemon','start','--home',$Home_) -Scrub }
+    if (Use-Ctl) { if (-not (Invoke-Ctl 'ready')) { Write-Host "[FAIL] the hub did not come up: see $(Join-Path $Home_ 'daemon.log')"; exit 1 }; if (-not (Invoke-Ctl 'plugins')) { exit 1 }; try { & node (Join-Path $PSScriptRoot '....pluginsoutingcleanup.mjs') --stale-projects --home $Home_ 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { }; Write-Host "[OK] hub up" } else { Write-Host "[OK] start requested" } }
+  'stop'      { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $Task | Out-Null; Stop-ScheduledTask -TaskName $Task }; Invoke-Paseo @('daemon','stop','--home',$Home_); if (Use-Ctl) { if (-not (Invoke-Ctl 'stop')) { exit 1 } }; if (-not $env:AGENT_HUB_PASEO) { & node (Join-Path $PSScriptRoot '..\..\scripts\hub.mjs') reap-laptop --now 2>&1 | Out-Host } }  # disabled so the 1-minute trigger cannot revive it; start re-enables
   'status'    { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Get-ScheduledTask -TaskName $Task | Get-ScheduledTaskInfo | Format-List TaskName, LastRunTime, LastTaskResult }; Invoke-Paseo @('daemon','status','--home',$Home_) }
 }
