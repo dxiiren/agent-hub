@@ -36,20 +36,24 @@ def qoder_source(usage_dir, now):
     last = read_json(os.path.join(usage_dir, "qoder-last.json"))
     s = last.get("s") or {}
     used, left = s.get("credits_used"), s.get("credits_remaining")
-    if not isinstance(used, (int, float)) or not isinstance(left, (int, float)):
-        return None
-    limit = used + left
-    pct = round(used / limit * 1000) / 10 if limit > 0 else None
-    first = ["%g%%" % pct] if pct is not None else []
+    if not isinstance(left, (int, float)):
+        if not s:
+            return None
+        return {"id": "qoder", "name": "Qoder", "short": "—",
+                "text": "credits left unknown\nthe last Qoder quota reply has no credits_remaining"}
+    used = used if isinstance(used, (int, float)) else None
+    limit = used + left if used is not None else None
+    pct = round(used / limit * 1000) / 10 if limit else None
+    first = ["%.0f%% used" % pct] if pct is not None else []
     reset = s.get("reset_time")
     if reset:
         try:
             first.append("resets " + datetime.fromisoformat(reset).strftime("%d %b"))
         except ValueError:
             pass
-    parts = [" - ".join(first), "%s used - %s left" % (fmt(int(used)), fmt(int(left)))]
+    parts = ["%s credits left" % fmt(int(left)), " - ".join(first)]
     age = int(now - last.get("at", 0) / 1000) if last.get("at") else None
-    src = {"id": "qoder", "name": "Qoder", "text": "\n".join(p for p in parts if p)}
+    src = {"id": "qoder", "name": "Qoder", "short": "%s left" % fmt(int(left)), "text": "\n".join(p for p in parts if p)}
     if pct is not None:
         src["percent"] = pct
     if age is not None:
