@@ -263,7 +263,8 @@ export function agentCwd(paseo, agentId) {
 /** Run the gate in the agent's cwd with the same options the plugin hook uses (gateOpts). First failure: re-prompt once (decision 47) and block until the agent is idle; freeze it; second gate. */
 export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   // `paseo ls` abbreviates the home folder as "~"
-  const cwdOf = () => agentCwd(paseo, agentId);
+  // `paseo ls` can fail or miss the agent while the daemon is busy: fall back to the cwd the route started the agent in
+  const cwdOf = () => agentCwd(paseo, agentId) ?? agentCwd(paseo, agentId) ?? o.knownCwd;
   const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
   let res = gate(cwd, gateOpts(routes, cwd, o.gate, o.base));
@@ -568,7 +569,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (j.status === "completed") {
       if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
-      const g = callerGate(o, j.agentId, paseo, gate, routes);
+      const g = callerGate({ ...o, knownCwd: args[2] }, j.agentId, paseo, gate, routes);
       // the plugin hook may have re-prompted already (its attempts live in the plugin store, keyed by agent id)
       const pluginAttempts = (() => { try { return Number(loadState(o.gateDir ?? gateDir())[j.agentId]?.attempts) || 0; } catch { return 0; } })();
       g.attempts += pluginAttempts;
