@@ -8,6 +8,8 @@ export const R = {
   providers: "Providers",
   noProviders: "No providers found. Is the daemon running?",
   status: "Status",
+  checkAgain: "Check again",
+  checking: "Checking...",
   unknown: "unknown",
   statusWord: (s: string | null) => (s === "available" ? "Ready" : s === "error" ? "Has a problem (see Settings > Providers)" : s === "unavailable" ? "Not available on this computer" : s === "loading" ? "Checking..." : s === "disabled" ? "Switched off" : s ?? "unknown"),
   hidden: (n: number) => `${n} provider${n === 1 ? " that is" : "s that are"} switched off or not installed ${n === 1 ? "is" : "are"} not listed. Switch ${n === 1 ? "it" : "them"} on in Settings > Providers.`,

@@ -3,7 +3,7 @@
 // It is an ACP proxy (plugins/routing/acp-proxy.mjs): the session offers the mode "read-only", and choosing it restarts qwen with the deny settings. --read-only (old twin entries) = read-only from the start.
 // An endpoint key (env HUB_OPENAI_API_KEY, set by `provider add --key`) never reaches the agent: it stays in this launcher, which fronts the endpoint with a local auth proxy.
 import { spawnSafe } from '../../plugins/routing/spawn-safe.mjs';
-import { safeUrl, servedModel, qwenEnv, takeReadOnlyFlag, startAuthProxy, scrubKeyEnv } from '../../plugins/routing/office.mjs';
+import { safeUrl, servedModel, endpointDown, qwenEnv, takeReadOnlyFlag, startAuthProxy, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
 
 const legacyReadOnly = takeReadOnlyFlag(process.argv);
@@ -13,8 +13,13 @@ if (!upstream) { process.stderr.write('office-agent: refusing an unsafe base URL
 const key = process.env.HUB_OPENAI_API_KEY;
 const proxy = key ? await startAuthProxy(upstream, key) : null;
 const base = proxy ? proxy.base : upstream;
-const model = await servedModel(base, { fallback, ...(proxy ? { f: (u, o) => fetch(u, { ...o, headers: { ...o?.headers, authorization: `Bearer ${proxy.secret}` } }) } : {}) });
+const authF = proxy ? (u, o) => fetch(u, { ...o, headers: { ...o?.headers, authorization: `Bearer ${proxy.secret}` } }) : fetch;
+// an endpoint that does not answer fails the launch with a plain line: Paseo shows it as the provider's error (Settings > Providers, Routing & slots) instead of "Ready"
+const down = await endpointDown(base, { f: authF });
+if (down) { process.stderr.write(down + String.fromCharCode(10)); proxy?.close(); process.exitCode = 75; } else {
+const model = await servedModel(base, { fallback, f: authF });
 const spawnQwen = (readOnly) => spawnSafe(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, '--openai-api-key', proxy ? proxy.secret : 'none', '--model', model],
   { stdio: ['pipe', 'pipe', 'inherit'], env: scrubKeyEnv(qwenEnv(process.env, readOnly)) });
 const { done } = modeProxy({ spawnAgent: spawnQwen, initialReadOnly: legacyReadOnly });
 done.then((c) => { proxy?.close(); process.exitCode = c; }); // no process.exit: exiting with the proxy server mid-close trips a libuv assertion on Windows
+}

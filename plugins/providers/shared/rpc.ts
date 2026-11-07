@@ -11,6 +11,6 @@ export const providersRpc = defineRpc({
 // Routing & slots screen: the server hands {verb, args} to `scripts/routes.mjs api` (same code as `agent-hub routes`); "enabled" changes are applied to the daemon through its config API.
 export const routingRpc = defineRpc({
   name: "agent-hub-providers.routing",
-  input: z.object({ verb: z.enum(["show", "models", "set", "undo"]), args: z.record(z.string(), z.any()).optional() }),
+  input: z.object({ verb: z.enum(["show", "models", "set", "undo", "probe"]), args: z.record(z.string(), z.any()).optional() }),
   output: z.record(z.string(), z.any()),
 });

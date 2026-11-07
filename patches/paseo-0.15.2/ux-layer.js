@@ -1,11 +1,14 @@
-/*agent-hub-rev:18*/(function(){const __go=function(){
+/*agent-hub-rev:19*/(function(){const __go=function(){
 // Agent Hub UX layer (patch rev 10): an in-app confirm dialog, a friendly page for addresses that show nothing, and plain-English labels for hub-internal names.
 try{
 if(typeof document==="undefined")return;
 // App diagnostic text (Settings > Diagnostics > Run): the machine PATH list, user names in folder paths and long raw log lines are not needed to get help, so they are shortened before the text is shown or copied
 globalThis.__ahDiag=q=>String(q).split("\n").map(l=>/^\s*PATH:\s/.test(l)?"  PATH: (hidden, "+l.split(";").length+" folders)":l).map(l=>l.replace(/([A-Za-z]:\\Users\\)[^\\\s"']+/g,"$1<user>").replace(/(\/(?:Users|home)\/)[^\/\s"']+/g,"$1<user>")).map(l=>/^\s*\{"level":/.test(l)&&l.length>240?l.slice(0,240)+" ...":l).join("\n");
 // First start of the New workspace composer: with no earlier choice it says "Select model". Preselect Claude's newest model ("Latest release" in the daemon's own list, cached by the app from an earlier visit); a choice the user already made is never touched.
-try{if(!localStorage.getItem("@paseo:create-agent-preferences")){for(const k of Object.keys(localStorage)){if(k.indexOf("@paseo/provider-snapshot/v2:")!==0)continue;const es=(JSON.parse(localStorage.getItem(k)).compactSnapshot||{}).entries||[],e=es.find(x=>x.provider==="claude"&&x.enabled!==false),m=e&&(e.models||[]).find(m=>/latest release/i.test(m.description||"")&&m.isSelectable!==false);if(m){localStorage.setItem("@paseo:create-agent-preferences",JSON.stringify({provider:"claude",providerPreferences:{claude:{model:m.id}},isolation:"local",launchTarget:{kind:"chat"}}));break}}}}catch(e){}
+const pre=()=>{try{if(!localStorage.getItem("@paseo:create-agent-preferences")){for(const k of Object.keys(localStorage)){if(k.indexOf("@paseo/provider-snapshot/v2:")!==0)continue;const es=(JSON.parse(localStorage.getItem(k)).compactSnapshot||{}).entries||[],e=es.find(x=>x.provider==="claude"&&x.enabled!==false),m=e&&(e.models||[]).find(m=>/latest release/i.test(m.description||"")&&m.isSelectable!==false);if(m){localStorage.setItem("@paseo:create-agent-preferences",JSON.stringify({provider:"claude",providerPreferences:{claude:{model:m.id}},isolation:"local",launchTarget:{kind:"chat"}}));return true}}}}catch(e){}return false};
+// a brand-new browser has no cached model list when the page first loads: it arrives a few seconds later, so the choice is made then, and the page reloads once (only while the composer is empty and still says "Select model") so the composer picks it up
+pre();
+const preTick=()=>{try{if(!pre())return;if(sessionStorage.getItem("ah-pre"))return;const t=document.body.innerText||"";if(!/Select model/.test(t))return;if([...document.querySelectorAll("textarea,input")].some(e=>(e.value||"").length>0))return;sessionStorage.setItem("ah-pre","1");location.reload()}catch(e){}};
 const css=document.createElement("style");
 css.textContent=".ah-ov{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}"
 +".ah-card{max-width:440px;width:100%;box-sizing:border-box;background:var(--ah-bg,#fff);color:var(--ah-fg,#18181b);border:1px solid var(--ah-bd,#e4e4e7);border-radius:12px;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3)}"
@@ -89,7 +92,9 @@ function downText(){
 let strikes=0;
 // a short note while the page greys out (plugin Reload takes a moment and disables the whole list)
 function toast(msg,ms){const e=document.createElement("div");e.setAttribute("data-testid","ah-toast");e.setAttribute("role","status");e.style.cssText="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147482000;background:#18181b;color:#fff;border-radius:10px;padding:10px 16px;font:14px system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)";e.textContent=msg;document.body.appendChild(e);setTimeout(()=>e.remove(),ms||3500)}
-document.addEventListener("click",ev=>{try{const t=ev.target&&ev.target.closest&&ev.target.closest('[role="menuitem"]');if(t&&/\/plugins$/.test(location.pathname)){const x=(t.textContent||"").trim();if(x==="Reload")toast("Reloading the plugin: the list is greyed out for a few seconds.");else if(x==="Remove")toast("Removing the plugin...")}}catch(e){}},true);
+// Paseo reports "failed" for a moment while a reloading plugin restarts (it showed for up to 4 s, then "running"): for 25 s after Reload that word reads "starting..." (a plugin that is still failed after that shows the real "failed")
+const reloading={};let lastPlug="";
+document.addEventListener("click",ev=>{try{const E=ev.target&&ev.target.closest?ev.target:null;if(!E||!/\/plugins$/.test(location.pathname))return;const a=E.closest('[aria-label^="Actions for "]');if(a)lastPlug=a.getAttribute("aria-label").slice(12);const sw=E.closest('[role="switch"][aria-label]');if(sw){const l=sw.getAttribute("aria-label");if(/ plugins$/.test(l))document.querySelectorAll('[data-testid^="plugin-row-"]').forEach(r=>{reloading[r.getAttribute("data-testid").slice(11)]=Date.now()});else reloading[l.split(":")[0]]=Date.now()}const t=E.closest('[role="menuitem"]');if(t&&(t.textContent||"").trim()==="Reload"){reloading[lastPlug]=Date.now();toast("Reloading the plugin: the list is greyed out for a few seconds.")}const c=E.closest('[data-testid="ah-dialog-confirm"]');if(c){const h=c.closest(".ah-card");if(h&&/^Remove /.test((h.querySelector("h2")||{}).textContent||""))toast("Removing the plugin...")}}catch(e){}},true);
 let connAt=0;
 function connectingHint(){
   const t=document.body.innerText||"",busy=/^\s*Connecting(\s+to)?\s+\S+/m.test(t)&&t.length<400;
@@ -116,10 +121,22 @@ function check(){
 let sched=0;
 const tick=()=>{sched=0;try{rewrite(document.body)}catch(e){}try{downText()}catch(e){}try{polish()}catch(e){}};
 new MutationObserver(()=>{if(!sched)sched=setTimeout(tick,120)}).observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["aria-checked"]});
-setInterval(()=>{try{check();downCheck();offlineRetry();connectingHint()}catch(e){}},1200);
+setInterval(()=>{try{check();downCheck();offlineRetry();connectingHint();preTick()}catch(e){}},1200);
 // polish applied to elements as they appear
 function polish(){
   const path=location.pathname;
+  if(/\/plugins$/.test(path))document.querySelectorAll('[data-testid^="plugin-row-"]').forEach(row=>{const at=reloading[row.getAttribute("data-testid").slice(11)];if(!at||Date.now()-at>25000)return;const w=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);let n;while((n=w.nextNode()))if((n.nodeValue||"").trim()==="failed")n.nodeValue="starting..."});
+  // model dialog: a model whose label is its id would print the id twice side by side; the grey id after the name is dropped then
+  document.querySelectorAll('[role="dialog"] div,[role="dialog"] span').forEach(e=>{if(e.children.length||e.style.display==="none")return;const t=(e.textContent||"").trim(),p=e.previousElementSibling;if(t&&p&&!p.children.length&&(p.textContent||"").trim()===t&&/mono|courier|consolas/i.test(getComputedStyle(e).fontFamily))e.style.display="none"});
+  // an endpoint provider whose server does not answer: its launcher exits with code 75 after a live check, and Paseo only says "exited before initialization". Say what happened, with the time of the check, and name the button "Check again".
+  if(/\/providers$/.test(path)){
+    const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;
+    const idOf=el=>{for(let e=el;e&&e!==document.body;e=e.parentElement){const a=e.querySelectorAll('[data-testid^="provider-actions-"]');if(a.length===1)return a[0].getAttribute("data-testid").slice(17);if(a.length>1)break}return null};
+    const stamp=id=>{let best=0;try{for(const k of Object.keys(localStorage)){if(k.indexOf("@paseo/provider-snapshot/v2:")!==0)continue;const f=(JSON.parse(localStorage.getItem(k)).fetchedAt||{})[id];if(f&&Date.parse(f)>best)best=Date.parse(f)}}catch(e){}const d=new Date(best||Date.now());return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")};
+    while((n=w.nextNode())){const v=n.nodeValue||"";
+      if(/^ACP agent process exited before initialization completed \(exit code 75\)/.test(v)){const id=idOf(n.parentElement);n.nodeValue="Not answering (checked "+stamp(id)+"): nothing replied from this endpoint. Start it or check its Base URL, then press Check again."}
+      else if(v.trim()==="Retry"&&idOf(n.parentElement))n.nodeValue="Check again"}
+  }
   // a provider that is switched off cannot load models, so the useless Retry button next to that message is hidden
   document.querySelectorAll('[data-testid="model-picker-error"]').forEach(e=>{if(/switched off/.test(e.textContent||"")){const b=e.parentElement&&e.parentElement.querySelector("button");if(b&&b.style.display!=="none")b.style.display="none"}});
   // Providers page: a status that is only a word gets an explanation on hover, and a jump link to the "Add provider" list (it sits far down)

@@ -15,6 +15,14 @@ export const SAFE_ID = /^[A-Za-z0-9._:\/-]{1,128}$/;
 export const safeId = (id) => (typeof id === "string" && SAFE_ID.test(id) ? id : "");
 export const firstId = (body) => (Array.isArray(body?.data) ? safeId(body.data.find((m) => m?.id)?.id ?? "") : "");
 
+const WHY = { ECONNREFUSED: "nothing is listening there", ETIMEDOUT: "no answer in time", TimeoutError: "no answer in time", ENOTFOUND: "the host name is unknown", EHOSTUNREACH: "the host is unreachable" };
+/** Live check of <base>/v1/models (never cached, so "Check again" tells the truth): null when it answers, else "Not answering (checked HH:MM): why". `f` is injectable for tests. */
+export async function endpointDown(base, { f = fetch, now = new Date() } = {}) {
+  const at = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  try { const r = await f(modelsUrl(base), { signal: AbortSignal.timeout(4000) }); return r.status < 500 ? null : `Not answering (checked ${at}): HTTP ${r.status}`; }
+  catch (e) { const c = String(e?.cause?.code ?? e?.name ?? "unreachable"); return `Not answering (checked ${at}): ${WHY[c] ?? "the server did not answer"}`; }
+}
+
 /** Async: served id of `base`; a fetch failure falls back to the last cached id, else to `fallback`. `f` is injectable for tests. */
 export async function servedModel(base, { fallback = "", f = fetch, file = process.env.AGENT_HUB_RESOLVE_CACHE_OFFICE ?? join(runDir(), "agent-hub-office-models.json"), now = Date.now() } = {}) {
   const c = readStateJson(file) ?? {};

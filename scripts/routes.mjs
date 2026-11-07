@@ -17,6 +17,8 @@ import { writeJsonKeepEol as wr, writeAtomic, readJsonStrict as rd, own } from '
 import { withLock } from '../plugins/routing/lock.mjs';
 import { cliPaseo, READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
 import { effectiveBudget, chainOrder, costGb, laptopNow, heldIn } from '../plugins/routing/budget.mjs';
+import { endpointDown } from '../plugins/routing/office.mjs';
+import { selfHostedProviders } from '../plugins/usage-otel/server/selfhosted-usage.mjs';
 
 export const TASK_TYPES = ['code-edit', 'code-edit-easy', 'summarise', 'test-scaffold', 'review'];
 export const MAX_SLOTS = 64;
@@ -163,9 +165,21 @@ export function writeEnabledFile(changes, p = paths()) {
   });
 }
 
+/** Live check of every provider that has an HTTP endpoint: { [id]: "Not answering (checked HH:MM): why" | null }. Never cached, so "Check again" tells the truth. o.fetch overrides (tests). */
+export async function probeEndpoints(p = paths(), o = {}) {
+  const eps = selfHostedProviders(rd(p.paseo, {}), rd(p.local, {}));
+  const out = {};
+  await Promise.all(eps.map(async (e) => {
+    const f = e.key ? (u, i) => (o.fetch ?? fetch)(u, { ...i, headers: { ...i?.headers, authorization: `Bearer ${e.key}` } }) : o.fetch;
+    out[e.name] = await endpointDown(e.base, f ? { f } : {});
+  }));
+  return { probes: out };
+}
+
 /** The one entry the Settings page calls (and tests): {verb,args} -> JSON. */
 export async function api({ verb, args = {} }, p = paths(), o = {}) {
   if (verb === 'show') return show(p, o);
+  if (verb === 'probe') return await probeEndpoints(p, o);
   if (verb === 'models') { const m = await modelsOf(args.provider, p, o); return { models: m.models, known: m.known, error: m.error }; }
   if (verb === 'set') return await set(args, p, o);
   if (verb === 'undo') return await undo(p);

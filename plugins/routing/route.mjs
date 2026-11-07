@@ -571,6 +571,7 @@ function main(argv) {
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
   const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? sessionFromEnv(process.env), dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
   if (early) { console.error("route: " + early); return 2; }
+  if (!(opt("--session") ?? sessionFromEnv(process.env))) console.error("route: note: no session id (CLAUDE_CODE_SESSION_ID is not set in this shell, e.g. a PowerShell tool), so this task is counted under no session; pass --session <id> or set AGENT_HUB_SESSION to see it in `agent-hub usage --session <id>`.");
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed

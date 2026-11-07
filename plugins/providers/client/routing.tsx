@@ -27,6 +27,8 @@ export function RoutingScreen() {
   const [openModels, setOpenModels] = useState<Record<string, boolean>>({});
   const [msg, setMsg] = useState<{ ok: boolean; text: string; where: string } | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [probes, setProbes] = useState<Record<string, string | null>>({});
+  const [checking, setChecking] = useState(false);
 
   const refresh = useCallback(async () => {
     const d: any = await call({ verb: "show" });
@@ -34,12 +36,19 @@ export function RoutingScreen() {
     setLoadErr(null); setData(d); setSlots(Object.fromEntries(d.providers.map((p: Prov) => [p.id, p.slots == null ? "" : String(p.slots)])));
     return d as Show;
   }, [call]);
+  // Endpoint providers (Qwen Code, OpenCode ...): Paseo's own status does not probe them, so each is asked live; a stopped server reads "Not answering (checked HH:MM)".
+  const checkAgain = useCallback(async () => {
+    setChecking(true);
+    const r: any = await call({ verb: "probe" });
+    setChecking(false);
+    if (!r.error && r.probes) setProbes(r.probes);
+  }, [call]);
   const loadModels = useCallback(async (id: string) => {
     setModels((m) => ({ ...m, [id]: { loading: true } }));
     const r: any = await call({ verb: "models", args: { provider: id } });
     setModels((m) => ({ ...m, [id]: r.error ? { error: r.error } : { list: r.models ?? [], known: !!r.known } }));
   }, [call]);
-  useEffect(() => { void refresh().then((d) => { d?.providers.forEach((p) => void loadModels(p.id)); }); }, [refresh, loadModels]);
+  useEffect(() => { void checkAgain(); void refresh().then((d) => { d?.providers.forEach((p) => void loadModels(p.id)); }); }, [refresh, loadModels, checkAgain]);
 
   const save = async (verb: "set" | "undo", args: Record<string, unknown> = {}, ok: string = R.saved, where = "top") => {
     setBusy(true); setMsg(null);
@@ -97,7 +106,9 @@ export function RoutingScreen() {
           return (
             <SettingsCard key={p.id}>
               <SettingsSwitch label={pretty(p)} value={p.enabled} disabled={busy} onValueChange={(v) => void setProv(p.id, { enabled: v })} />
-              <SettingsRow label={R.status} hint={`${R.statusWord(p.status)}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />
+              {probes[p.id]
+                ? <SettingsAction label={R.status} hint={probes[p.id]!} actionLabel={checking ? R.checking : R.checkAgain} disabled={checking} onPress={() => void checkAgain()} />
+                : <SettingsRow label={R.status} hint={`${R.statusWord(p.status)}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />}
               <SettingsInput label={R.slots(data.maxSlots)} hint={p.slots == null ? R.unlimited : undefined} initialValue={slots[p.id] ?? ""} onChangeText={(t) => setSlots((s) => ({ ...s, [p.id]: t }))} />
               <SettingsAction label={R.slotsAction} actionLabel={R.saveSlots} disabled={busy || (slots[p.id] ?? "") === (p.slots == null ? "" : String(p.slots))} onPress={() => void setProv(p.id, { slots: (slots[p.id] ?? "").trim() })} />
               <SettingsRow label={R.cap(p.cap)} />

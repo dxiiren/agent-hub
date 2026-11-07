@@ -352,7 +352,17 @@
    "name": "host-name-maxlength",
    "find": "onClose:_,onSubmit:w,testID:\"host-page-rename-modal\"}",
    "replace": "onClose:_,onSubmit:w,testID:\"host-page-rename-modal\",maxLength:40}"
+  },
+  {
+   "name": "cron-never-runs",
+   "find": "return o?.replace(/^Invalid cron /,\"Invalid \")??null}function N(n)",
+   "replace": "return o?.replace(/^Invalid cron /,\"Invalid \")??__ahNever(u)}function __ahNever(u){try{const f=u.split(/\\s+/);if(f.length!==5||f[4]!==\"*\")return null;const ex=(s,lo,hi)=>{const r=new Set;for(const p of s.split(\",\")){const[b,st]=p.split(\"/\"),step=st?+st:1;let a,z;if(b===\"*\"){a=lo;z=hi}else if(/^\\d+$/.test(b)){a=z=+b;if(st)z=hi}else{const m=b.match(/^(\\d+)-(\\d+)$/);if(!m)return null;a=+m[1];z=+m[2]}for(let k=a;k<=z;k+=step)r.add(k)}return r};const dom=ex(f[2],1,31),mon=ex(f[3],1,12);if(!dom||!mon)return null;const dim=[31,29,31,30,31,30,31,31,30,31,30,31];for(const m of mon)for(const d of dom)if(d<=dim[m-1])return null;return\"This schedule would never run: that day of the month does not exist in the chosen month(s)\"}catch(e){return null}}function N(n)"
+  },
+  {
+   "name": "terminal-profile-prompt-word",
+   "find": "M=l.args&&l.args.length>0?`${l.command} ${l.args.join(\" \")}`:l.command",
+   "replace": "M=l.args&&l.args.length>0?`${l.command} ${l.args.join(\" \").split(\"{{{prompt}}}\").join(\"<your prompt>\")}`:l.command"
   }
  ],
- "rev": 18
+ "rev": 19
 }
