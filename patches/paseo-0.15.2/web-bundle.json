@@ -231,7 +231,12 @@
   {
    "name": "schedule-run-now-refresh",
    "find": "H={mutationFn:G,onSettled:p},c[56]=p",
-   "replace": "H={mutationFn:G,onSettled:(...q)=>{p(...q);setTimeout(()=>p(...q),1500);setTimeout(()=>p(...q),4e3);setTimeout(()=>p(...q),8e3);setTimeout(()=>p(...q),13e3)}},c[56]=p"
+   "replace": "H={mutationFn:(...q)=>{const iv=setInterval(()=>p(),2500);return Promise.resolve(G(...q)).finally(()=>clearInterval(iv))},onSettled:(...q)=>{p(...q);setTimeout(()=>p(...q),1500);setTimeout(()=>p(...q),4e3);setTimeout(()=>p(...q),8e3);setTimeout(()=>p(...q),13e3)}},c[56]=p"
+  },
+  {
+   "name": "schedule-run-now-label",
+   "find": "pendingLabel:\"Starting...\",onSelect:w,testID:f,children:\"Run now\"",
+   "replace": "pendingLabel:\"Running...\",onSelect:w,testID:f,children:\"Run now\""
   },
   {
    "name": "models-no-double-list",
@@ -364,5 +369,5 @@
    "replace": "M=l.args&&l.args.length>0?`${l.command} ${l.args.join(\" \").split(\"{{{prompt}}}\").join(\"<your prompt>\")}`:l.command"
   }
  ],
- "rev": 20
+ "rev": 22
 }
