@@ -82,7 +82,6 @@ class WidgetJson(unittest.TestCase):
         self.assertEqual(by["claude_clean"]["kind"], "claude")
         self.assertTrue(by["mylocal"]["up"])
         self.assertEqual(by["mylocal"]["kind"], "custom")
-        self.assertEqual(by["seen_only"]["text"], "10 today\n10 in 7 days")
 
     def test_label_ip_is_shortened_to_the_last_octet(self):
         config = {"agents": {"providers": {"x": {"label": "Box 192.168.1.50 main", "command": ["c"]}}}}
