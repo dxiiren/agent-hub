@@ -1,9 +1,11 @@
-/*agent-hub-rev:15*/(function(){const __go=function(){
+/*agent-hub-rev:16*/(function(){const __go=function(){
 // Agent Hub UX layer (patch rev 10): an in-app confirm dialog, a friendly page for addresses that show nothing, and plain-English labels for hub-internal names.
 try{
 if(typeof document==="undefined")return;
 // App diagnostic text (Settings > Diagnostics > Run): the machine PATH list, user names in folder paths and long raw log lines are not needed to get help, so they are shortened before the text is shown or copied
 globalThis.__ahDiag=q=>String(q).split("\n").map(l=>/^\s*PATH:\s/.test(l)?"  PATH: (hidden, "+l.split(";").length+" folders)":l).map(l=>l.replace(/([A-Za-z]:\\Users\\)[^\\\s"']+/g,"$1<user>").replace(/(\/(?:Users|home)\/)[^\/\s"']+/g,"$1<user>")).map(l=>/^\s*\{"level":/.test(l)&&l.length>240?l.slice(0,240)+" ...":l).join("\n");
+// First start of the New workspace composer: with no earlier choice it says "Select model". Preselect Claude's newest model ("Latest release" in the daemon's own list, cached by the app from an earlier visit); a choice the user already made is never touched.
+try{if(!localStorage.getItem("@paseo:create-agent-preferences")){for(const k of Object.keys(localStorage)){if(k.indexOf("@paseo/provider-snapshot/v2:")!==0)continue;const es=(JSON.parse(localStorage.getItem(k)).compactSnapshot||{}).entries||[],e=es.find(x=>x.provider==="claude"&&x.enabled!==false),m=e&&(e.models||[]).find(m=>/latest release/i.test(m.description||"")&&m.isSelectable!==false);if(m){localStorage.setItem("@paseo:create-agent-preferences",JSON.stringify({provider:"claude",providerPreferences:{claude:{model:m.id}},isolation:"local",launchTarget:{kind:"chat"}}));break}}}}catch(e){}
 const css=document.createElement("style");
 css.textContent=".ah-ov{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}"
 +".ah-card{max-width:440px;width:100%;box-sizing:border-box;background:var(--ah-bg,#fff);color:var(--ah-fg,#18181b);border:1px solid var(--ah-bd,#e4e4e7);border-radius:12px;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3)}"
@@ -25,6 +27,14 @@ function dialog(title,body,buttons){return new Promise(res=>{
 })}
 // confirmDialog's web fallback (replaces the browser's own confirm box): o = {title,message,confirmLabel,cancelLabel,destructive}
 globalThis.__ahConfirm=o=>dialog(o.title||"Are you sure?",o.message||"",[{id:"cancel",label:o.cancelLabel||"Cancel",value:false,focus:!o.destructive},{id:"confirm",label:o.confirmLabel||"Confirm",value:true,cls:o.destructive?"ah-dng":"ah-pri",focus:!!o.destructive}]);
+// Search (Cmd/Ctrl+K): the settings pages are searchable too, "Settings: Providers", "Settings: Usage", ... (shown once something is typed; Enter opens the page)
+globalThis.__ahSettingsActions=(push,Icon)=>{
+  const host=()=>{const m=location.pathname.match(/\/(?:settings\/hosts|h)\/([^/]+)/);if(m)return m[1];try{const r=JSON.parse(localStorage.getItem("@paseo:daemon-registry")||"[]");return r[0]&&r[0].serverId}catch(e){return null}};
+  const APP=[["General","general","language startup updates"],["Appearance","appearance","theme dark light font size colors"],["Sidebar","sidebar","badge navigation items footer"],["Chat","chat","messages detail level collapse send behaviour"],["Terminal","terminal","shell scrollback"],["Editor","editor","code editor"],["Files","files","file panels"],["Diagnostics","diagnostics","logs help support run"],["About","about","version"]];
+  const HOST=[["Overview","host","restart host name remove"],["Projects","projects","folders repositories delete remove"],["Connections","connections","address password pair"],["Pair device","pair-device","phone qr code"],["Agents","agents","profiles"],["Metadata","metadata","labels"],["Voice","voice","dictation speech"],["Workspaces","workspaces","worktrees"],["Providers","providers","models claude codex qwen add provider catalog endpoint"],["Usage","usage","limits plan credits tokens cost"],["Terminals","terminals","terminal profiles shell"],["Plugins","plugins","plugin gate install extensions"]];
+  const mk=(label,rank,kw,path)=>({id:"settings-"+label.toLowerCase().replace(/\W+/g,"-"),group:"actions",groupRank:0,rank,keywords:["settings","setting",...label.toLowerCase().split(" "),...kw.split(" ")],visibility:"query",run:()=>{const p=path();if(p)push(p)},presentation:{kind:"action",title:"Settings: "+label,sectionTitle:"Actions",icon:Icon}});
+  return [...APP.map((a,i)=>mk(a[0],20+i,a[2],()=>"/settings/"+a[1])),...HOST.map((a,i)=>mk(a[0],40+i,a[2],()=>{const h=host();return h?"/settings/hosts/"+h+"/"+a[1]:null}))];
+};
 // plain-English labels for names that only make sense inside the hub
 const MAP=[[/\(clean MCP\)/g,"(hub tasks)"],[/\(no user MCP\)/g,"(hub tasks)"],[/^opus\[1m\]$/,"Custom model (from your Claude settings)"],[/^From Claude settings\.json model$/,"Set in your Claude settings"],
  [/^Could not load the model list: Provider .+ is disabled\.?$/,"This provider is switched off. Switch it on in the Providers list first, then add a model."],
@@ -61,17 +71,31 @@ function offlineRetry(){
   if(c>=12||Date.now()-relAt<5000)return;relAt=Date.now();
   fetch("/api/health",{cache:"no-store"}).then(r=>{if(r.ok){try{sessionStorage.setItem("ah-off-c",String(c+1))}catch(e){}location.reload()}}).catch(()=>{});
 }
+// while the hub does not answer at all, say so (instead of "Connect to <host> to see usage"), and that the page recovers by itself
+const DOWN="The hub is not answering right now. This page loads by itself as soon as it is back.";
+let hubDown=false,downAt=0;
+function downCheck(){
+  const t=document.body.innerText||"";
+  if(!/Plugin host is offline|Connect to .{1,60} to see (usage|providers)|Connecting(\s+to)?\s+\S+/.test(t)&&!hubDown)return;
+  if(Date.now()-downAt<2500)return;downAt=Date.now();
+  fetch("/api/health",{cache:"no-store"}).then(r=>{hubDown=!r.ok}).catch(()=>{hubDown=true});
+}
+function downText(){
+  if(!hubDown)return;
+  const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;
+  while((n=w.nextNode())){const v=(n.nodeValue||"").trim();if(/^Connect to .{1,60} to see (usage|providers)\.?$/.test(v)||/^The host is still connecting, or its plugin service is restarting/.test(v)||/^Reconnect to this host to manage its plugins/.test(v))n.nodeValue=DOWN}
+}
 let strikes=0;
 // a short note while the page greys out (plugin Reload takes a moment and disables the whole list)
 function toast(msg,ms){const e=document.createElement("div");e.setAttribute("data-testid","ah-toast");e.setAttribute("role","status");e.style.cssText="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147482000;background:#18181b;color:#fff;border-radius:10px;padding:10px 16px;font:14px system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)";e.textContent=msg;document.body.appendChild(e);setTimeout(()=>e.remove(),ms||3500)}
 document.addEventListener("click",ev=>{try{const t=ev.target&&ev.target.closest&&ev.target.closest('[role="menuitem"]');if(t&&/\/plugins$/.test(location.pathname)){const x=(t.textContent||"").trim();if(x==="Reload")toast("Reloading the plugin: the list is greyed out for a few seconds.");else if(x==="Remove")toast("Removing the plugin...")}}catch(e){}},true);
 let connAt=0;
 function connectingHint(){
-  const t=document.body.innerText||"",busy=/^\s*Connecting( to)? \S+/m.test(t)&&t.length<400;
+  const t=document.body.innerText||"",busy=/^\s*Connecting(\s+to)?\s+\S+/m.test(t)&&t.length<400;
   const id="ah-conn";let e=document.getElementById(id);
   if(!busy){connAt=0;if(e)e.remove();return}
   if(!connAt)connAt=Date.now();
-  if(Date.now()-connAt>15000&&!e){e=document.createElement("div");e.id=id;e.setAttribute("data-testid","ah-connecting-hint");e.style.cssText="position:fixed;left:0;right:0;bottom:24px;text-align:center;font:14px system-ui,sans-serif;opacity:.75;padding:0 16px";e.textContent="Still connecting. The host may be busy or starting up; this page keeps trying by itself.";document.body.appendChild(e)}
+  if(Date.now()-connAt>15000&&!e){e=document.createElement("div");e.id=id;e.setAttribute("data-testid","ah-connecting-hint");e.style.cssText="position:fixed;left:"+(innerWidth>=768?320:0)+"px;right:0;bottom:24px;text-align:center;font:14px system-ui,sans-serif;opacity:.75;padding:0 16px";e.textContent="Still connecting. The host may be busy or starting up; this page keeps trying by itself.";document.body.appendChild(e)}
 }
 function check(){
   const p=location.pathname;if(p!==lastPath){lastPath=p;strikes=0;hideNotice()}
@@ -89,9 +113,9 @@ function check(){
   c.append(h,q,row);ov.appendChild(c);document.body.appendChild(ov);
 }
 let sched=0;
-const tick=()=>{sched=0;try{rewrite(document.body)}catch(e){}try{polish()}catch(e){}};
+const tick=()=>{sched=0;try{rewrite(document.body)}catch(e){}try{downText()}catch(e){}try{polish()}catch(e){}};
 new MutationObserver(()=>{if(!sched)sched=setTimeout(tick,120)}).observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["aria-checked"]});
-setInterval(()=>{try{check();offlineRetry();connectingHint()}catch(e){}},1200);
+setInterval(()=>{try{check();downCheck();offlineRetry();connectingHint()}catch(e){}},1200);
 // polish applied to elements as they appear
 function polish(){
   const path=location.pathname;
@@ -106,6 +130,13 @@ function polish(){
       if(h&&title&&title.parentElement){const b=document.createElement("button");b.id="ah-jump";b.type="button";b.className="ah-btn";b.style.cssText="margin:6px 0 0;align-self:flex-start";b.textContent="Add a provider ↓";b.onclick=()=>{const t=[...document.querySelectorAll("div")].find(e=>!e.children.length&&(e.textContent||"").trim()==="Add provider"&&e.getBoundingClientRect().height>0&&e.id!=="ah-jump");if(t)t.scrollIntoView({behavior:"smooth",block:"start"})};title.parentElement.insertBefore(b,title.nextSibling)}
     }
   }else{const j=document.getElementById("ah-jump");if(j)j.remove()}
+  // catalog: Paseo already hides a CLI entry once it is installed; a hub entry can be added many times, so its tile says how many of that kind are already in "Installed providers" ("2 added", button "Add another")
+  if(/\/providers$/.test(path)){const BUILTIN=new Set(["claude","codex","copilot","opencode","pi","omp","antigravity","muse"]);const ids=[...document.querySelectorAll('[data-testid^="provider-actions-"]')].map(e=>e.getAttribute("data-testid").slice(17));
+    document.querySelectorAll('[data-testid^="provider-catalog-tile-agent-hub-"]').forEach(tile=>{const kind=tile.getAttribute("data-testid").slice(32),b=tile.querySelector('[data-testid^="install-provider-"]');if(!b)return;
+      const n=ids.filter(i=>!BUILTIN.has(i)&&(i===kind||i.startsWith(kind+"-"))).length;let tag=tile.querySelector("[data-ah-added]");
+      if(n>0){if(!tag){tag=document.createElement("div");tag.setAttribute("data-ah-added","1");tag.style.cssText="font-size:12px;opacity:.75";const nm=[...tile.querySelectorAll("div")].find(e=>!e.children.length&&(e.textContent||"").trim()&&e.getBoundingClientRect().height>0);if(nm&&nm.parentElement)nm.parentElement.appendChild(tag)}
+        if(tag)tag.textContent="Already added: "+n;const w2=document.createTreeWalker(b,NodeFilter.SHOW_TEXT);let x;while((x=w2.nextNode()))if(/^Add$/.test(x.nodeValue.trim()))x.nodeValue="Add another"}
+      else if(tag){tag.remove();const w2=document.createTreeWalker(b,NodeFilter.SHOW_TEXT);let x;while((x=w2.nextNode()))if(x.nodeValue.trim()==="Add another")x.nodeValue="Add"}})}
   // account e-mails on the Usage cards are masked (a shared screen or a screenshot must not show them); hover shows the full address
   if(/\/usage$/.test(location.pathname)){const w0=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n0;while((n0=w0.nextNode())){const m=(n0.nodeValue||'').match(/^(\d{2,3})% used$/);if(m&&+m[1]>=90)n0.nodeValue=m[1]+'% used - '+(+m[1]>=100?'full':'almost full')+', tasks on this plan may be refused until it resets'}}
   if(/\/usage$/.test(location.pathname)){const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;while((n=w.nextNode())){const m=(n.nodeValue||"").match(/^\s*([\w.+-]{2,})@([\w-]+(?:\.[\w-]+)+)\s*$/);if(m&&n.parentElement){n.parentElement.title=m[1]+"@"+m[2];n.nodeValue=m[1][0]+"***@"+m[2]}}}

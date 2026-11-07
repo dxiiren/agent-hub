@@ -256,7 +256,7 @@
   {
    "name": "search-nomatches",
    "find": "searchingFiles:\"Searching files...\",noMatches:\"No matches\"",
-   "replace": "searchingFiles:\"Searching files...\",noMatches:\"Nothing found in workspaces, agents or actions. To change a setting, open Settings (bottom left)\""
+   "replace": "searchingFiles:\"Searching files...\",noMatches:\"Nothing found in workspaces, agents, actions or settings pages\""
   },
   {
    "name": "diag-hint",
@@ -307,7 +307,22 @@
    "name": "rename-default-maxlength",
    "find": "onSubmit:j,validate:C,maxLength:D,testID:z}=l,",
    "replace": "onSubmit:j,validate:C,maxLength:D=100,testID:z}=l,"
+  },
+  {
+   "name": "provider-menu-content",
+   "find": "M=(0,B.jsx)(k.DropdownMenuContent,{align:\"end\",width:220,children:(0,B.jsx)(k.DropdownMenuItem,{destructive:!0,leading:C,onSelect:y,status:R,pendingLabel:I,testID:z,children:D})})",
+   "replace": "M=(0,B.jsxs)(k.DropdownMenuContent,{align:\"end\",width:220,children:[(0,B.jsx)(k.DropdownMenuItem,{onSelect:()=>{e.onRetry&&e.onRetry()},testID:\"provider-recheck-\"+t,children:\"Check again\"},\"re\"),e.canRemove?(0,B.jsx)(k.DropdownMenuItem,{destructive:!0,leading:C,onSelect:y,status:R,pendingLabel:I,testID:z,children:D},\"rm\"):(0,B.jsx)(k.DropdownMenuItem,{disabled:!0,onSelect:()=>{},testID:\"provider-builtin-\"+t,children:\"Built in: cannot be removed\"},\"bi\")]})"
+  },
+  {
+   "name": "provider-menu-all-rows",
+   "find": "w?(0,B.jsx)(E,{providerId:p.id,providerLabel:p.label,isRemoving:S,iconSize:k.iconSize.sm,foregroundColor:k.colors.foreground,foregroundMutedColor:k.colors.foregroundMuted,dangerColor:k.colors.statusDanger,onRemove:T}):null",
+   "replace": "(0,B.jsx)(E,{providerId:p.id,providerLabel:p.label,isRemoving:S,iconSize:k.iconSize.sm,foregroundColor:k.colors.foreground,foregroundMutedColor:k.colors.foregroundMuted,dangerColor:k.colors.statusDanger,onRemove:T,canRemove:w,onRetry:__ahRetry})"
+  },
+  {
+   "name": "search-settings-pages",
+   "find": "co=[be,Re,We,Ee,Le,Je,$e,io],F)",
+   "replace": "co=[be,Re,We,Ee,Le,Je,$e,io,...(globalThis.__ahSettingsActions?globalThis.__ahSettingsActions(e=>{(0,_.clearCommandCenterFocusRestoreElement)(),t.router.push(e)},B):[])],F)"
   }
  ],
- "rev": 15
+ "rev": 16
 }
