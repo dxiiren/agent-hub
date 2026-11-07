@@ -4,8 +4,8 @@ import { SettingsAction, SettingsCard, SettingsInput, SettingsRow, SettingsSecti
 import { routingRpc } from "../shared/rpc";
 import { R } from "./routing-strings";
 
-type Prov = { id: string; label: string; status: string | null; enabled: boolean; slots: number | null; models: string[] | null; readOnlyAllowed: boolean };
-type Show = { types: string[]; chains: Record<string, string[]>; providers: Prov[]; maxSlots: number; canUndo: boolean; configuredTotal: number; effective: { configured: number; effective: number; reasons: string[]; source: string } };
+type Prov = { id: string; label: string; status: string | null; enabled: boolean; slots: number | null; cap: number | null; models: string[] | null; readOnlyAllowed: boolean };
+type Show = { types: string[]; chains: Record<string, string[]>; providers: Prov[]; maxSlots: number; canUndo: boolean; configuredTotal: number; effective: { configured: number; effective: number; configEffective: number; laptopCap: number | null; reasons: string[]; source: string } };
 type Models = { loading?: boolean; list?: { id: string; label: string }[]; known?: boolean; error?: string };
 const ADD = "__add__";
 const OFF = "off";
@@ -84,7 +84,7 @@ export function RoutingScreen() {
       <SettingsSection title={R.title}>
         <SettingsCard>
           <SettingsRow label={R.intro} />
-          <SettingsRow label={R.total(data.configuredTotal)} hint={R.effective(eff.effective, eff.source)} />
+          <SettingsRow label={R.total(data.configuredTotal)} hint={R.effective(eff.effective, eff.laptopCap, eff.configEffective)} />
           {eff.reasons.map((x) => <SettingsRow key={x} label={x} />)}
           {note("top")}
           <SettingsAction label={R.undoLabel} hint={data.canUndo ? undefined : R.nothingToUndo} actionLabel={R.undo} disabled={busy || !data.canUndo} onPress={() => void save("undo", {}, R.undone)} />
@@ -100,6 +100,7 @@ export function RoutingScreen() {
               <SettingsRow label={R.status} hint={`${R.statusWord(p.status)}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />
               <SettingsInput label={R.slots(data.maxSlots)} hint={p.slots == null ? R.unlimited : undefined} initialValue={slots[p.id] ?? ""} onChangeText={(t) => setSlots((s) => ({ ...s, [p.id]: t }))} />
               <SettingsAction label={R.slotsAction} actionLabel={R.saveSlots} disabled={busy || (slots[p.id] ?? "") === (p.slots == null ? "" : String(p.slots))} onPress={() => void setProv(p.id, { slots: (slots[p.id] ?? "").trim() })} />
+              <SettingsRow label={R.cap(p.cap)} />
               {m.known && !m.error ? (
                 <SettingsAction label={R.models} hint={p.models ? R.someModels(p.models.length, m.list!.length) : R.allModels} actionLabel={openModels[p.id] ? R.hideList : R.showList(m.list!.length)} onPress={() => setOpenModels((o) => ({ ...o, [p.id]: !o[p.id] }))} />
               ) : <SettingsRow label={R.models} hint={m.loading ? R.loading : m.error ? undefined : R.noList} />}

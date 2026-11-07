@@ -17,6 +17,7 @@ import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mj
 import { batchAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
 import { runDir } from "./runstate.mjs";
+import { effectiveBudget, chainOrder, costGb, laptopNow, dropWslCache, heldIn } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -357,8 +358,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   const chain = o.provider ? [o.provider] : own(routes.routes, o.type);
   if (!chain) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   if (!chain.length) return { used: null, trace: [{ error: `no provider configured for ${o.type}: add one in Settings > Providers` }] };
-  const slots = routes.slots ?? {};
   const trace = [];
+  const lapNow = () => (o.laptop ? o.laptop() : o.freeMem ? { freeGb: o.freeMem() } : {}); // no laptop reader (unit tests): no laptop limit
+  const heldOthers = () => (o.marker?.dir ? heldIn(o.marker.dir).filter((x) => x.n !== basename(o.marker.file)).length : 0);
+  let slots = routes.slots ?? {}; // per-provider slots after a disabled provider's slots moved to the enabled ones (budget.mjs); set once the provider state is known
   if (o.provider && readOnlyType(o.type, routes)) {
     const p = base(o.provider);
     if (p !== "claude" && !readOnlyEnforced(p, routes) // "claude/<alias>" resolves to claude-clean, re-checked below
@@ -388,6 +391,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
   const installed = state ? new Set(state.keys()) : null;
+  if (routes.slots) slots = budgetFor(routes, state, {}, 0).perProvider;
   for (const entry of chain) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
@@ -403,8 +407,20 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const floor = routes.minFreeRamGbByProvider?.[base(prov)] ?? routes.minFreeRamGb ?? 2;
       const sleep = o.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
       ramLeftMs ??= toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m") * 1000;
-      let wait = 2000; while (o.freeMem() < floor && ramLeftMs > 0) { sleep(wait); ramLeftMs -= wait; wait = Math.min(wait * 2, 30000); }
-      if (o.freeMem() < floor) { trace.push({ provider: prov, skip: `low RAM: ${o.freeMem().toFixed(1)} GB free, floor ${floor} GB` }); continue; }
+      // Hold until this laptop can carry one more agent: free RAM above the provider's floor AND the laptop budget (budget.mjs) not used up by the routes already running. A waiting route is "queued" (holds no slot) and starts no CLI.
+      const blocked = () => {
+        if (o.freeMem() < floor) return `low RAM: ${o.freeMem().toFixed(1)} GB free, floor ${floor} GB`;
+        const held = heldOthers(); const b = budgetFor(routes, state, lapNow(), held);
+        return b.laptopCap !== null && held >= b.effective ? `laptop budget ${b.effective} used up (configured ${b.configured}): ${b.reasons.filter((r) => r.startsWith("laptop")).join("; ") || "all slots busy"}` : null;
+      };
+      let why = blocked(); let waited = false;
+      if (why) {
+        setMarker(o.marker, null); waited = true; trace.push({ provider: prov, note: `waiting, nothing started: ${why}` });
+        if (routes.dropWslCache === true) { const l = (o.dropCache ?? (() => dropWslCache({ logDir: o.marker?.dir })))(); if (l) trace.push({ provider: prov, note: l }); why = blocked(); }
+      }
+      let wait = 2000; while (why && ramLeftMs > 0) { sleep(wait); ramLeftMs -= wait; wait = Math.min(wait * 2, 30000); why = blocked(); }
+      if (why) { trace.push({ provider: prov, skip: why }); continue; }
+      if (waited && !claimSlot(o.marker, base(prov), own(slots, base(prov)))) { trace.push({ provider: prov, skip: `slots full: ${own(slots, base(prov))} other routes already hold ${base(prov)}` }); continue; }
     }
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     let wt = null; // this entry's route-created worktree
@@ -485,21 +501,26 @@ export function providerState(paseo) {
     return m.size ? m : null;
   } catch { return null; }
 }
-/** Slots per provider with enabled flag, and the total over ENABLED providers only (a provider absent from the state counts as enabled). */
-export function slotInfo(routes, state) {
-  const providers = {}; let total = 0;
-  for (const [id, n] of Object.entries(routes.slots ?? {})) { const enabled = !state || state.get(id) !== false; providers[id] = { slots: n, enabled }; if (enabled) total += n; }
-  return { providers, total };
+/** Slots per provider with enabled flag, and the total the hub may use now (budget.mjs: configured slots of enabled providers, a disabled one's slots moved under the others' caps, limited by what the laptop can hold). `lap` = { freeGb, cpuPct }; `busy` = routes holding a slot. */
+export function slotInfo(routes, state, lap = {}, busy = 0) {
+  const b = budgetFor(routes, state, lap, busy); const providers = {};
+  for (const [id, n] of Object.entries(routes.slots ?? {})) providers[id] = { slots: n, enabled: !state || state.get(id) !== false, effective: b.perProvider[id] };
+  return { providers, total: b.effective, configured: b.configured, configEffective: b.configEffective, laptopCap: b.laptopCap, reasons: b.reasons, freeGb: lap.freeGb ?? null, at: Date.now() };
+}
+/** effectiveBudget for a routes file and the daemon's provider state. */
+export function budgetFor(routes, state, lap = {}, busy = 0) {
+  const enabled = {}; for (const id of Object.keys(routes.slots ?? {})) enabled[id] = !state || state.get(id) !== false;
+  return effectiveBudget({ slots: routes.slots ?? {}, enabled, caps: routes.slotCaps ?? {}, order: chainOrder(routes), freeGb: lap.freeGb, cpuPct: lap.cpuPct, busy, floorGb: routes.minFreeRamGb ?? 2, cost: (id) => costGb(id, routes) });
 }
 /** Statusline source (cheap, no daemon call): one marker file per running route in <home>/usage/active, plus total.json (sum of routes.slots). Best effort; a killed route leaves a file the reader ignores after 30 min. */
-export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage", "active"), state = null) {
+export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage", "active"), state = null, lap = {}) {
   try {
     mkdirSync(dir, { recursive: true });
     for (const n of readdirSync(dir)) { // sweep markers of killed routes (the reader ignores them after 30 min anyway)
       if (!n.startsWith("t-")) continue;
       try { if (Date.now() - statSync(join(dir, n)).mtimeMs > 30 * 60 * 1000) rmSync(join(dir, n), { force: true }); } catch { /* best effort */ }
     }
-    writeFileSync(join(dir, "total.json"), JSON.stringify(slotInfo(routes, state))); // total = slots of enabled providers; refreshed on every route, so a toggle shows from the next one
+    writeFileSync(join(dir, "total.json"), JSON.stringify(slotInfo(routes, state, lap, heldIn(dir).length))); // total = slots of enabled providers; refreshed on every route, so a toggle shows from the next one
     const f = join(dir, `t-${process.pid}-${Date.now()}.json`);
     writeFileSync(f, JSON.stringify({ provider: provider ?? null, state: provider ? "run" : "queued" }));
     const un = () => { try { rmSync(f, { force: true }); } catch { /* best effort */ } };
@@ -507,23 +528,17 @@ export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?
     return un;
   } catch { return () => {}; }
 }
-const markerAge = 30 * 60 * 1000;
 /** Set what this route holds: a provider (a slot, state "run") or null (queued, waiting for one). Best effort. */
 export function setMarker(un, provider) { try { if (un?.file) writeFileSync(un.file, JSON.stringify({ provider: provider ?? null, state: provider ? "run" : "queued" })); } catch { /* best effort */ } }
 /**
  * Slot reservation across processes. A route writes its provider into its own marker FIRST, then counts the live markers holding that provider in start order:
  * it keeps the slot only when its rank is below `slots`. Without it, 30 routes started in one second all read "0 busy" from `paseo ls` (agents are not registered yet) and all piled onto the same provider.
  */
-const pidAlive = (n) => { const pid = Number(n.split("-")[1]); if (!pid) return true; try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 export function claimSlot(un, provider, slots) {
   if (!un?.file || !Number.isFinite(slots)) return true;
   setMarker(un, provider);
   try {
-    const stamp = (n) => Number(n.split("-")[2]?.replace(".json", "")) || 0;
-    const live = readdirSync(un.dir).filter((n) => n.startsWith("t-") && Date.now() - statSync(join(un.dir, n)).mtimeMs < markerAge && pidAlive(n)) // a killed route's marker holds no slot (it used to, for 30 min)
-      .filter((n) => { try { return JSON.parse(readFileSync(join(un.dir, n), "utf8")).provider === provider; } catch { return false; } })
-      .sort((a, b) => stamp(a) - stamp(b) || a.localeCompare(b));
-    const rank = live.indexOf(basename(un.file));
+    const rank = heldIn(un.dir).filter((x) => x.provider === provider).findIndex((x) => x.n === basename(un.file));
     if (rank >= 0 && rank < slots) return true;
     setMarker(un, null); return false;
   } catch { return true; }
@@ -562,12 +577,12 @@ function main(argv) {
   const routes = loadRoutes();
   { const me = modeError(opt("--mode"), routes); if (me) { console.error("route: " + me); return 2; } }
   const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)));
-  const unmark = markActive(routes, opt("--provider"), undefined, pstate);
+  const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
   let res;
   try { res = runRoute({
     providerState: pstate, marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
-    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, freeMem: () => os.freemem() / 2 ** 30,
+    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, freeMem: () => os.freemem() / 2 ** 30, laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;

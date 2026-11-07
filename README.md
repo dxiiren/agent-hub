@@ -71,11 +71,11 @@ Settings > Plugins > agent-hub-providers > **Routing & slots** (also in the comm
 - **Per provider:** on/off (Paseo's own enabled flag; the page changes it live through the daemon, the CLI writes the Paseo config and tells you to restart), which of its models the hub may use (the list is collapsed; Show N models opens one switch per model from the live list; none restricted = all allowed), parallel slots (1 to 64), and whether it may run read-only tasks (shown, not editable).
 - **Per task type** (`code-edit`, `code-edit-easy`, `summarise`, `test-scaffold`, `review`): chain order with Up / Down / Off and an add list. Earlier entries are tried first.
 - **A model that is not allowed is never used:** the next entry is tried, and an explicit `--provider P/M` cannot bypass it. A chain entry with no model (an endpoint provider's own model) is not restricted.
-- **Totals:** the page shows configured slots and an "effective now" figure (today the slots of enabled providers; `effectiveBudget()` in `plugins/routing/budget.mjs` is the one place a laptop-based budget plugs in).
+- **Totals (laptop-based budget):** the page, `agent-hub routes show` and the statusline (`busy/effective`, e.g. `3/16 of 19 laptop`) show the configured total and the effective one. `effectiveBudget()` in `plugins/routing/budget.mjs` is `min(config side, laptop side)`. Config side: the slots of enabled providers; a disabled or unavailable provider's slots move to the enabled ones in chain priority, never above that provider's `slotCaps` entry (`agent-hub routes set <id> --cap N`; no cap = its own slots, so nothing moves). The configured total may exceed 19 (up to 64 per provider). Laptop side: `running + floor((free RAM - minFreeRamGb) / RAM per agent)`, cached 10 s, and nothing new starts while CPU is above 85%. RAM per agent is per kind (`agentCostGb`, defaults in `budget.mjs`; measured: claude about 0.5 GB, codex and qoder about 0.25 GB). When the budget is 0 a route waits (state "queued", no CLI started) and its trace says why. Optional, Windows only, off by default: `"dropWslCache": true` in the routes file drops the WSL page cache before a route waits (logged in `<home>/usage/active/budget.log`).
 
 ```
 agent-hub routes show [--json] | models <provider> | undo
-agent-hub routes set <provider> [--slots N] [--models id,id|all] [--enabled true|false]
+agent-hub routes set <provider> [--slots N] [--cap N|off] [--models id,id|all] [--enabled true|false]
 agent-hub routes chain <type> <entry,entry,...>
 agent-hub routes move <type> <entry> up|down|off
 ```

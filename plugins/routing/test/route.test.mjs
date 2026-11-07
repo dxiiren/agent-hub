@@ -649,7 +649,7 @@ test("RAM admission: waits with backoff until free RAM clears the floor, then st
   assert.equal(r.used, "qwen/b"); assert.deepEqual(sleeps, [2000, 4000, 8000]);
   const f2 = fake({ run: () => ({ status: "completed", agentId: "B" }) });
   const r2 = runRoute({ ...o, waitTimeout: "10s", freeMem: () => 0.5, sleep: () => {} }, f2, { ...routes, routes: { edit: ["qwen/b"] } });
-  assert.equal(r2.used, null); assert.match(r2.trace[0].skip, /low RAM/); assert.equal(f2.calls.filter((c) => c[0] === "run").length, 0);
+  assert.equal(r2.used, null); assert.match(r2.trace.find((t) => t.skip).skip, /low RAM/); assert.equal(f2.calls.filter((c) => c[0] === "run").length, 0);
   const f3 = fake({ run: () => ({ status: "completed", agentId: "C" }) }); // per-provider floor
   const r3 = runRoute({ ...o, waitTimeout: "2s", freeMem: () => 3, sleep: () => {} }, f3, { ...routes, minFreeRamGbByProvider: { qwen: 6 }, routes: { edit: ["qwen/b"] } });
   assert.equal(r3.used, null);
@@ -740,7 +740,7 @@ test("a disabled provider is skipped with a trace entry and drops out of total.j
   assert.equal(slotInfo(rt, st).total, 3);
   assert.equal(slotInfo(rt, null).total, 5);
   const dir = mkdSt(joSt(tmpdir(), "ahub-active-")); markActive(rt, null, dir, st);
-  assert.deepEqual(JSON.parse(rdSt(joSt(dir, "total.json"), "utf8")).providers.codex, { slots: 2, enabled: false });
+  assert.deepEqual(JSON.parse(rdSt(joSt(dir, "total.json"), "utf8")).providers.codex, { slots: 2, enabled: false, effective: 0 });
 });
 
 import { claimSlot, setMarker } from "../route.mjs";

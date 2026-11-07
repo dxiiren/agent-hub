@@ -8,6 +8,7 @@
 // ONE backend for the CLI and the Settings page (plugins/providers, screen "routing"). The routes file stays the single source of truth route.mjs reads;
 // writes take the same lock and atomic write as `provider add`, never touch a template, and are undone byte for byte from a snapshot stack.
 // "Enabled" lives in Paseo (agents.providers.<id>.enabled): the page changes it through the daemon's config API (the result's `enabledChanges`); the CLI writes the Paseo config file and says when the daemon must be restarted.
+import os from 'node:os';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +16,7 @@ import { paths, rdr, lockOf, sha, bytes, providerModels } from './provider.mjs';
 import { writeJsonKeepEol as wr, writeAtomic, readJsonStrict as rd, own } from '../plugins/routing/jsonfile.mjs';
 import { withLock } from '../plugins/routing/lock.mjs';
 import { cliPaseo, READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
-import { effectiveBudget } from '../plugins/routing/budget.mjs';
+import { effectiveBudget, chainOrder, costGb, laptopNow, heldIn } from '../plugins/routing/budget.mjs';
 
 export const TASK_TYPES = ['code-edit', 'code-edit-easy', 'summarise', 'test-scaffold', 'review'];
 export const MAX_SLOTS = 64;
@@ -59,18 +60,24 @@ export async function modelsOf(id, p = paths(), o = {}) {
   } catch (e) { return { ids: [], models: [], known: false, error: String(e.message || e) }; }
 }
 
+/** Inputs of effectiveBudget for a routes file: caps, chain order, per-kind RAM costs and (unless o.laptop === false) this laptop's free RAM and CPU now. */
+function budgetInput(routes, enabled, o = {}) {
+  const lap = o.laptop === false ? {} : o.laptop ?? laptopNow();
+  return { slots: routes.slots ?? {}, enabled, caps: routes.slotCaps ?? {}, order: chainOrder(routes), freeGb: lap.freeGb, cpuPct: lap.cpuPct, floorGb: routes.minFreeRamGb ?? 2, cost: (id) => costGb(id, routes), busy: o.busy ?? heldIn(o.activeDir ?? join(process.env.PASEO_HOME ?? join(os.homedir(), '.paseo'), 'usage', 'active')).length };
+}
+
 export function show(p = paths(), o = {}) {
   const routes = rdr(p, {}); const cfg = rd(p.paseo, {});
   const types = [...new Set([...TASK_TYPES, ...Object.keys(routes.routes ?? {})])];
   const ro = routes.readOnlyEnforced ?? READ_ONLY_ENFORCED;
   const providers = [...providerIds(p, o, routes).values()].map((d) => ({
     id: d.id, label: d.label, status: d.status ?? null, enabled: d.enabled,
-    slots: own(routes.slots, d.id) ?? null, models: own(routes.allowedModels, d.id) ?? null, readOnlyAllowed: ro.includes(d.id) || d.id === 'claude',
+    slots: own(routes.slots, d.id) ?? null, cap: own(routes.slotCaps, d.id) ?? null, models: own(routes.allowedModels, d.id) ?? null, readOnlyAllowed: ro.includes(d.id) || d.id === 'claude',
     chains: Object.fromEntries(types.map((t) => [t, (own(routes.routes, t) ?? []).filter((e) => baseOf(e) === d.id)])),
   }));
   const enabled = Object.fromEntries(providers.map((x) => [x.id, x.enabled]));
   return { types, chains: Object.fromEntries(types.map((t) => [t, [...(own(routes.routes, t) ?? [])]])), providers, maxSlots: MAX_SLOTS, canUndo: readUndo(p).length > 0,
-    configuredTotal: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0), effective: effectiveBudget({ slots: routes.slots ?? {}, enabled }),
+    configuredTotal: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0), effective: effectiveBudget(budgetInput(routes, enabled, o)),
     paseoConfigEnabled: Object.fromEntries(Object.keys(enabled).map((id) => [id, fileEnabled(cfg, id)])) };
 }
 
@@ -82,6 +89,7 @@ export function validate(ch, routes, ids, live = {}) {
     if (!ids.has(id)) { err.push(`unknown provider "${id}" (known: ${[...ids.keys()].sort().join(', ') || 'none'})`); continue; }
     if (c === null || typeof c !== 'object') { err.push(`${id}: expected an object`); continue; }
     if (c.slots !== undefined) { const n = typeof c.slots === 'string' && /^\d+$/.test(c.slots.trim()) ? Number(c.slots) : c.slots; if (!Number.isInteger(n) || n < 1 || n > MAX_SLOTS) err.push(`${id}: slots must be a whole number from 1 to ${MAX_SLOTS} (got ${JSON.stringify(c.slots)})`); }
+    if (c.cap !== undefined && c.cap !== null) { const n = typeof c.cap === 'string' && /^\d+$/.test(c.cap.trim()) ? Number(c.cap) : c.cap; if (!Number.isInteger(n) || n < 1 || n > MAX_SLOTS) err.push(`${id}: cap must be a whole number from 1 to ${MAX_SLOTS} (got ${JSON.stringify(c.cap)})`); else if (n < Number(c.slots ?? routes.slots?.[id] ?? 0)) err.push(`${id}: cap ${n} is below its slots`); }
     if (c.enabled !== undefined && bool(c.enabled) === undefined) err.push(`${id}: enabled must be true or false`);
     if (c.models !== undefined && c.models !== null && c.models !== 'all') {
       if (!Array.isArray(c.models) || !c.models.length) err.push(`${id}: models must be a non-empty list of model ids, or "all"`);
@@ -118,6 +126,7 @@ export async function set(ch, p = paths(), o = {}) {
     const next = structuredClone(routes);
     for (const [id, c] of Object.entries(ch.providers ?? {})) {
       if (c.slots !== undefined) { next.slots ??= {}; next.slots[id] = Number(c.slots); }
+      if (c.cap !== undefined) { if (c.cap === null) { delete next.slotCaps?.[id]; if (next.slotCaps && !Object.keys(next.slotCaps).length) delete next.slotCaps; } else { next.slotCaps ??= {}; next.slotCaps[id] = Number(c.cap); } }
       if (c.models !== undefined) {
         if (c.models === null || c.models === 'all') { delete next.allowedModels?.[id]; if (next.allowedModels && !Object.keys(next.allowedModels).length) delete next.allowedModels; }
         else { next.allowedModels ??= {}; next.allowedModels[id] = [...c.models]; }
@@ -166,14 +175,14 @@ export async function api({ verb, args = {} }, p = paths(), o = {}) {
 const USAGE = `usage:
   routes show [--json]
   routes models <provider>
-  routes set <provider> [--slots 1..${MAX_SLOTS}] [--models id,id|all] [--enabled true|false]
+  routes set <provider> [--slots 1..${MAX_SLOTS}] [--cap 1..${MAX_SLOTS}] [--models id,id|all] [--enabled true|false]
   routes chain <type> <entry,entry,...>     (types: ${TASK_TYPES.join(', ')})
   routes move <type> <entry> up|down|off
   routes undo`;
 
 function render(s) {
-  const L = [`Configured slots ${s.configuredTotal}   effective now ${s.effective.effective} (${s.effective.source})${s.effective.reasons.length ? '\n  ' + s.effective.reasons.join('\n  ') : ''}`, '', 'Providers:'];
-  for (const x of s.providers) L.push(`  ${x.id.padEnd(26)} ${x.enabled ? 'on ' : 'OFF'}  slots ${String(x.slots ?? '-').padEnd(3)} models ${x.models ? x.models.join(',') : 'all'}${x.readOnlyAllowed ? '  read-only ok' : ''}`);
+  const L = [`Configured slots ${s.configuredTotal}   effective now ${s.effective.effective} (${s.effective.source}${s.effective.laptopCap === null ? '' : `, laptop holds ${s.effective.laptopCap}`})${s.effective.reasons.length ? '\n  ' + s.effective.reasons.join('\n  ') : ''}`, '', 'Providers:'];
+  for (const x of s.providers) L.push(`  ${x.id.padEnd(26)} ${x.enabled ? 'on ' : 'OFF'}  slots ${String(x.slots ?? '-').padEnd(3)} cap ${String(x.cap ?? '-').padEnd(3)} models ${x.models ? x.models.join(',') : 'all'}${x.readOnlyAllowed ? '  read-only ok' : ''}`);
   L.push('', 'Chains (first is tried first):');
   for (const t of s.types) L.push(`  ${t.padEnd(15)} ${s.chains[t].map((e, i) => `${i + 1}. ${e}`).join('  ') || '(empty)'}`);
   return L.join('\n');
@@ -188,9 +197,9 @@ export async function main(argv, p = paths(), o = {}) {
     let r;
     if (cmd === 'set') {
       if (!pos[0]) throw new Error('set needs a provider id');
-      const c = {}; if (f.slots !== undefined) c.slots = f.slots; if (f.enabled !== undefined) c.enabled = f.enabled;
+      const c = {}; if (f.slots !== undefined) c.slots = f.slots; if (f.cap !== undefined) c.cap = f.cap === 'off' ? null : f.cap; if (f.enabled !== undefined) c.enabled = f.enabled;
       if (f.models !== undefined) c.models = f.models === 'all' ? 'all' : f.models.split(',').map((x) => x.trim()).filter(Boolean);
-      if (!Object.keys(c).length) throw new Error('nothing to set: pass --slots, --models or --enabled');
+      if (!Object.keys(c).length) throw new Error('nothing to set: pass --slots, --cap, --models or --enabled');
       r = await set({ providers: { [pos[0]]: c } }, p, o);
     } else if (cmd === 'chain') {
       if (!pos[0]) throw new Error('chain needs a task type');

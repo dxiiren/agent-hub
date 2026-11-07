@@ -18,7 +18,7 @@ function box(routes = ROUTES) {
   writeFileSync(p.paseo, JSON.stringify({ agents: { providers: { codex: {}, qoder: {} } } }));
   const LS = [{ provider: 'codex', label: 'Codex', status: 'available', enabled: 'Enabled' }, { provider: 'qoder', label: 'Qoder', status: 'available', enabled: 'Enabled' }, { provider: 'claude', label: 'Claude', status: 'available', enabled: 'Disabled' }];
   const models = { codex: ['gpt-a', 'gpt-b', 'gpt-c'], qoder: ['q1', 'q2'], claude: ['claude-haiku-1'] };
-  const o = { paseoLs: () => LS, paseoModels: (id) => (models[id] ?? []).map((x) => ({ id: x, label: x })) };
+  const o = { laptop: false, activeDir: t, paseoLs: () => LS, paseoModels: (id) => (models[id] ?? []).map((x) => ({ id: x, label: x })) };
   return { p, o, read: () => JSON.parse(readFileSync(p.routes, 'utf8')) };
 }
 
@@ -122,4 +122,17 @@ test('api verbs (the Settings page): show, models, set, undo; errors come back a
   await api({ verb: 'set', args: { providers: { qoder: { slots: 7 } } } }, p, o); assert.equal(show(p, o).providers.find((x) => x.id === 'qoder').slots, 7);
   assert.equal((await api({ verb: 'undo' }, p, o)).undone, true);
   await assert.rejects(api({ verb: 'zap' }, p, o), /unknown verb/);
+});
+
+test('cap: set/clear a per-provider cap, show reports it and the laptop-limited effective total; a cap below the slots is refused', async () => {
+  const { p, o, read } = box();
+  await set({ providers: { qoder: { cap: 6 } } }, p, o);
+  assert.deepEqual(read().slotCaps, { qoder: 6 });
+  assert.equal(show(p, o).providers.find((x) => x.id === 'qoder').cap, 6);
+  await assert.rejects(set({ providers: { qoder: { cap: 1 } } }, p, o), /below its slots/);
+  await assert.rejects(set({ providers: { qoder: { cap: 99 } } }, p, o), /cap must be a whole number/);
+  const lap = show(p, { ...o, laptop: { freeGb: 2.3, cpuPct: 10 } }); // 0.3 GB above the floor: room for 1 agent
+  assert.equal(lap.effective.laptopCap, 1); assert.equal(lap.effective.effective, 1); assert.match(lap.effective.reasons.join(' '), /laptop: 2.3 GB free/);
+  await set({ providers: { qoder: { cap: null } } }, p, o);
+  assert.equal(read().slotCaps, undefined);
 });
