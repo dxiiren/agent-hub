@@ -95,7 +95,7 @@ export function removeStaleProjects({ paseo, dry = false, junk = false, tmp = tm
 }
 
 const real = (p) => { try { return realpathSync.native(p); } catch { return resolve(p); } }; // 8.3 short names (C:\Users\KOLLEC~1) and long names compare equal
-const norm = (p) => real(p).replace(/[\/]+$/, "").toLowerCase();
+const norm = (p) => real(p).replace(/[\\/]+$/, "").toLowerCase();
 const within = (p, root) => { if (!root) return false; const a = norm(p), b = norm(root); return a === b || a.startsWith(b + "\\") || a.startsWith(b + "/"); };
 /** Never junk, whatever else matches: the owner's real repos. Only folders no pattern below names are ever listed, this is a second belt. */
 const KEEP = /^(agent-hub|Claude-Code-Usage-Monitor)$/i;
