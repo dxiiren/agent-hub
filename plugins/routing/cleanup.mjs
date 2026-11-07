@@ -1,4 +1,4 @@
-// agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--home H] [--fix-model-ids] [--stale-projects] [--paseo-defaults]
+// agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--home H] [--fix-model-ids] [--stale-projects] [--paseo-defaults [--yes]]
 // Archives finished/idle agents so none lingers "running"/"idle" after a test, doctor or fix job.
 // --mine (default): only agents agent-hub itself created = labelled route/type=<a route type> (set by route.mjs) or caller=agent-hub-doctor (doctor --deep).
 // --all: every finished agent of the daemon, including other users' (never the default). Running agents are never touched.
@@ -64,11 +64,21 @@ function onlyEmpty(d) { // true when d holds nothing but empty folders and a zer
   let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return false; }
   return es.every((e) => (e.isDirectory() ? onlyEmpty(join(d, e.name)) : e.name === "empty.gitconfig" && statSync(join(d, e.name)).size === 0));
 }
-export function cleanGateTemp({ tmp = tmpdir(), dry = false, minAgeMs = 10 * 60_000, now = Date.now(), rm = rmSync } = {}) {
-  let n = 0, names = []; try { names = readdirSync(tmp).filter((x) => GATE_TMP.test(x)); } catch { return 0; }
+/** agent-hub-gate-XXXXXX (the per-process scan folder, left behind when its process was killed): ours by exact name; removed when the pid in its owner.pid is dead, or, for a folder with no owner.pid (older code), when it is over a day old. */
+const GATE_WORK = /^agent-hub-gate-[A-Za-z0-9]{6}$/;
+const pidDead = (pid) => { try { process.kill(pid, 0); return false; } catch (e) { return e?.code === "ESRCH"; } };
+export function cleanGateTemp({ tmp = tmpdir(), dry = false, minAgeMs = 10 * 60_000, now = Date.now(), rm = rmSync, dead = pidDead } = {}) {
+  let n = 0, names = []; try { names = readdirSync(tmp).filter((x) => GATE_TMP.test(x) || GATE_WORK.test(x)); } catch { return 0; }
   for (const x of names) {
     const d = join(tmp, x);
-    try { if (now - statSync(d).mtimeMs < minAgeMs || !onlyEmpty(d)) continue; if (!dry) rm(d, { recursive: true, force: true }); n++; } catch { /* held or gone: leave it */ }
+    try {
+      const age = now - statSync(d).mtimeMs;
+      if (GATE_WORK.test(x)) {
+        let pid = NaN; try { pid = parseInt(readFileSync(join(d, "owner.pid"), "utf8"), 10); } catch { /* no owner file */ }
+        if (!(Number.isInteger(pid) && pid > 0 ? dead(pid) : age > 86400_000)) continue;
+      } else if (age < minAgeMs || !onlyEmpty(d)) continue;
+      if (!dry) rm(d, { recursive: true, force: true }); n++;
+    } catch { /* held or gone: leave it */ }
   }
   return n;
 }
@@ -125,16 +135,18 @@ export function main(argv, env = process.env) {
   const r = cleanup({ paseo: withRetry(cliPaseo(home, env)), olderThan, all: argv.includes("--all"), routes: loadRoutes(env), dry: argv.includes("--dry-run") });
   console.log(`${argv.includes("--dry-run") ? "would archive" : "archived"} ${r.archived.length} agent(s), ${r.skipped} left (running, too new or not finished)${r.archived.length ? ": " + r.archived.map((i) => i.slice(0, 8)).join(" ") : ""}`);
   try { const d = cleanDoctorLeftovers({ paseo: withRetry(cliPaseo(home, env)), dry: argv.includes("--dry-run") }); if (d.dirs || d.projects) console.log(`${argv.includes("--dry-run") ? "would remove" : "removed"} ${d.dirs} leftover hub-doctor temp folder(s) and ${d.projects} of their Paseo project(s)`); } catch { /* the daemon may be down: the folders go next time */ }
-  if (!argv.includes("--dry-run") && guard) { try { for (const x of guard.reapOrphans({ idleMs: Number(env.LAPTOP_IDLE_MIN || 15) * 60_000 })) console.log(`stopped an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`); } catch { /* best effort */ } }
+  if (guard) { const dry = argv.includes("--dry-run"); try { for (const x of guard.reapOrphans({ idleMs: Number(env.LAPTOP_IDLE_MIN || 15) * 60_000, dry })) console.log(`${dry ? "would stop" : "stopped"} an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`); } catch { /* best effort */ }
+    try { const m = guard.migrateOldRunFiles({ dry }); if (m.length) console.log(`${dry ? "would remove" : "removed"} ${m.length} state file(s) of earlier hub code (dead owners): ${m.join(" ")}`); } catch { /* best effort */ } }
   { const dry = argv.includes("--dry-run"); const o = reapAgentOrphans({ dry }); if (o.length) console.log(`${dry ? "would stop" : "stopped"} ${o.length} orphaned agent shell snapshot process(es)`); }
   { const dry = argv.includes("--dry-run"); const g = cleanGateTemp({ dry }); if (g) console.log(`${dry ? "would remove" : "removed"} ${g} leftover agent-hub gate temp folder(s)`); }
-  if (argv.includes("--paseo-defaults")) { // keys a Paseo switch wrote with its default value; the daemon would rewrite its in-memory copy, so it must be stopped (a dry run is always fine)
-    const dry = argv.includes("--dry-run"), port = Number(env.AGENT_HUB_PORT || 6767);
+  if (argv.includes("--paseo-defaults")) { // keys whose value EQUALS Paseo's own default (read from the installed server), whoever wrote them: removing one changes no behaviour, it only drops a redundant explicit value. Always previews first: it applies only with --yes (and the daemon stopped, it would rewrite its in-memory copy)
+    const dry = argv.includes("--dry-run") || !argv.includes("--yes"), port = Number(env.AGENT_HUB_PORT || 6767);
     if (!dry && guard && guard.listenerPid(port)) { console.error("cleanup: --paseo-defaults edits the Paseo config file: stop the daemon first (just down), or add --dry-run to preview"); return 2; }
     try {
       const server = join(env.PASEO_SERVER_DIR || findServerDir() || "", "dist", "server", "server");
       const r = normalizeConfigFile(join(home ?? join(homedir(), ".paseo"), "config.json"), server, { dry });
       console.log(`${dry ? "would remove" : "removed"} ${r.removed.length} default-valued key(s) from the Paseo config${r.removed.length ? ": " + r.removed.join(" ") : ""}`);
+      if (dry && r.removed.length && !argv.includes("--dry-run")) console.log("preview only: stop the daemon (just down) and run again with --paseo-defaults --yes to apply");
     } catch (e) { console.error("cleanup: --paseo-defaults failed: " + e.message); return 1; }
   }
   if (argv.includes("--stale-projects")) { const dry = argv.includes("--dry-run"); try { const gone = removeStaleProjects({ paseo: withRetry(cliPaseo(home, env)), dry }); console.log(`${dry ? "would remove" : "removed"} ${gone.length} Paseo project(s) whose folder no longer exists${gone.length ? ": " + gone.join(" ") : ""}`); } catch (e) { console.error("cleanup: --stale-projects failed: " + e.message); } }

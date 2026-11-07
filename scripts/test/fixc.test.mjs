@@ -9,7 +9,8 @@ import { selfHostedProviders, selfHostedReport, readLocal, kindId, usesQwenCli, 
 import { add } from '../provider.mjs';
 import { runDir, writeState, readState, readStateJson, listState, trusted } from '../../plugins/routing/runstate.mjs';
 import { stopVerified, reapOrphans, writeOwn, readOwn, ownRecord, identityOk } from '../../deploy/laptop/gpu-guard.mjs';
-import { modeError, runRoute } from '../../plugins/routing/route.mjs';
+import { modeError, runRoute as runRouteReal } from '../../plugins/routing/route.mjs';
+const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test; gitleaks per route call would slow every case
 import { orphanSnapshotPids, reapAgentOrphans } from '../../plugins/routing/orphans.mjs';
 import { liveEnvNames, credentialNames } from '../daemon-env.mjs';
 

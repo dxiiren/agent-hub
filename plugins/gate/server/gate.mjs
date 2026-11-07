@@ -30,7 +30,8 @@ export function gitleaksBin(env = process.env) {
 /** ONE scratch folder per process, made on first use (never at import: 8,561 empty dirs piled up in %TEMP%) and removed when the process exits. */
 let WORK = null;
 function work() {
-  if (!WORK) { WORK = mkdtempSync(join(tmpdir(), "agent-hub-gate-")); process.once("exit", () => { try { rmSync(WORK, { recursive: true, force: true }); } catch { /* best effort */ } }); }
+  if (!WORK) { WORK = mkdtempSync(join(tmpdir(), "agent-hub-gate-")); writeFileSync(join(WORK, "owner.pid"), String(process.pid)); // cleanup removes the folder once this pid is dead
+    process.once("exit", () => { try { rmSync(WORK, { recursive: true, force: true }); } catch { /* best effort */ } }); }
   return WORK;
 }
 /** Empty folder: no .gitleaks.toml or .gitleaksignore is ever picked up from the caller's folder. */

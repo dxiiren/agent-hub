@@ -1,5 +1,5 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { appendUsage, emitOtlp, toRecord, usageDir } from "./server/usage.mjs";
+import { appendUsage, backfillUsage, emitOtlp, toRecord, usageDir } from "./server/usage.mjs";
 import { mcpCall, hubPassword } from "./server/mcp.mjs";
 import { fillRecord, qoderCredits, qoderSession, qwenSession } from "./server/sidecar.mjs";
 import { join } from "node:path";
@@ -18,22 +18,31 @@ export default function contribute(server: PluginServerContext) {
   server.addHook("agent.turn.before", async (event) => {
     if (event.agent.provider.startsWith("qoder")) preCredits.set(event.agent.id, qoderCredits()); // not awaited: the python poller takes 3 s idle and over 30 s on a loaded laptop, past Paseo's hook RPC limit
   });
+  // One record for an agent: the hook books a finished turn with it, and the load-time backfill books a turn the hook missed. skipEmpty: a backfilled agent that never produced usage gets no zero record.
+  async function book(id: string, provider: string, skipEmpty = false): Promise<boolean> {
+    const st: any = await mcpCall(MCP, hubPassword(), "get_agent_status", { agentId: id });
+    const rec = toRecord({ ...st?.snapshot, id, provider: st?.snapshot?.provider ?? provider });
+    const sid = st?.snapshot?.runtimeInfo?.sessionId;
+    if (usesQwenCli(rec.provider, readJson(join(paseoHome(), "config.json")), readLocal())) fillRecord(rec, join(usageDir(), "cursor.json"), { tokens: qwenSession(sid) });
+    else if (rec.provider.startsWith("qoder")) {
+      const sc = qoderSession(sid), b = await preCredits.get(id), a = sc == null ? await qoderCredits() : null; // account poll only when the session transcript has no credits
+      fillRecord(rec, join(usageDir(), "cursor.json"), { sessionCredits: sc, credits: a != null && b != null ? a - b : null });
+      preCredits.delete(id);
+    }
+    if (skipEmpty && !(rec.in || rec.out || rec.cached || rec.cost_usd || rec.credits)) return false;
+    appendUsage(usageDir(), rec);
+    await emitOtlp(process.env.AGENT_HUB_OTLP, rec).then(() => { otlpDown = false; }, (e) => { if (!otlpDown) console.error("agent-hub-usage otlp down", String(e)); otlpDown = true; });
+    return true;
+  }
   server.addHook("agent.turn.after", async (event) => {
     if (event.outcome.kind !== "completed") return;
-    try {
-      const st: any = await mcpCall(MCP, hubPassword(), "get_agent_status", { agentId: event.agent.id });
-      const rec = toRecord({ ...st?.snapshot, id: event.agent.id, provider: st?.snapshot?.provider ?? event.agent.provider });
-      const sid = st?.snapshot?.runtimeInfo?.sessionId;
-      if (usesQwenCli(rec.provider, readJson(join(paseoHome(), "config.json")), readLocal())) fillRecord(rec, join(usageDir(), "cursor.json"), { tokens: qwenSession(sid) });
-      else if (rec.provider.startsWith("qoder")) {
-        const sc = qoderSession(sid), b = await preCredits.get(event.agent.id), a = sc == null ? await qoderCredits() : null; // account poll only when the session transcript has no credits
-        fillRecord(rec, join(usageDir(), "cursor.json"), { sessionCredits: sc, credits: a != null && b != null ? a - b : null });
-        preCredits.delete(event.agent.id);
-      }
-      appendUsage(usageDir(), rec);
-      await emitOtlp(process.env.AGENT_HUB_OTLP, rec).then(() => { otlpDown = false; }, (e) => { if (!otlpDown) console.error("agent-hub-usage otlp down", String(e)); otlpDown = true; });
-    } catch (e) { console.error("agent-hub-usage", event.agent.id, String(e)); }
+    try { await book(event.agent.id, event.agent.provider); } catch (e) { console.error("agent-hub-usage", event.agent.id, String(e)); }
   });
+  // Backfill once after load (the daemon may still be starting: wait a little): a turn that finished while this plugin was reloading has no record yet.
+  const timer = setTimeout(() => {
+    backfillUsage({ dir: usageDir(), list: async () => ((await mcpCall(MCP, hubPassword(), "list_agents", {})) as any)?.agents ?? [], book: (a: any) => book(a.id, a.provider ?? "", true) })
+      .then((n) => { if (n) console.error(`agent-hub-usage backfilled ${n} usage record(s) missed during a reload`); }, (e) => console.error("agent-hub-usage backfill", String(e)));
+  }, 15_000);
   // Paseo web UI Usage panel: one Qoder account row beside Codex and Claude (Paseo caches a fetch for 5 min)
   server.registerUsageSource({
     id: "qoder",
@@ -72,5 +81,5 @@ export default function contribute(server: PluginServerContext) {
     });
   }
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
-  return () => {};
+  return () => { clearTimeout(timer); };
 }

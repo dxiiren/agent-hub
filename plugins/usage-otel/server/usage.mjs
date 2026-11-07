@@ -77,3 +77,23 @@ export async function emitOtlp(endpoint, rec, timeoutMs = 5_000) {
   const r = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(otlpBody(rec)), signal: AbortSignal.timeout(timeoutMs) });
   return r.ok;
 }
+
+/** Agent ids that already have a record in the global log. */
+export function bookedAgents(dir) {
+  const ids = new Set();
+  try { for (const l of readFileSync(join(dir, "usage.jsonl"), "utf8").split(String.fromCharCode(10))) { if (!l) continue; try { ids.add(JSON.parse(l).agent); } catch { /* partial line */ } } } catch { /* no log yet */ }
+  return ids;
+}
+const FINISHED = /^(idle|closed|completed|stopped)$/i;
+/**
+ * A usage plugin reload (disable/enable, Paseo update) drops the turn hook of an agent that finishes meanwhile, so its record is lost.
+ * Re-book recent finished agents that have no record. Idempotent by agent id (an agent with any record is skipped, also on a second run).
+ * list() -> [{id, status, updatedAt, provider}], book(agent) -> Promise<boolean> (true when it wrote a record).
+ */
+export async function backfillUsage({ list, book, dir, now = Date.now(), windowMs = 6 * 3600_000, max = 50 }) {
+  const seen = bookedAgents(dir);
+  const todo = (await list()).filter((a) => a?.id && FINISHED.test(String(a.status ?? "")) && now - Date.parse(a.updatedAt) <= windowMs && !seen.has(a.id)).slice(0, max);
+  let n = 0;
+  for (const a of todo) { try { if (await book(a)) n++; } catch { /* one bad agent never stops the rest */ } }
+  return n;
+}

@@ -1,15 +1,16 @@
 // Cross-process lock for the config files the hub rewrites (routes, hub.local.json, Paseo config.json): a lock file created with O_EXCL holding the owner's pid and time.
 // A lock whose owner pid is dead (or older than STALE_MS, pid reuse) is taken over. Re-entrant inside one async call chain (add -> reconcile -> removeManual).
 // shortcut: the sync form waits by sleeping the thread, so never call it while ANOTHER async call chain of the same process holds the lock; it times out with an error instead of hanging.
-import { writeFileSync, readFileSync, rmSync, statSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, statSync, mkdirSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const als = new AsyncLocalStorage();
 export const STALE_MS = 10 * 60 * 1000;
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; } };
 
 function tryTake(lf) {
+  mkdirSync(dirname(lf), { recursive: true }); // a fresh home has no folder yet
   try { writeFileSync(lf, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" }); return true; }
   catch (e) {
     if (e?.code !== "EEXIST") throw e;

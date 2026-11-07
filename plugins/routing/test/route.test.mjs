@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
-import { withAnswer, grantReads, lastAnswer, runRoute, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
+import { withAnswer, grantReads, lastAnswer, runRoute as runRouteReal, withRetry, transient, readOnlyType, READ_ONLY_MODES, readOnlyMode, cliPaseo, toSeconds, markActive } from "../route.mjs";
+const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test; gitleaks per route call would slow every case
 
 const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop", "opencode", "qoder"]; // fake providers in tests: enforcement is tested separately
 const routes = { readOnlyEnforced: ALL, readOnlyModes: { codex: "auto", qwen: "read-only" }, slots: { codex: 1, qwen: 2 }, routes: { edit: ["codex/a", "qwen/b", "qwen/c"] } };
@@ -576,7 +577,8 @@ test("readguard: a hardlink inside cwd to a file outside it is denied", (t) => {
   assert.ok(pathAllowed(j2(cwd, "own.txt"), [cwd]).ok);
 });
 
-import { runRoute as rr6 } from "../route.mjs";
+import { runRoute as rr6Real } from "../route.mjs";
+const rr6 = (o, ...a) => rr6Real({ scan: () => false, ...o }, ...a);
 test("an unknown provider id fails fast, before any daemon call", () => {
   let calls = 0; const paseo = () => { calls++; return {}; };
   const r = rr6({ type: "code-edit-easy", prompt: "x", provider: "nosuchprovider", cwd: "." }, paseo, { routes: { "code-edit-easy": ["qwen-laptop"] }, slots: { "qwen-laptop": 1 } });
@@ -719,4 +721,38 @@ test("round 9: JSON config writes keep the file's line endings", () => {
   const g = j2(t, "n.json"); writeJsonKeepEol(g, { a: 1 }); assert.ok(!readFileSync(g, "utf8").includes(CR));
   const oc = j2(t, "oc.json"); wf2(oc, JSON.stringify({ model: "office/A", provider: { office: { models: { A: { name: "A" } } } } }, null, 2).split(String.fromCharCode(10)).join(CR) + CR);
   assert.equal(syncOpencode(oc, "B"), true); assert.ok(readFileSync(oc, "utf8").includes(CR));
+});
+
+import { providerState, slotInfo } from "../route.mjs";
+import { mkdtempSync as mkdSt, readFileSync as rdSt } from "node:fs";
+import { join as joSt } from "node:path";
+test("a disabled provider is skipped with a trace entry and drops out of total.json", () => {
+  const rows = [{ provider: "codex", status: "available", enabled: "Disabled" }, { provider: "qwen", status: "available", enabled: "Enabled" }];
+  const p = fake({ run: () => ({ status: "completed", agentId: "A9" }) });
+  const q = (a) => (a[0] === "provider" && a[1] === "ls" ? rows : p(a));
+  const rt = { ...routes, slots: { codex: 2, qwen: 3 } };
+  const r = runRoute(o, q, rt);
+  assert.equal(r.used, "qwen/b");
+  assert.match(r.trace[0].skip, /disabled or unavailable/);
+  assert.ok(!p.calls.some((c) => c[0] === "run" && c.includes("codex/a")));
+  const st = providerState(q);
+  assert.equal(st.get("codex"), false);
+  assert.equal(slotInfo(rt, st).total, 3);
+  assert.equal(slotInfo(rt, null).total, 5);
+  const dir = mkdSt(joSt(tmpdir(), "ahub-active-")); markActive(rt, null, dir, st);
+  assert.deepEqual(JSON.parse(rdSt(joSt(dir, "total.json"), "utf8")).providers.codex, { slots: 2, enabled: false });
+});
+
+import { claimSlot, setMarker } from "../route.mjs";
+test("claimSlot: simultaneous routes cannot all take one provider; the rest stay queued (provider null)", () => {
+  const dir = mkdSt(joSt(tmpdir(), "ahub-claim-"));
+  const rt = { slots: { codex: 2 } };
+  const ms = [1, 2, 3].map((i) => { const un = markActive(rt, null, dir, null); return un; });
+  // markers are created in one ms: make their stamps distinct and ordered
+  const ordered = ms.map((u, i) => { const f = joSt(dir, `t-9${i}-${1000 + i}.json`); u(); writeFileSync(f, JSON.stringify({ provider: null, state: "queued" })); const un = () => {}; un.file = f; un.dir = dir; return un; });
+  assert.deepEqual(ordered.map((u) => claimSlot(u, "codex", 2)), [true, true, false]);
+  assert.equal(JSON.parse(rdSt(ordered[2].file, "utf8")).provider, null);
+  assert.equal(JSON.parse(rdSt(ordered[0].file, "utf8")).provider, "codex");
+  setMarker(ordered[0], null); // a route that gave its slot back lets the queued one in
+  assert.equal(claimSlot(ordered[2], "codex", 2), true);
 });

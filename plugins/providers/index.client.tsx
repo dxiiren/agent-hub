@@ -42,16 +42,26 @@ function Screen() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [formKey, setFormKey] = useState(0);
+  // the form is shown only after the first describe answered: "loading" -> "ready" | "error" (with a Retry), never an empty form
+  const [load, setLoad] = useState<{ state: "loading" | "ready" | "error"; error?: string }>({ state: "loading" });
 
   const refresh = useCallback(async () => {
-    const d: any = await call({ verb: "describe" });
-    if (d.error) return setMsg({ ok: false, text: `${S.failed} ${d.error}` });
+    // a cold plugin backend or a dropped request answers late or not at all: ask up to 3 times (25 s each) before showing the error
+    let d: any = {};
+    for (let i = 0; i < 3; i++) {
+      d = await Promise.race([call({ verb: "describe" }), new Promise<any>((ok) => setTimeout(() => ok({ error: S.timedOut }), 25_000))]);
+      if (!d.error && Array.isArray(d.kinds) && d.kinds.length) break;
+      if (!d.error) d = { error: S.noKinds };
+    }
+    if (d.error) return setLoad({ state: "error", error: String(d.error) });
+    setLoad({ state: "ready" });
     setKinds(d.kinds); setRouteTypes(d.routeTypes); setAdded(d.providers);
     // ?kind=<type> comes from Paseo's Add-provider list (scripts/paseo-web-patch.mjs): preselect that kind
     const want = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("kind") : null;
     setKind((k) => k || (d.kinds.some((x: Kind) => x.type === want) ? want! : d.kinds[0]?.type) || "");
   }, [call]);
   useEffect(() => { void refresh(); }, [refresh]);
+  const reload = () => { setLoad({ state: "loading" }); void refresh(); };
 
   const k = kinds.find((x) => x.type === kind);
   const reset = () => { setCustom(false); setModelErr(null); setEditing(null); setVals({}); setName(""); setSlots("2"); setAccount(""); setTwin(true); setPos({}); setModels([]); setFormKey((n) => n + 1); };
@@ -113,11 +123,19 @@ function Screen() {
   const modelOptions = [...models.map((m) => ({ label: [m.label === m.id ? m.id : `${m.label} (${m.id})`, m.hint].filter(Boolean).join(" - "), value: m.id })), { label: S.customModel, value: CUSTOM }];
 
   return (
-    <>
+    load.state !== "ready" ? (
+      <SettingsSection title={S.navTitle}>
+        <SettingsCard>
+          {load.state === "loading" ? <SettingsRow label={S.loading} /> : <>
+            <SettingsRow label={S.loadFailed} error={load.error} />
+            <SettingsAction label={S.navTitle} actionLabel={S.retry} onPress={reload} />
+          </>}
+        </SettingsCard>
+      </SettingsSection>
+    ) : <>
       <SettingsSection title={S.navTitle}>
         <SettingsCard>
           <SettingsRow label={S.intro} />
-          {msg ? <SettingsRow label={msg.text} error={msg.ok ? null : msg.text} /> : null}
           <SettingsSelect label={S.kind} value={kind} options={kinds.map((x) => ({ label: x.label, value: x.type }))} disabled={!!editing} onValueChange={(v) => { setKind(v); setModels([]); setVals({}); setFormKey((n) => n + 1); }} />
           <SettingsInput key={`n${formKey}`} label={S.name} hint={k?.nameHelp ?? S.nameHint} initialValue={name} disabled={!!editing} placeholder={S.nameHint} onChangeText={setName} />
           {k?.ownProvider ? <SettingsInput key={`l${formKey}`} label={S.label} hint={S.labelHint} initialValue={vals.label ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, label: t }))} /> : null}

@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { withAnswer, isEmptyState, parkFile, parseAsk, mayAsk, MAX_ASKS, park, loadPark, reapParked, runReply, runRoute } from "../route.mjs";
+import { withAnswer, isEmptyState, parkFile, parseAsk, mayAsk, MAX_ASKS, park, loadPark, reapParked, runReply, runRoute as runRouteReal } from "../route.mjs";
+const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test; gitleaks per route call would slow every case
 
 test("parseAsk: only the last non-empty line counts", () => {
   assert.equal(parseAsk("working\n[ASK] which file name?"), "which file name?");
@@ -137,4 +138,14 @@ test("Paseo's empty-state text is never an answer: it is retried, then reported 
   let n = 0; const q = (a) => (a[0] === "logs" ? { text: ++n <= 2 ? "No activity to display." : "[User] q" + String.fromCharCode(10) + "Paris" } : {});
   assert.equal(withAnswer({ agentId: "A" }, q, 1500, () => {}).answer, "Paris");
   assert.ok(isEmptyState("No activity to display.") && !isEmptyState("There was no activity to display in March."));
+});
+
+test("route refuses a credential in the prompt or the gate before any agent is created", () => {
+  const p = fake("x"); const secret = "use pass" + "word=Sup3rS3cret!x";
+  const routes = { routes: { edit: ["codex/a"] }, slots: {} };
+  for (const o of [{ type: "edit", prompt: secret, cwd: "/r" }, { type: "edit", prompt: "fine", gate: "curl -H " + secret, cwd: "/r" }]) {
+    const r = runRouteReal(o, p, routes);
+    assert.equal(r.status, "rejected"); assert.match(r.error, /credential/);
+  }
+  assert.equal(p.calls.length, 0);
 });

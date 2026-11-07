@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cliPaseo, cliArgs, runReply, runRoute, park, parkFile, inputError, AGENT_ID_RE } from "../route.mjs";
+import { cliPaseo, cliArgs, runReply, runRoute as runRouteReal, park, parkFile, inputError, AGENT_ID_RE } from "../route.mjs";
+const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test; gitleaks per route call would slow every case
 import { safe } from "../../usage-otel/server/usage.mjs";
 
 const TEXTS = ["--help", "-x", "--provider x", "--cwd C:\\", "-v", "--", "--json", "--home /tmp/x", "plain text", "multi\nline --flag"];

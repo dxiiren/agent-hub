@@ -6,7 +6,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
-import path, { dirname, join, resolve, sep } from "node:path";
+import path, { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
@@ -326,6 +326,9 @@ export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate
 export const modeError = (mode, routes = {}) => (mode === undefined || mode === null || knownModes(routes).has(mode) ? null : `unknown --mode "${mode}": use one of ${[...knownModes(routes)].filter((m) => !m.startsWith("http")).sort().join(", ")} (read-only task types always run read-only whatever --mode says)`);
 export function runRoute(o, paseo, routes, gate = runGate) {
   const bad = inputError(o) ?? modeError(o.mode, routes); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
+  // a credential in the task or the gate command is refused before anything is created or sent (same scanner as reply and the diff gate; fails closed when the scanner is missing)
+  try { if ((o.scan ?? hasSecret)([o.prompt, o.gate].filter((x) => typeof x === "string").join(String.fromCharCode(10)))) return { used: null, status: "rejected", error: "task rejected: the prompt or --gate looks like it contains a credential, token or key. Remove it (pass it by an environment variable the command reads) and run again.", trace: [] }; }
+  catch (e) { return { used: null, status: "rejected", error: "task rejected: " + e.message, trace: [] }; }
   const chain = o.provider ? [o.provider] : own(routes.routes, o.type);
   if (!chain) return { used: null, trace: [{ error: `unknown task type ${o.type}` }] };
   if (!chain.length) return { used: null, trace: [{ error: `no provider configured for ${o.type}: add one in Settings > Providers` }] };
@@ -358,14 +361,17 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   const done = (r, wt) => { retire(r.agentId, wt); return r; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
-  const installed = (() => { try { const r = paseo(["provider", "ls"]); const ids = (Array.isArray(r) ? r : r?.providers ?? []).map((x) => x?.provider ?? x?.id ?? x?.name).filter(Boolean); return ids.length ? new Set(ids) : null; } catch { return null; } })();
+  const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
+  const installed = state ? new Set(state.keys()) : null;
   for (const entry of chain) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
     if (installed && !installed.has(base(prov))) { trace.push({ provider: prov, skip: "provider not configured: add it in Settings > Providers" }); continue; }
+    if (state && state.get(base(prov)) === false) { trace.push({ provider: prov, skip: "provider disabled or unavailable in Paseo (Settings > Providers)" }); continue; }
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
     if (busy >= (own(slots, base(prov)) ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${own(slots, base(prov))}` }); continue; }
+    if (!claimSlot(o.marker, base(prov), own(slots, base(prov)))) { trace.push({ provider: prov, skip: `slots full: ${own(slots, base(prov))} other routes already hold ${base(prov)}` }); continue; }
     // RAM admission (09:10-09:14 hang: 15 tasks, <1 GB free): wait with backoff for free RAM before creating an agent; give up on this entry at waitTimeout. Only when the caller passes freeMem (main() does; unit tests that do not, never read the real machine).
     if (o.freeMem) {
       const floor = routes.minFreeRamGbByProvider?.[base(prov)] ?? routes.minFreeRamGb ?? 2;
@@ -440,19 +446,55 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   return partial ? { used: null, status: "permission", partial, trace } : { used: null, trace };
 }
 
+/** Provider id -> enabled, from `paseo provider ls` (one call). Disabled (the Settings toggle) or unavailable (no CLI) = false. null when the list cannot be read. */
+export function providerState(paseo) {
+  try {
+    const r = paseo(["provider", "ls"]); const m = new Map();
+    for (const x of Array.isArray(r) ? r : r?.providers ?? []) { const id = x?.provider ?? x?.id ?? x?.name; if (id) m.set(id, !(/^disabled$/i.test(String(x.enabled ?? "")) || x.enabled === false || /unavail|disabled/i.test(String(x.status ?? "")))); }
+    return m.size ? m : null;
+  } catch { return null; }
+}
+/** Slots per provider with enabled flag, and the total over ENABLED providers only (a provider absent from the state counts as enabled). */
+export function slotInfo(routes, state) {
+  const providers = {}; let total = 0;
+  for (const [id, n] of Object.entries(routes.slots ?? {})) { const enabled = !state || state.get(id) !== false; providers[id] = { slots: n, enabled }; if (enabled) total += n; }
+  return { providers, total };
+}
 /** Statusline source (cheap, no daemon call): one marker file per running route in <home>/usage/active, plus total.json (sum of routes.slots). Best effort; a killed route leaves a file the reader ignores after 30 min. */
-export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage", "active")) {
+export function markActive(routes, provider, dir = join(process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage", "active"), state = null) {
   try {
     mkdirSync(dir, { recursive: true });
     for (const n of readdirSync(dir)) { // sweep markers of killed routes (the reader ignores them after 30 min anyway)
       if (!n.startsWith("t-")) continue;
       try { if (Date.now() - statSync(join(dir, n)).mtimeMs > 30 * 60 * 1000) rmSync(join(dir, n), { force: true }); } catch { /* best effort */ }
     }
-    writeFileSync(join(dir, "total.json"), JSON.stringify({ total: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0) }));
+    writeFileSync(join(dir, "total.json"), JSON.stringify(slotInfo(routes, state))); // total = slots of enabled providers; refreshed on every route, so a toggle shows from the next one
     const f = join(dir, `t-${process.pid}-${Date.now()}.json`);
-    writeFileSync(f, JSON.stringify({ provider: provider ?? null }));
-    return () => { try { rmSync(f, { force: true }); } catch { /* best effort */ } };
+    writeFileSync(f, JSON.stringify({ provider: provider ?? null, state: provider ? "run" : "queued" }));
+    const un = () => { try { rmSync(f, { force: true }); } catch { /* best effort */ } };
+    un.file = f; un.dir = dir;
+    return un;
   } catch { return () => {}; }
+}
+const markerAge = 30 * 60 * 1000;
+/** Set what this route holds: a provider (a slot, state "run") or null (queued, waiting for one). Best effort. */
+export function setMarker(un, provider) { try { if (un?.file) writeFileSync(un.file, JSON.stringify({ provider: provider ?? null, state: provider ? "run" : "queued" })); } catch { /* best effort */ } }
+/**
+ * Slot reservation across processes. A route writes its provider into its own marker FIRST, then counts the live markers holding that provider in start order:
+ * it keeps the slot only when its rank is below `slots`. Without it, 30 routes started in one second all read "0 busy" from `paseo ls` (agents are not registered yet) and all piled onto the same provider.
+ */
+export function claimSlot(un, provider, slots) {
+  if (!un?.file || !Number.isFinite(slots)) return true;
+  setMarker(un, provider);
+  try {
+    const stamp = (n) => Number(n.split("-")[2]?.replace(".json", "")) || 0;
+    const live = readdirSync(un.dir).filter((n) => n.startsWith("t-") && Date.now() - statSync(join(un.dir, n)).mtimeMs < markerAge)
+      .filter((n) => { try { return JSON.parse(readFileSync(join(un.dir, n), "utf8")).provider === provider; } catch { return false; } })
+      .sort((a, b) => stamp(a) - stamp(b) || a.localeCompare(b));
+    const rank = live.indexOf(basename(un.file));
+    if (rank >= 0 && rank < slots) return true;
+    setMarker(un, null); return false;
+  } catch { return true; }
 }
 
 function main(argv) {
@@ -486,10 +528,11 @@ function main(argv) {
   try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed
   const routes = loadRoutes();
   { const me = modeError(opt("--mode"), routes); if (me) { console.error("route: " + me); return 2; } }
-  const unmark = markActive(routes, opt("--provider"));
+  const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)));
+  const unmark = markActive(routes, opt("--provider"), undefined, pstate);
   let res;
   try { res = runRoute({
-    type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
+    providerState: pstate, marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
     session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, freeMem: () => os.freemem() / 2 ** 30,
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }

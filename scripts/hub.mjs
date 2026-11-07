@@ -156,6 +156,8 @@ async function http(path, headers = {}, body) {
     return { status: r.status, text: await r.text() };
   } catch (e) { return { status: 0, text: String(e) }; }
 }
+/** Ids of the providers of kind local-llama (they launch deploy/laptop/laptop-agent.mjs), found from the Paseo config: the id is whatever the user named it. */
+const laptopIds = (provs) => Object.keys(provs || {}).filter((id) => (provs[id]?.command || []).some((x) => /laptop-agent[.]mjs$/.test(String(x))));
 // Served model ids (GET only), the laptop GGUF, and the CLI versions: installed vs latest published. Read only.
 async function latestChecks(conf) {
   const { modelsUrl, firstId } = await import('../plugins/routing/office.mjs');
@@ -166,7 +168,7 @@ async function latestChecks(conf) {
     try { const served = firstId(await (await fetch(modelsUrl(base), { signal: AbortSignal.timeout(5000) })).json()); console.log(`INFO  ${id} serves ${served || '(none)'} (resolved at dispatch)`); }
     catch (e) { console.log(`WARN  ${id}: ${modelsUrl(base).replace(/\/\/[^/]+/, '//<host>')} unreachable (${e.message})`); }
   }
-  const lp = provs['qwen-laptop']?.env;
+  const lp = provs[laptopIds(provs)[0]]?.env;
   if (lp?.LAPTOP_MODEL_PATH) {
     try { const st = statSync(lp.LAPTOP_MODEL_PATH); console.log(`INFO  laptop GGUF ${basename(lp.LAPTOP_MODEL_PATH)}, ${(st.size / 2 ** 30).toFixed(1)} GiB, dated ${st.mtime.toISOString().slice(0, 10)}`); }
     catch { console.log(`WARN  laptop GGUF not found: ${lp.LAPTOP_MODEL_PATH}`); }
@@ -223,17 +225,23 @@ async function doctor(deep) {
   for (let i = 0; i < 30 && list.some((x) => /loading/i.test(x.status || '')); i++) { await new Promise((r) => setTimeout(r, 3000)); list = lsAll(); } // statuses probe the CLIs after start
   const want = Object.keys(readJson(join(HOME, 'config.json'), {}).agents?.providers || {});
   let refused = '';
-  if (want.includes('qwen-laptop')) {
-    const r = run(process.execPath, [join(REPO, 'deploy', 'laptop', 'laptop-agent.mjs'), '--check'], { env: { ...process.env, ...(readJson(join(HOME, 'config.json'), {}).agents.providers['qwen-laptop'].env) } });
+  const provsAll = readJson(join(HOME, 'config.json'), {}).agents?.providers || {}, laptops = new Set(laptopIds(provsAll));
+  if (laptops.size) {
+    const r = run(process.execPath, [join(REPO, 'deploy', 'laptop', 'laptop-agent.mjs'), '--check'], { env: { ...process.env, ...(provsAll[[...laptops][0]].env) } });
     if (r.status === 3) { refused = out(r); console.log(`WARN  laptop: ${refused.replace(/^LAPTOP-REFUSED: /, "")} (correct behaviour, not a failure)`); }
     else row(r.status === 0, 'laptop pre-flight (GPU visible, no heavy-run lock, free RAM >= 3 GB)', out(r).split(String.fromCharCode(10)).pop());
   }
   for (const id of want) {
-    if (id.startsWith('qwen-laptop') && refused) continue;
+    if (laptops.has(id) && refused) continue;
     const e = list.find((x) => (x.provider || x.id || x.name) === id);
     const st = e ? (e.status || e.state || '') : 'missing';
     row(/avail|ready|ok/i.test(st), `provider ${id}: status`, st);
   }
+  try { // slots per provider, enabled or not: the total counts enabled providers only
+    const { providerState, slotInfo, loadRoutes } = await import('../plugins/routing/route.mjs');
+    const si = slotInfo(loadRoutes(), providerState(() => list));
+    console.log(`INFO  slots: ${Object.entries(si.providers).map(([k, v]) => `${k} ${v.slots}${v.enabled ? '' : ' (disabled)'}`).join(', ')}; total ${si.total} (enabled providers only)`);
+  } catch (e) { console.log(`WARN  slots check failed: ${e.message}`); }
   try { // latest aliases: show what they resolve to now, warn on a pinned older model
     const { resolveCached, stalePins } = await import('../plugins/routing/resolve.mjs');
     const rt = JSON.parse(readFileSync(join(REPO, 'config', 'routes', process.env.AGENT_HUB_NO_LOCAL !== '1' && existsSync(join(REPO, 'config', 'routes', 'routes.local.json')) ? 'routes.local.json' : 'routes.template.json'), 'utf8'));
@@ -248,7 +256,7 @@ async function doctor(deep) {
     const made = new Set(); // every agent this run created, archived by id in the finally below
     try {
     const model = { codex: 'codex/gpt-6.1-terra', 'claude-clean': 'claude-clean/claude-haiku-5-5' };
-    for (const id of want.filter((x) => !(x.startsWith('qwen-laptop') && refused) && !/unavail|disabled/i.test(list.find((e) => (e.provider || e.id || e.name) === x)?.status || '') && // a provider the daemon reports unavailable or disabled (no CLI on this machine) is not a failure
+    for (const id of want.filter((x) => !(laptops.has(x) && refused) && !/unavail|disabled/i.test(list.find((e) => (e.provider || e.id || e.name) === x)?.status || '') && // a provider the daemon reports unavailable or disabled (no CLI on this machine) is not a failure
        (!process.env.AGENT_HUB_ONLY || x === process.env.AGENT_HUB_ONLY))) {
       // a model may add a word to a one-word reply: up to 3 tries, the check itself stays strict
       let r, j, aid, good = false;

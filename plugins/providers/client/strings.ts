@@ -41,5 +41,7 @@ export const S = {
   noRestart: "Saved. No restart needed: the route entry is read when a task is dispatched.",
   removed: (n: string) => `Removed ${n}. If it had its own provider, restart the hub (\`just down && just up\`).`,
   failed: "Could not complete:",
+  loadFailed: "Could not load the provider kinds",
+  noKinds: "The hub answered without any provider kinds.",
   timedOut: "The hub did not answer within 100 s. Is the daemon busy? Try again.",
 } as const;

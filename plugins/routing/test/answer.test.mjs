@@ -5,7 +5,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lastAnswer, runRoute, withAnswer } from "../route.mjs";
+import { lastAnswer, runRoute as runRouteReal, withAnswer } from "../route.mjs";
+const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test; gitleaks per route call would slow every case
 import { claimRequest, saveState } from "../../gate/server/store.mjs";
 
 const ALL = ["codex", "qwen", "claude", "claude-clean", "qwen-code", "qwen-code-2", "qwen-laptop", "opencode", "qoder"];

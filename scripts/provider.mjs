@@ -14,6 +14,7 @@ import { safeId, safeUrl } from '../plugins/routing/office.mjs';
 import { READ_ONLY_ENFORCED, RESERVED_NAME_RE } from '../plugins/routing/route.mjs';
 import { writeJsonKeepEol, writeAtomic, readJsonStrict, own } from '../plugins/routing/jsonfile.mjs';
 import { withLock, withLockSync } from '../plugins/routing/lock.mjs';
+import { paseoHome } from '../plugins/routing/runstate.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const NAME_RE = KINDS['qwen-code'].nameRe; // any lower-case id
@@ -39,7 +40,7 @@ export function localSpec(a) {
 }
 
 export function paths(env = process.env) {
-  const home = resolve(env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
+  const home = resolve(env.AGENT_HUB_HOME || paseoHome(env)); // AGENT_HUB_HOME (the launcher copies it to PASEO_HOME), else PASEO_HOME, else ~/.paseo
   const routesDir = join(REPO, 'config', 'routes');
   return { local: env.AGENT_HUB_LOCAL || (env.AGENT_HUB_NO_LOCAL === '1' ? join(home, 'hub.local.json') : join(REPO, 'config', 'hub.local.json')), paseo: join(home, 'config.json'),
     routes: env.AGENT_HUB_ROUTES || (env.AGENT_HUB_NO_LOCAL === '1' ? join(home, 'routes.local.json') : join(routesDir, 'routes.local.json')) }; // always a local file: the tracked template is only a read fallback (rdr)

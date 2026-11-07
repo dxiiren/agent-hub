@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, statSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { runDir, readState, readStateJson, writeState, tryWriteState, listState, procStart } from '../../plugins/routing/runstate.mjs';
 
 const sh = (cmd, args, timeout = 15000) => spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true });
@@ -161,13 +162,29 @@ export function sweepStale({ dir = runDir(), now = Date.now(), alive = ownedAliv
   for (const f of listState(dir, /^qwen-session-.*[.]json$/)) { try { if (now - statSync(join(dir, f)).mtimeMs > ALIAS_MAX_AGE) rm(f); } catch { /* gone */ } }
   return n;
 }
-/** Hub down / doctor / cleanup: stop every hub-owned llama-server nobody is using (no prompt in flight and idle past `idleMs`; 0 = stop at once, for `down`). Returns what it stopped. */
-export function reapOrphans({ idleMs, now = Date.now(), dir = runDir(), stop = stopVerified, alive = ownedAlive, inflightOf = (port) => anyInflight(port, now, dir) } = {}) {
+const OLD_NAME = /^agent-hub-laptop-[0-9]+[.](json|reaper|lock|inflight[.][0-9]+)$/;
+/** Files of earlier code: ownership/reaper/lock/in-flight files in ~/.agent-hub/run and the shared temp folder. Removed only by our exact names, only regular files we own, and only when the pid they name is dead (a live owner keeps its file). `dirs` is injectable. Returns the names removed (or, dry, that would be). */
+export function migrateOldRunFiles({ dirs = [join(homedir(), '.agent-hub', 'run'), tmpdir()], dry = false, pAlive = pidAlive, now = Date.now() } = {}) {
   const out = [];
-  sweepStale({ dir, now, alive });
+  for (const dir of dirs) for (const f of listState(dir, OLD_NAME)) {
+    const file = join(dir, f), ext = f.split('.').slice(1).join('.');
+    let pid = ext.startsWith('inflight.') ? Number(ext.split('.')[1]) : NaN;
+    if (!pid) { const t = readState(file); pid = ext === 'json' ? Number(readStateJson(file)?.pid) : parseInt(t ?? '', 10); }
+    let old = false; try { old = now - statSync(file).mtimeMs > 86400_000; } catch { continue; }
+    if (Number.isInteger(pid) && pid > 0 ? pAlive(pid) : !old) continue; // owner alive, or unreadable and young: leave it
+    if (!dry) { try { unlinkSync(file); } catch { continue; } }
+    out.push(f);
+  }
+  return out;
+}
+/** Hub down / doctor / cleanup: stop every hub-owned llama-server nobody is using (no prompt in flight and idle past `idleMs`; 0 = stop at once, for `down`). Returns what it stopped. */
+export function reapOrphans({ idleMs, now = Date.now(), dir = runDir(), stop = stopVerified, alive = ownedAlive, inflightOf = (port) => anyInflight(port, now, dir), dry = false } = {}) {
+  const out = [];
+  if (!dry) sweepStale({ dir, now, alive });
   for (const f of listState(dir, /^agent-hub-laptop-[0-9]+[.]json$/)) { // only regular files we own: a planted or foreign record is never read
     const port = f.match(/[0-9]+/)[0]; const own = readStateJson(join(dir, f)); if (!own) continue;
     if (!own?.pid || !alive(own) || inflightOf(port) || (idleMs > 0 && !idleExpired(own, now, idleMs))) continue;
+    if (dry) { out.push({ port, pid: own.pid }); continue; } // preview: nothing is stopped or removed
     if (stop(own)) { out.push({ port, pid: own.pid }); removeServerFiles(port, dir); }
   }
   return out;
