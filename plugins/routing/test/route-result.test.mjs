@@ -76,26 +76,24 @@ test("run args include --mode and full-access when cwd is clean repo", () => {
   assert.ok(runCall.includes("full-access"), "args should include full-access");
 });
 
-test("after writing untracked file, run args do NOT include full-access and trace has note matching /uncommitted changes/", () => {
+test("--in-place on a dirty work tree is refused at once: no agent starts, the trace names the uncommitted changes", () => {
   const repo = makeTmpRepo();
   writeFileSync(join(repo, "untracked.txt"), "content");
   const limitsDir = mkdtempSync(join(tmpdir(), "limits-"));
   const routes = {
     readOnlyEnforced: [],
     slots: { codex: 1 },
-    routes: { "code-edit": ["codex/a"] },
+    routes: { "code-edit": ["codex/a", "codex/b"] },
     modes: { codex: "full-access" }
   };
   const paseo = makePaseo();
   const o = makeOpts(repo, limitsDir);
   const result = runRoute(o, paseo, routes);
 
-  const runCall = paseo.calls.find(c => c[0] === "run");
-  assert.ok(runCall, "run call should exist");
-  assert.ok(!runCall.includes("full-access"), "args should NOT include full-access");
-
-  const traceNote = result.trace.find(t => t.note && /uncommitted changes/.test(t.note));
-  assert.ok(traceNote, "trace should have a note about uncommitted changes");
+  assert.ok(!paseo.calls.find(c => c[0] === "run"), "no agent may start on a dirty tree");
+  const err = result.trace.find(t => t.error && /--in-place refused/.test(t.error) && /uncommitted changes/.test(t.error));
+  assert.ok(err, "trace should refuse with the uncommitted-changes reason");
+  assert.equal(result.trace.length, 1, "the refusal stops the chain (every provider would hit the same tree)");
 });
 
 test("cleanGitReason of non-repo folder returns 'not a git work tree'", () => {

@@ -518,7 +518,9 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // fail closed: full access in place only with the explicit --in-place flag AND a clean git work tree; .git and paths outside cwd are not protected then
     const inPlaceWhy = mode && !o.worktree && o.inPlace && unsafeMode(mode) ? cleanGitReason(o.cwd) : null;
     if (mode && (o.worktree || !unsafeMode(mode) || inPlaceWhy === "")) args.push("--mode", mode);
-    else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: ` + (!o.inPlace ? "use --in-place to edit this worktree directly, or --new-workspace worktree" : `--in-place needs a clean git work tree (--cwd ${inPlaceWhy}); commit or stash first, or use --new-workspace worktree`) });
+    // --in-place on a dirty tree: refuse the whole route at once (a run without edit rights only confuses the model; every provider would hit the same)
+    else if (mode && o.inPlace && inPlaceWhy) { trace.push({ provider: prov, error: `--in-place refused: the work tree is not clean (${inPlaceWhy}); commit or stash first, or use --new-workspace worktree` }); break; }
+    else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: ` + (!o.inPlace ?"use --in-place to edit this worktree directly, or --new-workspace worktree" : `--in-place needs a clean git work tree (--cwd ${inPlaceWhy}); commit or stash first, or use --new-workspace worktree`) });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
