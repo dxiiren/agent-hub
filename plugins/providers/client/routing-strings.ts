@@ -27,7 +27,7 @@ export const R = {
   emptyChain: "Empty: this task type answers \"no provider configured\" until you add one.",
   addEntry: "Add a provider or model to the end...",
   position: (n: number) => `Position ${n}`,
-  current: "now",
+  current: "current",
   off: "Off (remove from this chain)",
   undo: "Undo last change",
   undoLabel: "Undo",
