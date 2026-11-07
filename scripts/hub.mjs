@@ -239,8 +239,8 @@ async function doctor(deep) {
     row(/avail|ready|ok/i.test(st), `provider ${id}: status`, st);
   }
   try { // slots per provider, enabled or not: the total counts enabled providers only
-    const { providerState, slotInfo, loadRoutes } = await import('../plugins/routing/route.mjs');
-    const si = slotInfo(loadRoutes(), providerState(() => list));
+    const { providerState, slotInfo, loadRoutes, readConfig } = await import('../plugins/routing/route.mjs');
+    const si = slotInfo(loadRoutes(), providerState(() => list, readConfig()));
     console.log(`INFO  slots: ${Object.entries(si.providers).map(([k, v]) => `${k} ${v.slots}${v.enabled ? '' : ' (disabled)'}`).join(', ')}; total ${si.total} (enabled providers only)`);
   } catch (e) { console.log(`WARN  slots check failed: ${e.message}`); }
   try { // latest aliases: show what they resolve to now, warn on a pinned older model

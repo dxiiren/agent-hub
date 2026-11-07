@@ -16,7 +16,8 @@ import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
 import { batchAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
-import { runDir, readStateJson, tryWriteState } from "./runstate.mjs";
+import { endpointSkip } from "./endpoint.mjs";
+import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
 import { effectiveBudget, chainOrder, costGb, laptopNow, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -81,7 +82,14 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
 }
 
 /** Paseo's 1.5 s status probe fails while the daemon is busy (upstream #6584): retry the call, nothing was started. */
-export const transient = (j) => !j?.agentId && !/^CREATE_TIMEOUT/.test(String(j?.error ?? "")) && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
+export const transient = (j) => !j?.agentId && !/^CREATE_TIMEOUT|exited before initialization/.test(String(j?.error ?? "")) && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
+/** A failed agent create arrives as "exit=1 Created workspace wks_... Tip: ... { error: { code: AGENT_CREATE_FAILED, message: ... } }": keep only the reason, in one plain line. */
+export function plainError(e) {
+  const t = String(e ?? ""); if (!/AGENT_CREATE_FAILED/.test(t)) return e;
+  let msg = (/"message":\s*"((?:[^"\\]|\\.)*)"/.exec(t) ?? [])[1]; try { msg = JSON.parse(`"${msg}"`); } catch { /* keep the raw text */ }
+  const lines = String(msg ?? t).split(/\r?\n/).map((x) => x.trim()).filter(Boolean); const last = lines.at(-1) ?? "";
+  return `could not start: ${/^Not answering/i.test(last) ? last.replace(/^Not answering/i, "endpoint not answering") : (lines[0] ?? "no reason given").replace(/^Failed to create agent:\s*/i, "")}`;
+}
 export function withRetry(paseo, { tries = 6, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), jitter = () => Math.random() * 1000 } = {}) {
   return (args, opts) => {
     let j = paseo(args, opts);
@@ -459,11 +467,13 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (installed && !installed.has(base(prov))) { trace.push({ provider: prov, skip: "provider not configured: add it in Settings > Providers" }); continue; }
     if (state && state.get(base(prov)) === false) { trace.push({ provider: prov, skip: "provider disabled or unavailable in Paseo (Settings > Providers)" }); continue; }
     { const until = Number(readLimits(o)[base(prov)]); if (until > (o.now ?? Date.now)()) { trace.push({ provider: prov, skip: `${base(prov)}: usage limit until ${new Date(until).toISOString()}, skipped` }); continue; } }
+    { const dn = o.endpointDown?.(base(prov)); if (dn) { trace.push({ provider: prov, skip: dn }); continue; } } // a known-down endpoint is skipped at once, not retried for minutes
     { const na = modelNotAllowed(routes, prov); if (na) { trace.push({ provider: prov, skip: na }); continue; } } // Routing & slots model allow-list
     const rows = paseo(["ls"]);
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
     if (busy >= (own(slots, base(prov)) ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${own(slots, base(prov))}` }); continue; }
     if (!claimSlot(o.marker, base(prov), own(slots, base(prov)))) { trace.push({ provider: prov, skip: `slots full: ${own(slots, base(prov))} other routes already hold ${base(prov)}` }); continue; }
+    const tEntry = (o.now ?? Date.now)(); // the per-attempt time limit starts here, so the RAM wait below counts inside it
     // RAM admission (09:10-09:14 hang: 15 tasks, <1 GB free): wait with backoff for free RAM before creating an agent; give up on this entry at waitTimeout. Only when the caller passes freeMem (main() does; unit tests that do not, never read the real machine).
     if (o.freeMem) {
       const floor = routes.minFreeRamGbByProvider?.[base(prov)] ?? routes.minFreeRamGb ?? 2;
@@ -488,8 +498,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const labels = { "route/type": o.type, "route/provider": prov, "route/run": rid, ...(process.env.CLAUDE_CODE_SESSION_ID && process.env.CLAUDE_CODE_SESSION_ID !== o.session ? { claude_session: process.env.CLAUDE_CODE_SESSION_ID } : {}), ...(o.keep ? { "route/keep": "1" } : {}), dev: o.dev, caller: o.client, session: o.session };
     let wt = null; // this entry's route-created worktree
     // Qwen read-only: the launcher (acp-proxy.mjs) offers the session mode "read-only"; choosing it restarts qwen with the deny settings (config/qwen/system-settings-readonly.json). Nothing is ever written under the task cwd.
-    const lim = attemptLimit(o, routes); const t0 = (o.now ?? Date.now)(); const left = () => Math.max(1, Math.round(lim - ((o.now ?? Date.now)() - t0) / 1000)); // one provider attempt gets lim seconds in all (run, waits, permission rounds)
-    const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", `${lim}s`];
+    const lim = attemptLimit(o, routes); const t0 = tEntry; const left = () => Math.max(1, Math.round(lim - ((o.now ?? Date.now)() - t0) / 1000)); // one provider attempt gets lim seconds in all (run, waits, permission rounds)
+    const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", `${left()}s`];
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
     if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "provider has no verified read-only mode (read-only task types never run on it; for a Qwen provider run `agent-hub provider migrate`)" }); continue; }
     if (ro && !readOnlyEnforced(base(prov), routes)) { trace.push({ provider: prov, skip: "no enforced sensitive-read guard for this provider (read-only task types never run on it)" }); continue; }
@@ -517,7 +527,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
-    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: (lim + 30) * 1000 });
+    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: (left() + 30) * 1000 });
     live.delete("run:" + rid); if (j?.agentId) track(j.agentId, wt); else { unnamed = true; ledger(); }
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(left())], { timeoutMs: (left() + 30) * 1000 });
@@ -528,7 +538,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const slow = (!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? ""));
     if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
-    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint), ...why });
+    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: plainError(j.error) } : hint), ...why });
     { const t = trace.at(-1); const msg = t.error ?? "";
       if (j.status !== "completed" && j.status !== "permission" && LIMIT_RE.test(msg)) { // remember it: every later route skips this provider until the reset
         const until = limitUntil(msg, (o.now ?? Date.now)()); tryWriteState(limitsFile(o), { ...readLimits(o), [base(prov)]: until });
@@ -570,11 +580,18 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   return partial ? { used: null, status: "permission", partial, trace } : { used: null, trace };
 }
 
+/** The Paseo config file (switches live there at once); {} when unreadable. */
+export const readConfig = (home) => { try { return JSON.parse(readFileSync(join(home || paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { return {}; } };
 /** Provider id -> enabled, from `paseo provider ls` (one call). Disabled (the Settings toggle) or unavailable (no CLI) = false. null when the list cannot be read. */
-export function providerState(paseo) {
+export function providerState(paseo, cfg) {
   try {
     const r = paseo(["provider", "ls"]); const m = new Map();
-    for (const x of Array.isArray(r) ? r : r?.providers ?? []) { const id = x?.provider ?? x?.id ?? x?.name; if (id) m.set(id, !(/^disabled$/i.test(String(x.enabled ?? "")) || x.enabled === false || /unavail|disabled/i.test(String(x.status ?? "")))); }
+    for (const x of Array.isArray(r) ? r : r?.providers ?? []) {
+      const id = x?.provider ?? x?.id ?? x?.name; if (!id) continue;
+      const gone = /unavail/i.test(String(x.status ?? "")) && !/^disabled$/i.test(String(x.enabled ?? "")) && x.enabled !== false; // missing CLI, not switched off
+      const flag = own(cfg?.agents?.providers, id)?.enabled; // the config file holds every switch at once; a daemon that has not reloaded still reports the old one
+      m.set(id, !gone && (typeof flag === "boolean" ? flag : !(/^disabled$/i.test(String(x.enabled ?? "")) || x.enabled === false || /disabled/i.test(String(x.status ?? "")))));
+    }
     return m.size ? m : null;
   } catch { return null; }
 }
@@ -654,12 +671,13 @@ function main(argv) {
   try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed
   const routes = loadRoutes();
   { const me = modeError(opt("--mode"), routes); if (me) { console.error("route: " + me); return 2; } }
-  const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)));
+  const cfgNow = readConfig(process.env.PASEO_HOME);
+  const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow);
   { const bail = () => { for (const d of [...ACTIVE]) { try { d(); } catch { /* best effort */ } } }; process.on("exit", bail); for (const sg of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sg, () => process.exit(130)); } // Ctrl-C / kill: the exit handler archives what this route started
   const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
   let res;
   try { res = runRoute({
-    providerState: pstate, marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
+    providerState: pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => os.freemem() / 2 ** 30, laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }

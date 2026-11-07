@@ -149,7 +149,8 @@ test('schedule form hint lists exactly what is missing, nothing for a heartbeat 
   const ctx = vm.createContext({}); vm.runInContext(grab(edit('schedule-missing-fn').replace, '__AhMissing') + ';this.f=__AhMissing;', ctx); const F = (a, b) => [...ctx.f(a, b)]; // same realm for deepEqual
   const full = { targetKind: 'new', workingDir: '/p', selectedProvider: 'x', selectedModel: 'm', prompt: 'do', submitCadence: { type: 'cron' } };
   assert.deepEqual(F(full, null), []);
-  assert.deepEqual(F({ ...full, workingDir: ' ', selectedModel: '' }, null), ['Choose a project', 'Choose a model']);
+  assert.deepEqual(F({ ...full, workingDir: ' ', selectedProvider: '' }, null), ['Choose a project', 'Choose a provider']);
+  assert.deepEqual(F({ ...full, selectedModel: '' }, null), [], 'the model control reads Default: no model is required');
   assert.deepEqual(F({ ...full, prompt: '', submitCadence: null }, null), ['Write a prompt', 'Fix the cadence (for example 0 9 * * * runs every day at 09:00)']);
   assert.deepEqual(F(full, 'bad cron'), ['Fix the cadence (for example 0 9 * * * runs every day at 09:00)']);
   assert.deepEqual(F({ targetKind: 'agent' }, null), []);

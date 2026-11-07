@@ -165,9 +165,9 @@ function Screen() {
         </SettingsCard>
       </SettingsSection>
     ) : <>
-      <SettingsSection title={S.navTitle}>
+      <SettingsSection title={editing ? S.editTitle : S.navTitle}>
         <SettingsCard>
-          <SettingsRow label={S.intro} />
+          <SettingsRow label={editing ? S.introEdit : S.intro} />
           <SettingsSelect label={S.kind} value={kind} options={kinds.map((x) => ({ label: x.label, value: x.type }))} disabled={!!editing} onValueChange={(v) => { setKind(v); setModels([]); setVals({}); setFormKey((n) => n + 1); }} />
           <SettingsInput key={`n${formKey}`} label={S.name} hint={editing ? S.nameLocked : k?.nameHelp ?? S.nameHint} initialValue={name} disabled={!!editing} placeholder={S.namePlaceholder} onChangeText={setName} />
           {k?.ownProvider ? <SettingsInput key={`l${formKey}`} label={S.label} hint={S.labelHint} initialValue={vals.label ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, label: t }))} /> : null}

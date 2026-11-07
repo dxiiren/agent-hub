@@ -9,13 +9,13 @@
 // writes take the same lock and atomic write as `provider add`, never touch a template, and are undone byte for byte from a snapshot stack.
 // "Enabled" lives in Paseo (agents.providers.<id>.enabled): the page changes it through the daemon's config API (the result's `enabledChanges`); the CLI writes the Paseo config file and says when the daemon must be restarted.
 import os from 'node:os';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths, rdr, lockOf, sha, bytes, providerModels } from './provider.mjs';
 import { writeJsonKeepEol as wr, writeAtomic, readJsonStrict as rd, own } from '../plugins/routing/jsonfile.mjs';
 import { withLock } from '../plugins/routing/lock.mjs';
-import { cliPaseo, READ_ONLY_ENFORCED } from '../plugins/routing/route.mjs';
+import { cliPaseo, READ_ONLY_ENFORCED, slotInfo } from '../plugins/routing/route.mjs';
 import { effectiveBudget, chainOrder, costGb, laptopNow, heldIn } from '../plugins/routing/budget.mjs';
 import { endpointDown } from '../plugins/routing/office.mjs';
 import { selfHostedProviders } from '../plugins/usage-otel/server/selfhosted-usage.mjs';
@@ -32,6 +32,15 @@ const homeOf = (p) => dirname(p.paseo);
 const readUndo = (p) => { try { const a = JSON.parse(readFileSync(undoFile(p), 'utf8')); return Array.isArray(a) ? a : []; } catch { return []; } };
 const bool = (v) => (v === true || v === 'true' ? true : v === false || v === 'false' ? false : undefined);
 
+/** The statusline's slot total (<home>/usage/active/total.json) is rewritten at once after a change, so a switch shows there without waiting for the next task. `ids` = providerIds(); `overlay` = enabled flags just changed. */
+function refreshTotal(p, o, ids, overlay = {}) {
+  try {
+    const state = new Map([...ids].map(([id, d]) => [id, overlay[id] ?? d.enabled]));
+    const dir = o.activeDir ?? join(homeOf(p), 'usage', 'active'); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'total.json'), JSON.stringify(slotInfo(rdr(p, {}), state, o.laptop === false ? {} : o.laptop ?? laptopNow(), heldIn(dir).length)));
+  } catch { /* best effort: the next task rewrites it */ }
+}
+
 /** Providers the daemon reports (id, label, enabled, status); [] when it is down. o.paseoLs overrides (tests). */
 function daemonProviders(p, o) {
   try {
@@ -40,12 +49,13 @@ function daemonProviders(p, o) {
   } catch { return []; }
 }
 const fileEnabled = (cfg, id) => own(cfg?.agents?.providers, id)?.enabled !== false;
+/** The Paseo config file records every switch (the page's daemon call and `routes set --enabled` both write it), so an explicit flag there beats what a daemon that has not reloaded still reports. */
+const fileFlag = (cfg, id) => { const v = own(cfg?.agents?.providers, id)?.enabled; return typeof v === 'boolean' ? v : undefined; };
 
 /** Every provider id the hub knows: the daemon's, the Paseo config's, slots and chains. */
 function providerIds(p, o, routes) {
-  const ids = new Map();
-  for (const d of daemonProviders(p, o)) ids.set(d.id, d);
-  const cfg = rd(p.paseo, {});
+  const ids = new Map(); const cfg = rd(p.paseo, {});
+  for (const d of daemonProviders(p, o)) ids.set(d.id, { ...d, enabled: fileFlag(cfg, d.id) ?? d.enabled });
   for (const id of Object.keys(cfg.agents?.providers ?? {})) if (!ids.has(id)) ids.set(id, { id, label: id, enabled: fileEnabled(cfg, id) });
   for (const id of [...Object.keys(routes.slots ?? {}), ...Object.values(routes.routes ?? {}).flat().map(baseOf)]) if (!ids.has(id)) ids.set(id, { id, label: id, enabled: fileEnabled(cfg, id) });
   return ids;
@@ -79,7 +89,7 @@ export function show(p = paths(), o = {}) {
   }));
   const enabled = Object.fromEntries(providers.map((x) => [x.id, x.enabled]));
   return { types, chains: Object.fromEntries(types.map((t) => [t, [...(own(routes.routes, t) ?? [])]])), providers, maxSlots: MAX_SLOTS, canUndo: readUndo(p).length > 0,
-    configuredTotal: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0), effective: effectiveBudget(budgetInput(routes, enabled, o)),
+    configuredTotal: Object.values(routes.slots ?? {}).reduce((a, b) => a + b, 0), onTotal: Object.entries(routes.slots ?? {}).reduce((a, [id, n]) => a + (enabled[id] === false ? 0 : n), 0), effective: effectiveBudget(budgetInput(routes, enabled, o)),
     paseoConfigEnabled: Object.fromEntries(Object.keys(enabled).map((id) => [id, fileEnabled(cfg, id)])) };
 }
 
@@ -141,17 +151,19 @@ export async function set(ch, p = paths(), o = {}) {
     if (!changed && !Object.keys(enabledChanges).length) return { saved: false, enabledChanges: {}, note: 'nothing to change' };
     const stack = readUndo(p); stack.push({ at: new Date().toISOString(), pre: before ? before.toString('base64') : null, post: sha(bytes(p.routes)), enabled: prevEnabled });
     wr(undoFile(p), stack.slice(-UNDO_DEPTH));
+    refreshTotal(p, o, ids, enabledChanges);
     return { saved: true, enabledChanges };
   });
 }
 
 /** Exact undo of the last save: the routes file goes back byte for byte while it still equals what that save wrote. Returns the enabled flags to put back (the page sends them to the daemon). */
-export const undo = (p = paths()) => withLock(lockOf(p), () => {
+export const undo = (p = paths(), o = {}) => withLock(lockOf(p), () => {
   const stack = readUndo(p); const last = stack.at(-1);
   if (!last) throw new Error('nothing to undo');
   if (sha(bytes(p.routes)) !== last.post) throw new Error('the routes file changed since the last save (by hand, or by provider add/remove): not undone, so nothing is overwritten');
   if (last.pre === null) rmSync(p.routes, { force: true }); else writeAtomic(p.routes, Buffer.from(last.pre, 'base64'));
   stack.pop(); if (stack.length) wr(undoFile(p), stack); else rmSync(undoFile(p), { force: true });
+  refreshTotal(p, o, providerIds(p, o, rdr(p, {})), last.enabled ?? {});
   return { undone: true, enabledChanges: last.enabled ?? {} };
 });
 
@@ -164,6 +176,9 @@ export function writeEnabledFile(changes, p = paths()) {
     wr(p.paseo, cfg);
   });
 }
+
+/** Asks a running daemon to re-read config.json (paseo reload); true when it answered. */
+function reloadDaemon(p) { try { return !cliPaseo(homeOf(p))(['reload'])?.error; } catch { return false; } }
 
 /** Live check of every provider that has an HTTP endpoint: { [id]: "Not answering (checked HH:MM): why" | null }. Never cached, so "Check again" tells the truth. o.fetch overrides (tests). */
 export async function probeEndpoints(p = paths(), o = {}) {
@@ -182,7 +197,7 @@ export async function api({ verb, args = {} }, p = paths(), o = {}) {
   if (verb === 'probe') return await probeEndpoints(p, o);
   if (verb === 'models') { const m = await modelsOf(args.provider, p, o); return { models: m.models, known: m.known, error: m.error }; }
   if (verb === 'set') return await set(args, p, o);
-  if (verb === 'undo') return await undo(p);
+  if (verb === 'undo') return await undo(p, o);
   throw new Error(`unknown verb ${verb}`);
 }
 
@@ -198,7 +213,7 @@ const helpFor = (usage, cmd) => { const rows = usage.split('\n').slice(1), own =
 
 function render(s) {
   const lim = s.effective.laptopCap !== null && s.effective.effective < s.effective.configEffective ? ' (limited by this laptop)' : '';
-  const L = [`Configured slots ${s.configuredTotal}   effective now ${s.effective.effective}${lim}${s.effective.reasons.length ? '\n  ' + s.effective.reasons.join('\n  ') : ''}`, '', 'Providers:'];
+  const L = [`Configured slots ${s.configuredTotal}${s.onTotal < s.configuredTotal ? ` (${s.onTotal} on providers that are on)` : ''}   effective now ${s.effective.effective}${lim}${s.effective.reasons.length ? '\n  ' + s.effective.reasons.join('\n  ') : ''}`, '', 'Providers:'];
   const routed = s.providers.filter((x) => x.routed), idle = s.providers.filter((x) => !x.routed);
   for (const x of routed) L.push(`  ${x.id.padEnd(26)} ${x.enabled ? 'on ' : 'OFF'}  slots ${String(x.slots ?? 'no limit').padEnd(8)}${x.cap == null ? '' : ` cap ${String(x.cap).padEnd(3)}`} models ${x.models ? x.models.join(',') : 'all'}${x.readOnlyAllowed ? '  read-only ok' : ''}`);
   if (idle.length) L.push(`  ${idle.length} other provider${idle.length === 1 ? '' : 's'} not used by routing (no slots, in no chain): ${idle.map((x) => x.id).join(', ')}`);
@@ -230,9 +245,9 @@ export async function main(argv, p = paths(), o = {}) {
       if (i < 0) throw new Error(`${e} is not in the ${t} chain (${cur.join(', ') || 'empty'})`);
       cur.splice(i, 1); if (dir !== 'off') cur.splice(Math.max(0, Math.min(cur.length, i + (dir === 'up' ? -1 : 1))), 0, e);
       r = await set({ chains: { [t]: cur } }, p, o);
-    } else if (cmd === 'undo') r = await undo(p);
+    } else if (cmd === 'undo') r = await undo(p, o);
     else { console.log(USAGE); return 2; }
-    if (r.enabledChanges && Object.keys(r.enabledChanges).length) { (o.writeEnabled ?? writeEnabledFile)(r.enabledChanges, p); console.log(`Paseo enabled flag written for ${Object.keys(r.enabledChanges).join(', ')}; restart the daemon to apply it (just down && just up), or use Settings > Routing & slots which applies it live.`); }
+    if (r.enabledChanges && Object.keys(r.enabledChanges).length) { (o.writeEnabled ?? writeEnabledFile)(r.enabledChanges, p); const on = Object.entries(r.enabledChanges).map(([k, v]) => `${k} ${v ? 'on' : 'off'}`).join(', '); const live = (o.reload ?? reloadDaemon)(p); console.log(`Switched: ${on}. Routing and the routes list use it now.${live ? '' : ' The daemon was not reached, so Paseo itself shows the old state until it restarts (just down && just up).'}`); }
     console.log(r.saved === false ? `[OK] ${r.note}` : cmd === 'undo' ? '[OK] undone. Run `agent-hub routes show` to see what is back.' : '[OK] saved. Undo: agent-hub routes undo. No restart needed: routes are read at dispatch.');
     return 0;
   } catch (e) { console.error(`[REFUSED] ${e.message}`); return 1; }

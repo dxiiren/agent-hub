@@ -831,3 +831,31 @@ test("a laptop-hosted model that is refused for low RAM is skipped at once, not 
   const r = runRoute({ type: "review", prompt: "p", cwd: tmpdir(), session: "s", freeMem: () => 1, laptop: () => ({ freeGb: 8, cpuPct: 0 }), sleep: () => { slept++; }, providerState: new Map([["qwen-laptop", true], ["claude-clean", true]]) }, paseo, { slots: { "qwen-laptop": 1, "claude-clean": 2 }, minFreeRamGbByProvider: { "claude-clean": 0.5 }, routes: { review: ["qwen-laptop", "claude-clean"] } });
   assert.equal(slept, 0); assert.match(r.trace[0].skip, /^low RAM.*skipped at once/); assert.deepEqual(runs, ["claude-clean"]);
 });
+
+test('a known-down endpoint is skipped at once with a one-line reason, and a failed create reads as one plain line', async () => {
+  const { endpointSkip } = await import('../endpoint.mjs');
+  const { plainError, providerState, transient } = await import('../route.mjs');
+  const cfg = { agents: { providers: { 'q-a': { command: ['node', 'x.mjs', 'http://127.0.0.1:1/v1', 'm'] } } } };
+  assert.equal(endpointSkip('q-a', cfg, () => null), null);
+  assert.match(endpointSkip('q-a', cfg, () => 'Not answering (checked 20:33): nothing is listening there'), /^endpoint not answering \(checked 20:33\): nothing is listening there; skipped/);
+  assert.equal(endpointSkip('codex', cfg, () => 'down'), null, 'a provider with no endpoint is never probed');
+  const raw = 'exit=1 Created workspace wks_a1 - master\nTip: pass --workspace <id>\n{ "error": { "code": "AGENT_CREATE_FAILED", "message": "Failed to create agent: ACP agent process exited before initialization completed (exit code 75)\nNot answering (checked 20:33): nothing is listening there" } }';
+  assert.equal(plainError(raw), 'could not start: endpoint not answering (checked 20:33): nothing is listening there');
+  assert.equal(transient({ error: raw }), false, 'a process that exited at start is not retried for two minutes');
+  const calls = []; const r = runRoute({ type: 'summarise', prompt: 'p', cwd: '/r', session: 's', endpointDown: (id) => (id === 'dead' ? 'endpoint not answering: x' : null), providerState: new Map([['dead', true], ['live', true]]) },
+    (a) => { calls.push(a[0]); if (a[0] === 'run') return { status: 'completed', agentId: 'A1' }; return a[0] === 'ls' ? [] : a[0] === 'logs' ? 'answer text here' : {}; }, { slots: { dead: 1, live: 1 }, routes: { summarise: ['dead/m', 'live/m'] }, readOnlyEnforced: ['dead', 'live'], readOnlyModes: { dead: 'read-only', live: 'read-only' } });
+  assert.match(r.trace[0].skip, /endpoint not answering/); assert.equal(r.trace[0].provider, 'dead/m');
+  // the config file's explicit switch beats a daemon that has not reloaded
+  const ls = () => [{ provider: 'a', enabled: 'Enabled', status: 'available' }, { provider: 'b', enabled: 'Enabled', status: 'available' }, { provider: 'c', enabled: 'Disabled', status: 'unavailable' }];
+  assert.deepEqual([...providerState(ls, { agents: { providers: { a: { enabled: false }, c: { enabled: true } } } })], [['a', false], ['b', true], ['c', true]]);
+  assert.deepEqual([...providerState(ls)], [['a', true], ['b', true], ['c', false]]);
+});
+
+test('the per-attempt time limit covers the RAM wait: what is left of it is all the agent gets', () => {
+  let t = 0; const waits = [];
+  const p = (a) => { if (a[0] === "run") { waits.push(a[a.indexOf("--wait-timeout") + 1]); return { status: "completed", agentId: "A1" }; } return a[0] === "ls" ? [] : a[0] === "logs" ? "an answer" : {}; };
+  const r = runRoute({ type: "summarise", prompt: "p", cwd: "/r", session: "s", waitTimeout: "20s", now: () => t, sleep: (ms) => { t += ms; }, freeMem: () => (t < 9000 ? 0.1 : 8), providerState: new Map([["qwen-code", true]]) },
+    p, { slots: { "qwen-code": 1 }, routes: { summarise: ["qwen-code/m"] }, minFreeRamGb: 1, readOnlyEnforced: ["qwen-code"], readOnlyModes: { "qwen-code": "read-only" } });
+  assert.equal(r.used, "qwen-code/m");
+  assert.ok(t >= 9000 && Number(waits[0].replace("s", "")) <= 11, `waited ${t} ms for RAM, then the agent got ${waits[0]} of the 20 s`);
+});

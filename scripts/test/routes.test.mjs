@@ -18,7 +18,7 @@ function box(routes = ROUTES) {
   writeFileSync(p.paseo, JSON.stringify({ agents: { providers: { codex: {}, qoder: {} } } }));
   const LS = [{ provider: 'codex', label: 'Codex', status: 'available', enabled: 'Enabled' }, { provider: 'qoder', label: 'Qoder', status: 'available', enabled: 'Enabled' }, { provider: 'claude', label: 'Claude', status: 'available', enabled: 'Disabled' }];
   const models = { codex: ['gpt-a', 'gpt-b', 'gpt-c'], qoder: ['q1', 'q2'], claude: ['claude-haiku-1'] };
-  const o = { laptop: false, activeDir: t, paseoLs: () => LS, paseoModels: (id) => (models[id] ?? []).map((x) => ({ id: x, label: x })) };
+  const o = { laptop: false, activeDir: t, reload: () => true, paseoLs: () => LS, paseoModels: (id) => (models[id] ?? []).map((x) => ({ id: x, label: x })) };
   return { p, o, read: () => JSON.parse(readFileSync(p.routes, 'utf8')) };
 }
 
@@ -34,7 +34,7 @@ test('show lists providers with enabled, slots, allowed models, chains, configur
 });
 test('effectiveBudget stub: disabled providers do not count and say why', () => {
   const b = effectiveBudget({ slots: { a: 3, b: 2 }, enabled: { a: true, b: false } });
-  assert.deepEqual([b.configured, b.effective, b.perProvider.b], [5, 3, 0]); assert.match(b.reasons[0], /b: disabled/);
+  assert.deepEqual([b.configured, b.effective, b.perProvider.b], [5, 3, 0]); assert.match(b.reasons[0], /b: switched off/);
 });
 test('set/show round-trip: slots, model allow-list, chain; show reflects them; file keeps its other keys', async () => {
   const { p, o, read } = box();
@@ -158,4 +158,19 @@ test('probeEndpoints: a provider with an endpoint that does not answer reads "No
   const r = await api({ verb: 'probe' }, p, { ...o, fetch });
   assert.equal(r.probes.up1, null); assert.match(r.probes.dn1, /^Not answering \(checked \d\d:\d\d\): nothing is listening there$/); assert.equal(r.probes.codex, undefined);
   assert.deepEqual(Object.keys((await probeEndpoints(p, { fetch })).probes).sort(), ['dn1', 'up1']);
+});
+
+test('routes set --enabled false takes effect at once: show, the slot total and the statusline file, with a daemon that still reports the old state', async () => {
+  const { p, o } = box();
+  assert.equal(show(p, o).providers.find((x) => x.id === 'qoder').enabled, true);
+  const lines = []; const log = console.log; console.log = (x) => lines.push(String(x));
+  try { assert.equal(await main(['set', 'qoder', '--enabled', 'false'], p, o), 0); } finally { console.log = log; }
+  const s = show(p, o); // paseoLs (the daemon) still says Enabled: the config file's explicit flag wins
+  assert.equal(s.providers.find((x) => x.id === 'qoder').enabled, false);
+  assert.deepEqual([s.configuredTotal, s.onTotal, s.effective.configEffective], [5, 3, 3]);
+  assert.ok(lines.some((x) => /Switched: qoder off/.test(x)) && !lines.some((x) => /restart the daemon/.test(x)));
+  const tot = JSON.parse(readFileSync(join(o.activeDir, 'total.json'), 'utf8'));
+  assert.deepEqual([tot.total, tot.providers.qoder.enabled], [3, false]);
+  assert.equal(await main(['set', 'qoder', '--enabled', 'true'], p, o), 0);
+  assert.equal(show(p, o).providers.find((x) => x.id === 'qoder').enabled, true);
 });

@@ -1,4 +1,4 @@
-/*agent-hub-rev:19*/(function(){const __go=function(){
+/*agent-hub-rev:20*/(function(){const __go=function(){
 // Agent Hub UX layer (patch rev 10): an in-app confirm dialog, a friendly page for addresses that show nothing, and plain-English labels for hub-internal names.
 try{
 if(typeof document==="undefined")return;

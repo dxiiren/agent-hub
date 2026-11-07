@@ -1,10 +1,10 @@
 // Every user-visible string of the Routing & slots screen, in one place.
 export const R = {
   title: "Routing & slots (Agent Hub)",
-  intro: "Which providers the hub may use, which of their models, how many tasks each runs at once, and the order of each task type's chain (first is tried first). Same as `agent-hub routes`. Every change is saved at once and can be undone.",
-  total: (n: number) => `Configured slots: ${n}`,
+  intro: "Which providers the hub may use, which of their models, how many tasks each runs at once, and the order of each task type's chain (first is tried first). The same settings are available in a terminal with the agent-hub routes command. Every change is saved at once and can be undone.",
+  total: (n: number, on: number) => `Configured slots: ${n}${on < n ? ` (${on} on providers that are on, ${n - on} on providers that are switched off)` : ""}`,
   effective: (n: number, laptopCap: number | null, cfgEff: number) => `Effective now: ${n}${laptopCap === null ? " (sum of the enabled providers' slots)" : n < cfgEff ? ` (limited by this laptop: it has room for ${laptopCap} agent${laptopCap === 1 ? "" : "s"} now; the enabled providers' slots add up to ${cfgEff})` : " (limited by the enabled providers' slots, not by the laptop)"}`,
-  cap: (n: number | null) => (n == null ? "Cap: its own slots (a disabled provider's slots are not moved here; set one with `agent-hub routes set <id> --cap N`)" : `Cap: up to ${n} slots when other providers are off`),
+  cap: (n: number | null) => (n == null ? "Cap: its own slots (the slots of a switched-off provider do not move here)" : `Cap: up to ${n} slots when other providers are off`),
   providers: "Providers",
   noProviders: "No providers found. Is the daemon running?",
   status: "Status",
@@ -17,6 +17,9 @@ export const R = {
   slots: (max: number) => `Parallel slots (1 to ${max})`,
   unlimited: "No limit set: the hub does not cap this provider.",
   saveSlots: "Save slots",
+  saving: "Saving...",
+  slotsPlaceholder: "1 to 64",
+  badSlots: (max: number) => `Parallel slots: enter a whole number from 1 to ${max}.`,
   slotsAction: "Apply the slot number above",
   useAllLabel: "Remove the restriction",
   addLabel: "Add to the end of this chain",
@@ -46,5 +49,6 @@ export const R = {
   loadFailed: "Could not load the routing settings",
   loading: "Loading...",
   retry: "Retry",
+  retryList: "Try loading the model list again",
   timedOut: "The hub did not answer within 100 s. Is the daemon busy? Try again.",
 } as const;

@@ -28,15 +28,15 @@ export function effectiveBudget({ slots = {}, enabled = {}, caps = {}, order = O
   const perProvider = {}; let configured = 0, freed = 0; const reasons = [];
   for (const [id, n] of Object.entries(slots)) {
     configured += n;
-    if (enabled[id] === false) { perProvider[id] = 0; freed += n; reasons.push(`${id}: disabled in Paseo, its ${n} slot${n === 1 ? "" : "s"} go to the other providers`); } else perProvider[id] = n;
+    if (enabled[id] === false) { perProvider[id] = 0; freed += n; reasons.push(`${id}: switched off (${n} slot${n === 1 ? "" : "s"})`); } else perProvider[id] = n;
   }
   const rank = (id) => { const i = order.indexOf(id); return i < 0 ? 1e9 : i; };
   for (const id of Object.keys(perProvider).filter((x) => enabled[x] !== false).sort((a, b) => rank(a) - rank(b))) {
     if (freed <= 0) break;
     const give = Math.min(freed, Math.max(0, (caps[id] ?? slots[id]) - perProvider[id]));
-    if (give > 0) { perProvider[id] += give; freed -= give; reasons.push(`${id}: +${give} slot${give === 1 ? "" : "s"} from disabled providers (cap ${caps[id]})`); }
+    if (give > 0) { perProvider[id] += give; freed -= give; reasons.push(`${id}: takes over ${give} slot${give === 1 ? "" : "s"} from switched-off providers (${perProvider[id]} in all)`); }
   }
-  if (freed > 0) reasons.push(`${freed} slot${freed === 1 ? "" : "s"} unplaced: no enabled provider has headroom under its cap (set routes.slotCaps)`);
+  if (freed > 0) reasons.push(`${freed} slot${freed === 1 ? "" : "s"} of switched-off providers ${freed === 1 ? "is" : "are"} not used: no other provider has room for ${freed === 1 ? "it" : "them"} under its cap`);
   const configEffective = Object.values(perProvider).reduce((a, b) => a + b, 0);
   let laptopCap = null; let source = "configured-slots";
   if (Number.isFinite(freeGb)) {

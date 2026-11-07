@@ -1,6 +1,8 @@
 // Every user-visible string of the Add / edit provider screen, in one place (translate by replacing this object).
 export const S = {
   navTitle: "Add provider (Agent Hub)",
+  editTitle: "Edit provider (Agent Hub)",
+  introEdit: "Change this provider's settings and press Save changes.",
   intro: "Add a model endpoint or a command-line model to the hub. Pick a kind, fill in the fields and press Add provider.",
   kind: "Kind",
   name: "Name",

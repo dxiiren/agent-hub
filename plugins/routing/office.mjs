@@ -120,3 +120,17 @@ export function safeUrl(raw) {
   if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash || !u.hostname) return "";
   return u.origin + u.pathname.replace(/\/+$/, "");
 }
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && process.argv[2] === "--down") {
+  console.log((await endpointDown(process.argv[3])) ?? ""); // "" = answering
+}
+
+/** Sync, cached answer for a route: null when the provider's HTTP endpoint answers (or it has none, or the probe itself failed), else the "Not answering (checked HH:MM): why" text. Cached 30 s in the run dir so parallel routes probe once. `base` = the endpoint, `run` and `file` are injectable for tests. */
+export function endpointDownCached(base, { file = join(runDir(), "agent-hub-endpoint-probe.json"), now = Date.now(), ttl = 30_000, run = (b) => spawnSync(process.execPath, [fileURLToPath(import.meta.url), "--down", b], { encoding: "utf8", timeout: 7000 }) } = {}) {
+  const c = readStateJson(file) ?? {};
+  if (c[base] && now - c[base].at < ttl) return c[base].down || null;
+  const r = run(base); if (r.error || r.status !== 0) return null; // the probe could not run: never block a route on it
+  const down = String(r.stdout ?? "").trim();
+  tryWriteState(file, { ...c, [base]: { at: now, down } });
+  return down || null;
+}

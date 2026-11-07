@@ -74,8 +74,8 @@ test("effectiveBudget: disabled provider's slots move to next enabled provider b
   assert.equal(r.perProvider["codex-gpt5"], 4);
   assert.equal(r.configEffective, 4);
   assert.equal(r.configured, 5);
-  assert.ok(r.reasons.some((x) => /disabled in Paseo/.test(x) && /claude-opus/.test(x)));
-  assert.ok(r.reasons.some((x) => /\+2 slots from disabled/.test(x) && /codex-gpt5/.test(x)));
+  assert.ok(r.reasons.some((x) => /switched off/.test(x) && /claude-opus/.test(x)));
+  assert.ok(r.reasons.some((x) => /takes over 2 slots from switched-off/.test(x) && /codex-gpt5/.test(x)));
 });
 
 test("effectiveBudget: caps default to provider's own slots so nothing moves when disabled", () => {
@@ -85,7 +85,7 @@ test("effectiveBudget: caps default to provider's own slots so nothing moves whe
   const r = effectiveBudget({ slots, enabled, order });
   assert.equal(r.perProvider["codex-gpt5"], 2, "codex stays at its own slots (cap defaults to slots)");
   assert.equal(r.configEffective, 2);
-  assert.ok(r.reasons.some((x) => /unplaced/.test(x)));
+  assert.ok(r.reasons.some((x) => /not used: no other provider has room/.test(x)));
 });
 
 test("effectiveBudget: configured total may exceed 19 (e.g. slots 10+10, caps 30)", () => {

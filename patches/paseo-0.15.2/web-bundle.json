@@ -81,7 +81,7 @@
   {
    "name": "schedule-missing-fn",
    "find": "function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){",
-   "replace": "function __AhBad(T){if(\"agent\"===T.targetKind)return!1;const r=String(T.maxRuns??\"\").trim();return(\"\"!==r&&!/^[1-9]\\d{0,5}$/.test(r))||String(T.name||\"\").length>120||String(T.prompt||\"\").length>20000}function __AhMissing(T,te){if(\"agent\"===T.targetKind)return[];const r=String(T.maxRuns??\"\").trim();return[!(T.workingDir||\"\").trim()&&\"Choose a project\",!(T.selectedProvider&&T.selectedModel)&&\"Choose a model\",!(T.prompt||\"\").trim()&&\"Write a prompt\",(!T.submitCadence||te)&&\"Fix the cadence (for example 0 9 * * * runs every day at 09:00)\",(\"\"!==r&&!/^[1-9]\\d{0,5}$/.test(r))&&\"Max runs must be a whole number from 1 to 999999, or leave it empty\",String(T.name||\"\").length>120&&\"The name can have at most 120 characters\",String(T.prompt||\"\").length>20000&&\"The prompt can have at most 20000 characters\"].filter(Boolean)}function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){"
+   "replace": "function __AhBad(T){if(\"agent\"===T.targetKind)return!1;const r=String(T.maxRuns??\"\").trim();return(\"\"!==r&&!/^[1-9]\\d{0,5}$/.test(r))||String(T.name||\"\").length>120||String(T.prompt||\"\").length>20000}function __AhMissing(T,te){if(\"agent\"===T.targetKind)return[];const r=String(T.maxRuns??\"\").trim();return[!(T.workingDir||\"\").trim()&&\"Choose a project\",!T.selectedProvider&&\"Choose a provider\",!(T.prompt||\"\").trim()&&\"Write a prompt\",(!T.submitCadence||te)&&\"Fix the cadence (for example 0 9 * * * runs every day at 09:00)\",(\"\"!==r&&!/^[1-9]\\d{0,5}$/.test(r))&&\"Max runs must be a whole number from 1 to 999999, or leave it empty\",String(T.name||\"\").length>120&&\"The name can have at most 120 characters\",String(T.prompt||\"\").length>20000&&\"The prompt can have at most 20000 characters\"].filter(Boolean)}function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){"
   },
   {
    "name": "schedule-missing-use",
@@ -266,7 +266,7 @@
   {
    "name": "custom-model-valid",
    "find": "V=P.length>0&&!R.some(e=>e.id===P),n[5]=R,n[6]=P,n[7]=V):V=n[7]",
-   "replace": "V=P.length>0&&P.length<=200&&!R.some(e=>e.id===P)&&!__AhDup(P),n[5]=R,n[6]=P,n[7]=V):V=n[7]"
+   "replace": "V=P.length>0&&P.length<=200&&!R.some(e=>e.id===P)&&!__AhDup(P)&&__AhOk(P),n[5]=R,n[6]=P,n[7]=V):V=n[7]"
   },
   {
    "name": "custom-model-msg",
@@ -364,5 +364,5 @@
    "replace": "M=l.args&&l.args.length>0?`${l.command} ${l.args.join(\" \").split(\"{{{prompt}}}\").join(\"<your prompt>\")}`:l.command"
   }
  ],
- "rev": 19
+ "rev": 20
 }

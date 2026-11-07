@@ -137,7 +137,7 @@ async function addLocked(a, p, { f = fetch, which = () => 'qwen', run, preOverri
     if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');
   } else if (a.accountDir) throw new Error('--account-dir needs --account');
   for (const [what, v] of [['name', name], ['account', account]]) if (v && RESERVED_NAME_RE.test(v)) throw new Error(`${what} "${v}" is a Windows device name (con, nul, com1, ...): choose another`);
-  if (!k.nameRe.test(name || '') || name.endsWith('-ro') || RESERVED.has(name)) throw new Error(`name must match ${k.nameRe} (${k.nameHelp}; not ending -ro, not one of ${[...RESERVED]})`);
+  if (!k.nameRe.test(name || '') || name.endsWith('-ro') || RESERVED.has(name)) throw new Error(`name must match the naming rule: ${String(k.nameHelp).split(';')[0]}; it must not end in -ro or be one of ${[...RESERVED].join(', ')}`);
   if (k.own) {
     if (!Number.isInteger(slots) || slots < 1) throw new Error('--slots must be a positive integer');
   }
@@ -407,7 +407,9 @@ const USAGE = `usage:
   provider add <name> --kind <kind> [--url U] --model M [--key K] [--slots N] [--routes code-edit:2,summarise] [--readonly false] [--label "Display name"]
   provider add <name> --kind claude|codex|qoder --account <acct> --model M [--account-dir D] [--slots N] [--routes ...]   (own login dir; prints the one-line login command)
   provider edit <name> [--label "Display name"] [--model M] [--url U] [--key K] [--slots N] [--routes ...] [--readonly true|false]
-  provider list | models --kind <kind> [--url U] [--key K] | remove <name> [--purge]
+  provider list                                    the providers added through the hub
+  provider models --kind <kind> [--url U] [--key K]   the models an endpoint serves
+  provider remove <name> [--purge]                 stop using a provider (--purge also deletes its saved login folder)
   provider api            (JSON on stdin {verb,args}; used by the Settings screen)`;
 
 const helpFor = (usage, cmd) => { const rows = usage.split('\n').slice(1), own = rows.filter((x) => new RegExp(`^\\s+(routes|provider) ${cmd}\\b`).test(x)), l = own.length ? own : rows.filter((x) => x.includes(` ${cmd} `) || x.includes(`| ${cmd}`)); return `usage:\n${(l.length ? l : rows).join('\n')}`; };

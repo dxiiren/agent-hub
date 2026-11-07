@@ -29,6 +29,8 @@ export function RoutingScreen() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [probes, setProbes] = useState<Record<string, string | null>>({});
   const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const dirty = useRef(false);
 
   const refresh = useCallback(async () => {
     const d: any = await call({ verb: "show" });
@@ -48,6 +50,12 @@ export function RoutingScreen() {
     const r: any = await call({ verb: "models", args: { provider: id } });
     setModels((m) => ({ ...m, [id]: r.error ? { error: r.error } : { list: r.models ?? [], known: !!r.known } }));
   }, [call]);
+  // A second tab or the terminal may have changed things: when this tab is shown again and nothing here is half-typed, load the current state.
+  useEffect(() => {
+    const again = () => { if (document.visibilityState === "visible" && !dirty.current) void refresh(); };
+    document.addEventListener("visibilitychange", again); window.addEventListener("focus", again);
+    return () => { document.removeEventListener("visibilitychange", again); window.removeEventListener("focus", again); };
+  }, [refresh]);
   useEffect(() => { void checkAgain(); void refresh().then((d) => { d?.providers.forEach((p) => void loadModels(p.id)); }); }, [refresh, loadModels, checkAgain]);
 
   const save = async (verb: "set" | "undo", args: Record<string, unknown> = {}, ok: string = R.saved, where = "top") => {
@@ -57,7 +65,12 @@ export function RoutingScreen() {
     setMsg(r.error ? { ok: false, text: String(r.error), where } : { ok: true, text: r.saved === false ? R.nothing : ok, where });
     await refresh();
   };
-  const setProv = (id: string, c: Record<string, unknown>) => save("set", { providers: { [id]: c } }, R.saved, id);
+  const setProv = async (id: string, c: Record<string, unknown>) => { setSaving(id); try { await save("set", { providers: { [id]: c } }, R.saved, id); } finally { setSaving(null); } };
+  const saveSlots = (id: string, text: string) => {
+    const t = text.trim();
+    if (!/^\d+$/.test(t) || Number(t) < 1 || Number(t) > (data?.maxSlots ?? 64)) { setMsg({ ok: false, text: R.badSlots(data?.maxSlots ?? 64), where: id }); return; }
+    void setProv(id, { slots: t });
+  };
   const setChain = (t: string, chain: string[]) => save("set", { chains: { [t]: chain } }, R.saved, `chain:${t}`);
   // The answer appears in the card the user just used, not at the top of a long page.
   const note = (where: string) => (msg && msg.where === where ? <SettingsRow label={msg.ok ? msg.text : R.failed} error={msg.ok ? null : msg.text} /> : null);
@@ -87,14 +100,16 @@ export function RoutingScreen() {
     return opts;
   };
   const eff = data.effective;
+  const onTotal = data.providers.reduce((a, p) => a + (p.enabled ? p.slots ?? 0 : 0), 0);
+  dirty.current = data.providers.some((p) => (slots[p.id] ?? "") !== (p.slots == null ? "" : String(p.slots)));
 
   return (
     <>
       <SettingsSection title={R.title}>
         <SettingsCard>
           <SettingsRow label={R.intro} />
-          <SettingsRow label={R.total(data.configuredTotal)} hint={R.effective(eff.effective, eff.laptopCap, eff.configEffective)} />
-          {eff.reasons.map((x) => <SettingsRow key={x} label={x} />)}
+          <SettingsRow label={R.total(data.configuredTotal, onTotal)} hint={R.effective(eff.effective, eff.laptopCap, eff.configEffective)} />
+          {eff.reasons.filter((x) => !/^the laptop has room/.test(x)).map((x) => <SettingsRow key={x} label={x} />)}
           {note("top")}
           <SettingsAction label={R.undoLabel} hint={data.canUndo ? undefined : R.nothingToUndo} actionLabel={R.undo} disabled={busy || !data.canUndo} onPress={() => void save("undo", {}, R.undone)} />
         </SettingsCard>
@@ -108,15 +123,15 @@ export function RoutingScreen() {
               <SettingsSwitch label={pretty(p)} value={p.enabled} disabled={busy} onValueChange={(v) => void setProv(p.id, { enabled: v })} />
               {probes[p.id]
                 ? <SettingsAction label={R.status} hint={probes[p.id]!} actionLabel={checking ? R.checking : R.checkAgain} disabled={checking} onPress={() => void checkAgain()} />
-                : <SettingsRow label={R.status} hint={`${R.statusWord(p.status)}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />}
-              <SettingsInput label={R.slots(data.maxSlots)} hint={p.slots == null ? R.unlimited : undefined} initialValue={slots[p.id] ?? ""} onChangeText={(t) => setSlots((s) => ({ ...s, [p.id]: t }))} />
-              <SettingsAction label={R.slotsAction} actionLabel={R.saveSlots} disabled={busy || (slots[p.id] ?? "") === (p.slots == null ? "" : String(p.slots))} onPress={() => void setProv(p.id, { slots: (slots[p.id] ?? "").trim() })} />
+                : <SettingsRow label={R.status} hint={`${p.enabled ? R.statusWord(p.status) : R.statusWord("disabled")}${p.readOnlyAllowed ? `  -  ${R.readOnly}` : ""}`} />}
+              <SettingsInput key={`${p.id}:${p.slots}`} label={R.slots(data.maxSlots)} hint={p.slots == null ? R.unlimited : undefined} placeholder={R.slotsPlaceholder} initialValue={slots[p.id] ?? ""} onChangeText={(t) => setSlots((s) => ({ ...s, [p.id]: t }))} />
+              <SettingsAction label={R.slotsAction} actionLabel={saving === p.id ? R.saving : R.saveSlots} disabled={busy || (slots[p.id] ?? "") === (p.slots == null ? "" : String(p.slots))} onPress={() => saveSlots(p.id, slots[p.id] ?? "")} />
               <SettingsRow label={R.cap(p.cap)} />
               {m.known && !m.error ? (
                 <SettingsAction label={R.models} hint={p.models ? R.someModels(p.models.length, m.list!.length) : R.allModels} actionLabel={openModels[p.id] ? R.hideList : R.showList(m.list!.length)} onPress={() => setOpenModels((o) => ({ ...o, [p.id]: !o[p.id] }))} />
               ) : <SettingsRow label={R.models} hint={m.loading ? R.loading : m.error ? undefined : R.noList} />}
               {m.error ? <SettingsRow label={R.modelsFailed} error={m.error} /> : null}
-              {m.error ? <SettingsAction label={R.modelsFailed} actionLabel={R.retry} onPress={() => void loadModels(p.id)} /> : null}
+              {m.error ? <SettingsAction label={R.retryList} actionLabel={R.retry} onPress={() => void loadModels(p.id)} /> : null}
               {m.known && openModels[p.id] ? m.list!.map((x) => (
                 <SettingsSwitch key={x.id} label={x.label && x.label !== x.id ? `${x.label} (${x.id})` : x.id} value={!p.models || p.models.includes(x.id)} disabled={busy} onValueChange={(v) => toggleModel(p, x.id, v)} />
               )) : null}
