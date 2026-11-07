@@ -1,6 +1,9 @@
 {
   "id": "agent-hub-gate",
   "name": "Agent Hub gate",
+  "description": "Checks every finished agent task before it is accepted: scans for leaked secrets and oversized or out-of-scope changes, asks the agent to fix once, then marks the task pass or fail.",
   "media": [],
-  "requirements": { "paseo": ">=0.15.0" }
+  "requirements": {
+    "paseo": ">=0.15.0"
+  }
 }

@@ -108,7 +108,7 @@ test('a newer patch revision re-patches from the untouched original and drops th
   assert.deepEqual(snap(), before);
   const s = loadSpec('0.15.2');
   const pick = s.edits.find((e) => e.name === 'model-picker-component');
-  assert.ok(pick.replace.includes('/*agent-hub-rev:' + s.rev + '*/') && pick.replace.endsWith(pick.find), 'component source loaded and ends with the anchor it precedes');
+  assert.ok(s.edits.some((e) => e.replace.includes('/*agent-hub-rev:' + s.rev + '*/')) && pick.replace.endsWith(pick.find), 'component source loaded and ends with the anchor it precedes');
 });
 
 // ---- the logic the patch injects, run for real with stubbed browser globals (verifier D: plugin-page reload and schedule hint were UNTESTED)

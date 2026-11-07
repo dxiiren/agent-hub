@@ -31,12 +31,13 @@ export function selfHostedProviders(cfg, local = {}) {
   const out = [];
   for (const [name, p] of Object.entries(all)) {
     if (name.endsWith("-ro") && all[nonRo(name)]) continue;
+    if (p?.enabled === false) continue; // a switched-off provider is not an endpoint the hub uses: no card row, never counted as up
     const cmd = Array.isArray(p?.command) ? p.command.map(String) : [];
     let base = cmd.find((a) => /^https?:\/\//i.test(a));
     if (!base && p?.env?.LAPTOP_PORT) base = `http://127.0.0.1:${p.env.LAPTOP_PORT}/v1`; // the hub's laptop llama.cpp launcher serves on a local port
     if (!base) continue;
     const label = String(p?.label || name);
-    out.push({ name, label, kind: kindOfProvider(name, label, base, local, p), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: own(local.metricsUrls, name) });
+    out.push({ name, label, onDemand: !!p?.env?.LAPTOP_PORT || own(local.extraProviders, name)?.type === "local-llama", kind: kindOfProvider(name, label, base, local, p), base, key: p.env?.HUB_OPENAI_API_KEY, metricsUrl: own(local.metricsUrls, name) });
   }
   return out;
 }
@@ -94,23 +95,24 @@ export function parseMetrics(text) {
 
 const fmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 
+const WHY = { ECONNREFUSED: "nothing is listening there", ETIMEDOUT: "no answer in time", TimeoutError: "no answer in time", ENOTFOUND: "the host name is unknown", EHOSTUNREACH: "the host is unreachable" };
 const tone = (up, total) => (up === total ? "ok" : up === 0 ? "danger" : "warning");
 const line = (t) => `${fmt(t.in)} in / ${fmt(t.out)} out, ${t.n} tasks`;
 /** Endpoints of one kind -> ONE Paseo UsageReport: a status row, TOTAL rows, then one row per endpoint (Paseo's UsageDetail has no collapse/children, so they are plain rows).
  *  items = [{label, probe:{up, model?, error?, metrics?}, t:tally}]. Pure. No plan percentage is invented. */
 export function groupReport(items) {
-  const up = items.filter((i) => i.probe.up).length, n = items.length, sum = (k) => items.reduce((a, i) => ({ in: a.in + i.t[k].in, out: a.out + i.t[k].out, n: a.n + i.t[k].n }), { in: 0, out: 0, n: 0 });
+  const up = items.filter((i) => i.probe.up || i.probe.idle).length, n = items.length, sum = (k) => items.reduce((a, i) => ({ in: a.in + i.t[k].in, out: a.out + i.t[k].out, n: a.n + i.t[k].n }), { in: 0, out: 0, n: 0 });
   const details = [
-    { id: "status", label: "Endpoints", value: `${up} of ${n} up`, tone: tone(up, n) },
+    { id: "status", label: "Endpoints", value: `${up} of ${n} ${items.some((i) => i.probe.idle) ? "ready" : "up"}`, tone: tone(up, n) },
     { id: "total-today", label: "Total today", value: line(sum("today")) },
     { id: "total-week", label: "Total last 7 days", value: line(sum("week")) },
     ...items.map((i, k) => ({
       id: `ep-${k}`, label: i.label,
-      value: [i.probe.up ? "up" : `down${i.probe.error ? ` (${i.probe.error})` : ""}`, i.probe.up && i.probe.model, i.probe.metrics && `${i.probe.metrics.running ?? "?"} running, ${i.probe.metrics.queued ?? "?"} queued`, `today ${line(i.t.today)}`].filter(Boolean).join(" · "),
-      tone: i.probe.up ? "ok" : "danger",
+      value: [i.probe.up ? "up" : i.probe.idle ? "idle: starts when a task needs it" : `down${i.probe.error ? ` (${i.probe.error}): ${WHY[i.probe.error] ?? "the server did not answer"}; start it or check its address` : ""}`, i.probe.up && i.probe.model, i.probe.metrics && `${i.probe.metrics.running ?? "?"} running, ${i.probe.metrics.queued ?? "?"} queued`, `today ${line(i.t.today)}`].filter(Boolean).join(" · "),
+      tone: i.probe.up || i.probe.idle ? "ok" : "danger",
     })),
   ];
-  return { status: "available", planLabel: `${n} endpoint${n === 1 ? "" : "s"}, ${up} up`, windows: [], details };
+  return { status: "available", planLabel: `${n} endpoint${n === 1 ? "" : "s"}, ${up} ${up === n && items.some((i) => i.probe.idle) ? "ready" : "up"}`, windows: [], details };
 }
 
 /** GET <base>/models (and the optional metrics URL) with a short timeout. Never throws; the key is sent as a Bearer token and never returned. */
@@ -122,7 +124,7 @@ export async function probe(pv, { f = fetch, timeoutMs = 4000 } = {}) {
     const out = { up: true, model: String(j?.data?.[0]?.id ?? "").slice(0, 120) };
     if (pv.metricsUrl) { try { const m = await f(pv.metricsUrl, { signal: AbortSignal.timeout(timeoutMs) }); if (m.ok) out.metrics = parseMetrics(await m.text()); } catch { /* metrics are optional */ } }
     return out;
-  } catch (e) { return { up: false, error: String(e?.cause?.code ?? e?.name ?? "unreachable").slice(0, 40) }; }
+  } catch (e) { const code = String(e?.cause?.code ?? e?.name ?? "unreachable").slice(0, 40); return pv.onDemand && code === "ECONNREFUSED" ? { up: false, idle: true } : { up: false, error: code }; } // an on-demand local server is stopped between tasks: that is its normal state
 }
 
 const cache = new Map();

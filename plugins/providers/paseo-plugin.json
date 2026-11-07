@@ -1,6 +1,9 @@
 {
   "id": "agent-hub-providers",
   "name": "Agent Hub providers",
+  "description": "Adds model providers to the hub and sets which models handle which kind of task, in Settings under Add provider and Routing and slots.",
   "media": [],
-  "requirements": { "paseo": ">=0.15.0" }
+  "requirements": {
+    "paseo": ">=0.15.0"
+  }
 }

@@ -12,6 +12,19 @@ type Kind = { type: string; label: string; fields: Field[]; slots: boolean; read
 type Added = { name: string; label?: string; type: string; model: string; url?: string; slots?: number; keySet?: boolean; routes: string[]; account?: string };
 type Model = { id: string; label: string; hint?: string };
 const CUSTOM = "__custom__";
+/** Turn a command-line style refusal into the words the form uses (field names, no regex, no file paths). */
+export function friendly(e: string): string {
+  const t = String(e);
+  if (/name must match/i.test(t)) return S.badName;
+  if (/--label must/i.test(t)) return S.badLabel;
+  if (/--slots must/i.test(t)) return S.badSlots;
+  if (/ENOENT|[.]tmp/.test(t) && /name|json|tmp|open /i.test(t)) return S.badNameLong;
+  return t.replace(/\s*requestType=\S+\s*code=\S+/g, "").replace(/[A-Za-z]:\\[^\s'")]+/g, "<path>");
+}
+const askRemove = async (n: string): Promise<boolean> => {
+  const c = (globalThis as any).__ahConfirm; // the in-app dialog from the web patch
+  return c ? !!(await c({ title: S.removeTitle(n), message: S.removeConfirm, confirmLabel: S.remove, destructive: true })) : window.confirm(S.removeTitle(n) + " - " + S.removeConfirm);
+};
 const OFF = "off";
 
 function Screen() {
@@ -98,12 +111,13 @@ function Screen() {
   }, []);
   const routesArg = () => Object.entries(pos).filter(([, v]) => v !== OFF).map(([c, v]) => (v === "end" ? c : `${c}:${v}`)).join(",");
   const submit = async () => {
+    if (!editing && name.trim().length > 40) return setMsg({ ok: false, text: S.badNameLong });
     setBusy(true); setMsg(null);
     const args: Record<string, unknown> = { ...vals, kind, slots, readOnly: twin ? "true" : "false", routes: routesArg(), ...(account && !editing ? { account } : {}) };
     if (editing) { args.name = editing; if (!vals.key) delete args.key; } else args.name = name;
     const r: any = await call({ verb: editing ? "edit" : "add", args });
     setBusy(false);
-    if (r.error) return setMsg({ ok: false, text: `${S.failed} ${r.error}` });
+    if (r.error) return setMsg({ ok: false, text: friendly(r.error) });
     setMsg({ ok: true, text: (r.login ? S.loginOnce(r.login) + " " : "") + (r.needsRestart ? S.needsRestart : S.noRestart) });
     reset(); await refresh();
   };
@@ -112,10 +126,11 @@ function Screen() {
     setPos(Object.fromEntries(a.routes.map((c) => [c, "end"]))); setModels([]); setFormKey((n) => n + 1); setMsg(null);
   };
   const del = async (n: string) => {
+    if (!(await askRemove(n))) return;
     setBusy(true);
     const r: any = await call({ verb: "remove", args: { name: n } });
     setBusy(false);
-    setMsg(r.error ? { ok: false, text: `${S.failed} ${r.error}` } : { ok: true, text: S.removed(n) });
+    setMsg(r.error ? { ok: false, text: friendly(r.error) } : { ok: true, text: S.removed(n) });
     if (editing === n) reset();
     await refresh();
   };
@@ -139,7 +154,7 @@ function Screen() {
         <SettingsCard>
           <SettingsRow label={S.intro} />
           <SettingsSelect label={S.kind} value={kind} options={kinds.map((x) => ({ label: x.label, value: x.type }))} disabled={!!editing} onValueChange={(v) => { setKind(v); setModels([]); setVals({}); setFormKey((n) => n + 1); }} />
-          <SettingsInput key={`n${formKey}`} label={S.name} hint={k?.nameHelp ?? S.nameHint} initialValue={name} disabled={!!editing} placeholder={S.nameHint} onChangeText={setName} />
+          <SettingsInput key={`n${formKey}`} label={S.name} hint={k?.nameHelp ?? S.nameHint} initialValue={name} disabled={!!editing} placeholder={S.namePlaceholder} onChangeText={setName} />
           {k?.ownProvider ? <SettingsInput key={`l${formKey}`} label={S.label} hint={S.labelHint} initialValue={vals.label ?? ""} onChangeText={(t) => setVals((v) => ({ ...v, label: t }))} /> : null}
           {k?.fields.filter((f) => f.type !== "model").map((f) => (
             <SettingsInput key={`${f.id}${formKey}`} label={f.label} hint={f.type === "secret" ? S.keyHint : f.help} initialValue={f.type === "secret" ? "" : vals[f.id] ?? ""} secureTextEntry={f.type === "secret"}
@@ -160,16 +175,16 @@ function Screen() {
           ))}
           <SettingsAction label={editing ? `${S.save}: ${editing}` : S.add} actionLabel={busy ? S.adding : editing ? S.save : S.add} disabled={busy} onPress={() => void submit()} />
           {editing ? <SettingsAction label={editing} actionLabel={S.cancelEdit} onPress={reset} /> : null}
-          {msg ? <SettingsRow label={msg.text} error={msg.ok ? null : msg.text} /> : null}
+          {msg ? (msg.ok ? <SettingsRow label={msg.text} /> : <SettingsRow label={S.failed} error={msg.text} />) : null}
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title={S.existing}>
         <SettingsCard>
           {added.length === 0 ? <SettingsRow label={S.none} /> : null}
           {added.map((a) => (
-            <SettingsRow key={a.name} label={`${a.name}  (${a.type}${a.account ? `, account ${a.account}` : ""})`} hint={`${a.model}${a.url ? `  ${a.url}` : ""}${a.keySet ? `  ${S.keySet}` : ""}  slots ${a.slots ?? "-"}  ${a.routes.join(", ") || "-"}`}>
-              <SettingsAction label={a.name} actionLabel={S.edit} onPress={() => startEdit(a)} />
-              <SettingsAction label={a.name} actionLabel={S.remove} disabled={busy} onPress={() => void del(a.name)} />
+            <SettingsRow key={a.name} label={`${a.label || a.name}  (${a.type}${a.account ? `, account ${a.account}` : ""})`} hint={[a.model, a.url, a.keySet ? S.keySet : "", a.slots ? `slots ${a.slots}` : "", a.routes.length ? `serves ${a.routes.join(", ")}` : ""].filter(Boolean).join("  ")}>
+              <SettingsAction label={S.editRow(a.name)} actionLabel={S.edit} onPress={() => startEdit(a)} />
+              <SettingsAction label={S.removeRow(a.name)} actionLabel={S.remove} disabled={busy} onPress={() => void del(a.name)} />
             </SettingsRow>
           ))}
         </SettingsCard>

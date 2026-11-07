@@ -81,7 +81,7 @@
   {
    "name": "schedule-missing-fn",
    "find": "function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){",
-   "replace": "function __AhMissing(T,te){if(\"agent\"===T.targetKind)return[];return[!(T.workingDir||\"\").trim()&&\"a project\",!(T.selectedProvider&&T.selectedModel)&&\"a model\",!(T.prompt||\"\").trim()&&\"a prompt\",(!T.submitCadence||te)&&\"a valid cadence\"].filter(Boolean)}function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){"
+   "replace": "function __AhBad(T){if(\"agent\"===T.targetKind)return!1;const r=String(T.maxRuns??\"\").trim();return(\"\"!==r&&!/^[1-9]d{0,5}$/.test(r))||String(T.name||\"\").length>120||String(T.prompt||\"\").length>20000}function __AhMissing(T,te){if(\"agent\"===T.targetKind)return[];const r=String(T.maxRuns??\"\").trim();return[!(T.workingDir||\"\").trim()&&\"a project\",!(T.selectedProvider&&T.selectedModel)&&\"a model\",!(T.prompt||\"\").trim()&&\"a prompt\",(!T.submitCadence||te)&&\"a valid cadence\",(\"\"!==r&&!/^[1-9]d{0,5}$/.test(r))&&\"Max runs as a whole number from 1 to 999999 (or empty)\",String(T.name||\"\").length>120&&\"a name of at most 120 characters\",String(T.prompt||\"\").length>20000&&\"a prompt of at most 20000 characters\"].filter(Boolean)}function q({serverId:e,visible:s,onClose:o,onDismiss:l,mode:u,schedule:h}){"
   },
   {
    "name": "schedule-missing-use",
@@ -107,6 +107,136 @@
    "name": "plugin-reload-hint",
    "find": "{onSelect:v,disabled:k,status:H,pendingLabel:R,children:B}",
    "replace": "{onSelect:l.enabled?v:()=>{},disabled:p,status:H,pendingLabel:R,children:l.enabled?B:B+\" (enable the plugin first)\"}"
+  },
+  {
+   "name": "ux-layer",
+   "find": "process.env=process.env||{};process.env.NODE_ENV=process.env.NODE_ENV||\"production\";",
+   "replaceFile": "ux-layer.js"
+  },
+  {
+   "name": "confirm-in-app",
+   "find": "function v(e){const n=globalThis.confirm;if(\"function\"!=typeof n)throw new Error(\"[ConfirmDialog] No web confirmation backend is available.\");f();return n(`${e.title}\\n\\n${e.message}`)}",
+   "replace": "function v(e){f();return globalThis.__ahConfirm?globalThis.__ahConfirm(e):Promise.resolve(globalThis.confirm(e.title+\" - \"+e.message))}"
+  },
+  {
+   "name": "catalog-add-confirm",
+   "find": "try{await k((0,_.buildAcpProviderConfigPatch)(e,v)),await R([e.id])}",
+   "replace": "try{if(!await(0,M.confirmDialog)({title:\"Add \"+e.title+\"?\",message:\"This sets up the command: \"+(Array.isArray(e.command)&&e.command.length?e.command.join(\" \"):e.title)+\" That program must already be installed on this computer; adding does not install it. You can remove the provider again from its menu.\",confirmLabel:\"Add provider\"}))return;await k((0,_.buildAcpProviderConfigPatch)(e,v)),await R([e.id])}"
+  },
+  {
+   "name": "404-title",
+   "find": "children:\"Unmatched Route\"",
+   "replace": "children:\"This page does not exist\""
+  },
+  {
+   "name": "404-sub",
+   "find": "children:\"Page could not be found.\"",
+   "replace": "children:\"The address may be mistyped, or the item was removed.\""
+  },
+  {
+   "name": "404-path",
+   "find": "children:L})})}):(0,n.jsx)(s.View,{style:[S.pageLink",
+   "replace": "children:\"\"})})}):(0,n.jsx)(s.View,{style:[S.pageLink"
+  },
+  {
+   "name": "404-home",
+   "find": "(0,n.jsx)(h.Link,{href:\"/_sitemap\",replace:!0",
+   "replace": "(0,n.jsx)(h.Link,{href:\"/\",replace:!0"
+  },
+  {
+   "name": "404-home-label",
+   "find": "children:\"Sitemap\"})})})]})]})}",
+   "replace": "children:\"Start page\"})})})]})]})}"
+  },
+  {
+   "name": "providers-heading",
+   "find": "title:n(\"settings.providers.title\"),testID:\"host-page-providers-card\"",
+   "replace": "title:\"Installed providers\",testID:\"host-page-providers-card\""
+  },
+  {
+   "name": "providers-skeleton",
+   "find": "J&&u&&T?(0,B.jsx)(A,{}):null,",
+   "replace": "J&&u&&(T||0===q.length)?(0,B.jsx)(A,{}):null,"
+  },
+  {
+   "name": "catalog-after-load",
+   "find": "J&&u?(0,B.jsx)(z.SettingsSection,{title:n(\"settings.providers.addProvider\")",
+   "replace": "J&&u&&q.length>0?(0,B.jsx)(z.SettingsSection,{title:n(\"settings.providers.addProvider\")"
+  },
+  {
+   "name": "catalog-name-wrap",
+   "find": "F=(0,b.jsx)(n.Text,{style:M.name,numberOfLines:1,children:u.title})",
+   "replace": "F=(0,b.jsx)(n.Text,{style:M.name,numberOfLines:2,children:u.title})"
+  },
+  {
+   "name": "catalog-badge",
+   "find": "R=w(\"providerCatalog.types.acp\")",
+   "replace": "R=u.agentHub?\"Agent Hub\":\"Agent CLI\""
+  },
+  {
+   "name": "remove-provider-text",
+   "find": "confirmMessage:\"This deletes the provider entry from config.json. It cannot be undone.\",confirm:\"Remove\",errorTitle:\"Unable to remove provider\"},statuses:{disabled:\"Disabled\"",
+   "replace": "confirmMessage:\"This removes the provider from your hub. Tasks can no longer use it. You can add it again later from the list below.\",confirm:\"Remove\",errorTitle:\"Unable to remove provider\"},statuses:{disabled:\"Disabled\""
+  },
+  {
+   "name": "plugins-offline-text",
+   "find": "offlineDescription:\"Reconnect to this host to manage its plugins.\"",
+   "replace": "offlineDescription:\"The host is still connecting, or its plugin service is restarting. This page retries by itself; if it stays like this for a minute, reload the page.\""
+  },
+  {
+   "name": "plugin-path-details",
+   "find": "p.installation?(0,V.jsx)(t.Text,{style:J.pluginSource,children:(0,l.formatPluginInstallation)(p.installation)}):null",
+   "replace": "p.installation?(0,V.jsxs)(\"details\",{style:{marginTop:2},children:[(0,V.jsx)(\"summary\",{style:{cursor:\"pointer\",fontSize:12,opacity:.65},children:\"Details\"}),(0,V.jsx)(t.Text,{style:J.pluginSource,children:(0,l.formatPluginInstallation)(p.installation)})]}):null"
+  },
+  {
+   "name": "schedule-can-submit",
+   "find": "se=T.canSubmit&&null===te&&!ee,",
+   "replace": "se=T.canSubmit&&null===te&&!ee&&!__AhBad(T),"
+  },
+  {
+   "name": "initial-project",
+   "find": "e.resolveInitialWorkspaceProject=function(t){const o=[t.routeProject,t.lastActiveProject];for(const c of o){if(!c)continue;",
+   "replace": "e.resolveInitialWorkspaceProject=function(t){const __bad=q=>q&&/system32|[\\/]windows([\\/]|$)/i.test(String(q.projectName||\"\")+\" \"+((q.hosts||[]).map(h=>h&&h.projectId||\"\").join(\" \"))),o=[t.routeProject,__bad(t.lastActiveProject)?null:t.lastActiveProject];for(const c of o){if(!c)continue;"
+  },
+  {
+   "name": "initial-project-fallback",
+   "find": "return o}return t.projects[0]??null},e.resolveInitialWorktreeProject=",
+   "replace": "return o}return t.projects.find(q=>!__bad(q))??t.projects[0]??null},e.resolveInitialWorktreeProject="
+  },
+  {
+   "name": "i18n-discovered",
+   "find": "discovered:\"Discovered\",custom:\"Custom models\"",
+   "replace": "discovered:\"Models this provider offers\",custom:\"Custom models\""
+  },
+  {
+   "name": "i18n-sidebar-badge",
+   "find": "badge:{label:\"Sidebar badge\",",
+   "replace": "badge:{label:\"Show host in sidebar as\","
+  },
+  {
+   "name": "i18n-collapse",
+   "find": "collapseToolCalls:\"Collapse tool calls\",collapseTurns:\"Collapse turns\"",
+   "replace": "collapseToolCalls:\"Collapse tool calls (hide their details)\",collapseTurns:\"Collapse turns (fold finished turns into one line)\""
+  },
+  {
+   "name": "i18n-plugin-source",
+   "find": "sourceLabel:\"Plugin source\",sourcePlaceholder:\"owner/slug, directory, Git URL, or npm package\"",
+   "replace": "sourceLabel:\"Install a plugin from\",sourcePlaceholder:\"Folder path, Git URL, npm package or owner/slug\""
+  },
+  {
+   "name": "schedule-no-double-submit",
+   "find": "ne=(0,c.useCallback)(async()=>{if(se){D.setSubmitError(null);try{(\"agent\"===T.targetKind?await ie():await re())&&o()}catch(e){D.setSubmitError((0,R.toErrorMessage)(e))}}},",
+   "replace": "ne=(0,c.useCallback)(async()=>{if(se&&!globalThis.__ahSub){globalThis.__ahSub=1;D.setSubmitError(null);try{(\"agent\"===T.targetKind?await ie():await re())&&o()}catch(e){D.setSubmitError((0,R.toErrorMessage)(e))}finally{globalThis.__ahSub=0}}},"
+  },
+  {
+   "name": "schedule-run-now-refresh",
+   "find": "H={mutationFn:G,onSettled:p},c[56]=p",
+   "replace": "H={mutationFn:G,onSettled:(...q)=>{p(...q);setTimeout(()=>p(...q),3e3);setTimeout(()=>p(...q),12e3)}},c[56]=p"
+  },
+  {
+   "name": "models-no-double-list",
+   "find": "let M,w,A;return n[33]!==b||n[34]!==d?(M=b.length>0?(0,z.jsxs)(e.View,{style:L.section,children:[(0,z.jsx)(R,{title:d(\"settings.providers.models.discovered\"),count:b.length}),(0,z.jsx)(e.View,{style:_.settingsStyles.card,children:b.map(H)})]}):null,",
+   "replace": "let M,w,A,__d;return!0?(M=(__d=b.filter(q=>!y.some(c=>c.id===q.id))).length>0?(0,z.jsxs)(e.View,{style:L.section,children:[(0,z.jsx)(R,{title:d(\"settings.providers.models.discovered\"),count:__d.length}),(0,z.jsx)(e.View,{style:_.settingsStyles.card,children:__d.map(H)})]}):null,"
   }
  ],
  "rev": 10

@@ -119,3 +119,20 @@ test('two endpoints with the same display name show their provider ids on the ca
   const labels = r.details.filter((d) => d.id.startsWith("ep-")).map((d) => d.label);
   assert.deepEqual(labels, ["Qwen Code 10.0.0.9 (qwen-one)", "Qwen Code 10.0.0.9 (qwen-two)"]);
 });
+
+test("on-demand laptop server that refuses the connection is idle (ready), not down; a real endpoint stays down with a reason", async () => {
+  const refuse = async () => { throw Object.assign(new Error("x"), { cause: { code: "ECONNREFUSED" } }); };
+  const idle = await probe({ base: "http://127.0.0.1:1/v1", onDemand: true }, { f: refuse });
+  assert.deepEqual(idle, { up: false, idle: true });
+  assert.deepEqual(await probe({ base: "http://127.0.0.1:1/v1" }, { f: refuse }), { up: false, error: "ECONNREFUSED" });
+  assert.equal(selfHostedProviders(cfg, {}).find((x) => x.name === "qwen-lap").onDemand, true);
+  const r = groupReport([item("Laptop", idle), item("Office", { up: false, error: "ECONNREFUSED" })]), d = Object.fromEntries(r.details.map((x) => [x.id, x]));
+  assert.equal(d["ep-0"].value.startsWith("idle"), true); assert.equal(d["ep-0"].tone, "ok");
+  assert.match(d["ep-1"].value, /nothing is listening there/);
+  assert.equal(d.status.value, "1 of 2 ready");
+});
+
+test("a disabled provider is not listed on the usage card", () => {
+  const c = { agents: { providers: { a: { command: ["n", "x", "q", "http://h:1/v1", "m"] }, b: { enabled: false, command: ["n", "x", "q", "http://h:2/v1", "m"] } } } };
+  assert.deepEqual(selfHostedProviders(c, {}).map((x) => x.name), ["a"]);
+});

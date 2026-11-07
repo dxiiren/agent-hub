@@ -8,6 +8,7 @@ import { qoderSummary, toReport } from "./server/qoder-usage.mjs";
 import { paseoHome, selfHostedProviders, selfHostedReport, kindId, readLocal, readJson, usesQwenCli } from "./server/selfhosted-usage.mjs";
 import { readFileSync } from "node:fs";
 import { accountGroups, groupReport } from "./server/accounts-usage.mjs";
+import { hubTasksReport } from "./server/hub-tasks-usage.mjs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
 
@@ -80,6 +81,14 @@ export default function contribute(server: PluginServerContext) {
       },
     });
   }
+  // Hub task totals for every provider, the same numbers as `agent-hub usage --all` (all time) plus the last 7 days
+  server.registerUsageSource({
+    id: "hub-tasks",
+    label: "Hub tasks",
+    input: z.object({}),
+    discover: async () => [{ key: "all", label: "Hub tasks", harness: "Agent Hub", input: {} }],
+    fetch: async () => { try { let feed = ""; try { feed = readFileSync(join(usageDir(), "usage.jsonl"), "utf8"); } catch { /* none yet */ } return hubTasksReport(feed); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+  });
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
   return () => { clearTimeout(timer); };
 }

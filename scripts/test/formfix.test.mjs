@@ -66,7 +66,7 @@ test('the form sends every typed link to the server (no silent client-side drop)
   const src = readFileSync(join(ROOT, 'plugins', 'providers', 'index.client.tsx'), 'utf8');
   assert.ok(!/\^https\?/.test(src), 'index.client.tsx must not gate the model call on a client-side link regex');
   assert.match(src, /setModelErr\(r\.error\)/);
-  assert.equal((src.match(/msg \? <SettingsRow/g) ?? []).length, 1, 'the result message shows once, next to the buttons');
+  assert.equal((src.match(/msg \? \(msg\.ok \? <SettingsRow/g) ?? []).length, 1, 'the result message shows once, next to the buttons');
 });
 
 test('provider.mjs never calls process.exit() right after the work (Windows libuv abort 0xC0000409 = the Save returned no result); the api verb exits 0 with its output', async () => {
