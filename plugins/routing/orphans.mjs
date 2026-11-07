@@ -3,11 +3,13 @@
 // exactly those: a process whose command line names a shell snapshot AND whose parent process no longer exists. A live agent's snapshot shell always has a live parent, so it is never touched.
 import { spawnSync } from "node:child_process";
 
-const SNAPSHOT = /shell-snapshots[\\/]+snapshot-bash-/i;
+// Only Qoder's snapshot dir (a "...qoder..." folder). Other tools (Claude Code's ~/.claude/shell-snapshots) run LIVE user shells whose launcher may have exited: never touch those.
+const SNAPSHOT = /qoder[^\\/"\s]*[\\/]+shell-snapshots[\\/]+snapshot-bash-/i;
+const NEVER = /[\\/]\.claude[\\/]+shell-snapshots/i;
 /** procs = [{pid, ppid, cmd}]. Returns the pids that are orphaned agent shell snapshots (parent not in the list). Pure. */
 export function orphanSnapshotPids(procs, self = process.pid) {
   const live = new Set(procs.map((p) => p.pid));
-  return procs.filter((p) => p.pid !== self && SNAPSHOT.test(p.cmd ?? "") && p.ppid && !live.has(p.ppid)).map((p) => p.pid);
+  return procs.filter((p) => p.pid !== self && SNAPSHOT.test(p.cmd ?? "") && !NEVER.test(p.cmd ?? "") && p.ppid && !live.has(p.ppid)).map((p) => p.pid);
 }
 
 /** Running processes as [{pid, ppid, cmd}] (Windows: CIM; POSIX: ps). [] when the listing fails. */

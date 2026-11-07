@@ -136,6 +136,13 @@ test('orphan shell snapshots: only a snapshot shell whose parent is gone is stop
   const procs = [{ pid: 1, ppid: 0, cmd: 'init' }, { pid: 10, ppid: 1, cmd: 'qodercli' }, { pid: 11, ppid: 10, cmd: S }, { pid: 12, ppid: 999, cmd: S }, { pid: 13, ppid: 999, cmd: 'bash -c echo' }, { pid: 14, ppid: 999, cmd: S.replace(/\//g, '\\') }];
   assert.deepEqual(orphanSnapshotPids(procs), [12, 14]);
   const killed = []; assert.deepEqual(reapAgentOrphans({ procs, kill: (p) => killed.push(p) }), [12, 14]); assert.deepEqual(killed, [12, 14]);
+  // another tool's LIVE shell whose launcher exited (Claude Code's Bash tool) is never a target
+  const others = [
+    { pid: 20, ppid: 999, cmd: 'bash -c source /c/Users/u/.claude/shell-snapshots/snapshot-bash-1-x.sh && npm test' },
+    { pid: 21, ppid: 999, cmd: 'C:\\Program Files\\Git\\bin\\bash.exe -c "source C:\\Users\\u\\.claude\\shell-snapshots\\snapshot-bash-2.sh"' },
+    { pid: 22, ppid: 999, cmd: 'bash -c source /home/u/.config/othertool/shell-snapshots/snapshot-bash-3.sh' },
+  ];
+  assert.deepEqual(orphanSnapshotPids(others), []);
 });
 
 test('C5: the usage hook finds qwen\'s own chat file through the proxy alias (Paseo only knows the outer session id)', async () => {
