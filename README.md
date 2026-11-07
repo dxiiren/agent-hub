@@ -90,7 +90,7 @@ Run `agent-hub --help` or `agent-hub <command> --help` (help never runs the comm
 | Goal | Command |
 | --- | --- |
 | Route a task | `agent-hub route <code-edit\|code-edit-easy\|test-scaffold\|summarise\|review> "<prompt>" --cwd . [--gate "npm test"] [--new-workspace worktree] [--provider P/M]` |
-| Edit tasks | use `--new-workspace worktree` (throwaway copy), or `--cwd` a clean git work tree to edit in place (a dirty or non-git folder keeps the provider default mode and the trace says why), and a real `--gate`; the gate must pass or `status` is `gate-failed` |
+| Edit tasks | use `--new-workspace worktree` (throwaway copy), or `--in-place` to edit `--cwd` directly with full access (opt-in; only a clean git work tree, ignored files do not count as dirty; `.git` and paths outside `--cwd` are NOT protected; without the flag the trace says "use --in-place to edit this worktree directly, or --new-workspace worktree"), and a real `--gate`; the gate must pass or `status` is `gate-failed` |
 | Agent asked a question (`status: "asking"`, exit 3) | `agent-hub reply <agentId> "<answer>"` (never put a secret in it; up to 3 questions per task) |
 | Routing & slots | `agent-hub routes show \| set <provider> --slots N --models a,b \| chain <type> a,b \| move <type> <entry> up\|down\|off \| undo` |
 | Providers | `agent-hub provider kinds \| list \| models --kind K --url U \| add NAME --kind K ... \| edit NAME --slots 4 \| remove NAME` |

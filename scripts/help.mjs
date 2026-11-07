@@ -14,9 +14,10 @@ Commands (run \`agent-hub <command> --help\` for details and examples):
 
 Example: agent-hub route summarise "Summarise README.md in 5 bullets" --cwd .`,
   route: `route: send one task to the first working provider of a task type.
-usage: agent-hub route <type> "<prompt>" [--cwd D] [--gate CMD] [--new-workspace worktree]
+usage: agent-hub route <type> "<prompt>" [--cwd D] [--gate CMD] [--new-workspace worktree | --in-place]
          [--provider P/M] [--mode M] [--session ID] [--dev D] [--client C] [--home H] [--keep]
-types: code-edit, code-edit-easy, test-scaffold (edit files; use --new-workspace worktree and a --gate)
+types: code-edit, code-edit-easy, test-scaffold (edit files; use --new-workspace worktree and a --gate;
+       --in-place edits --cwd directly with full access: clean git work tree only, .git and paths outside cwd are NOT protected)
        summarise, review (read-only; need a provider added with --routes summarise|review)
 output: one JSON line {used, agentId, status, gate, trace, answer}; exit 0 = completed,
         3 = the agent asked a question (answer it with: agent-hub reply), 1 = failed, 2 = bad input.

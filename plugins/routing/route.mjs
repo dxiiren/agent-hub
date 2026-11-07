@@ -2,7 +2,7 @@
 // Routing wrapper (decision 41): task type -> ordered provider/model chain; the caller may override;
 // a provider at its slot limit is skipped and a failed or timed-out one falls to the next entry.
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
-// Usage: route.mjs reply <agentId> "<text>" | route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]
+// Usage: route.mjs reply <agentId> "<text>" | route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep]
 import { modelNotAllowed } from "./allow.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
@@ -196,23 +196,29 @@ export function normCwd(p, platform = process.platform) {
 export function absPath(p) { return typeof p !== "string" || !p || p.startsWith("-") || path.isAbsolute(p) ? p : path.resolve(p); }
 
 /** The commit a task starts from; the gate diffs against it. Null only outside a git repo; a repo with no commits yet (unborn HEAD) gets the empty-tree hash so the gate diffs and scans everything. */
+/** Every git call on a folder an agent can write runs with repo config that could execute code switched off (fsmonitor, hooks) and no system config. Empty hooks dir = an empty folder under the temp dir. */
+export function safeGit(cwd, args) {
+  const hooks = join(os.tmpdir(), "agent-hub-no-hooks"); try { mkdirSync(hooks, { recursive: true }); } catch { /* best effort */ }
+  return spawnSync("git", ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", `core.hooksPath=${hooks.split(String.fromCharCode(92)).join("/")}`, ...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
+}
 export function headSha(cwd) {
-  const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd, encoding: "utf8" });
+  const inRepo = safeGit(cwd, ["rev-parse", "--is-inside-work-tree"]);
   if (inRepo.status !== 0) return null;
-  const r = spawnSync("git", ["rev-parse", "--verify", "HEAD"], { cwd, encoding: "utf8" });
+  const r = safeGit(cwd, ["rev-parse", "--verify", "HEAD"]);
   return r.status === 0 ? r.stdout.trim() : EMPTY_TREE;
 }
 
 /** In-place edit guard: "" when cwd is a git work tree with nothing uncommitted (git can revert whatever the agent does), else the reason it is not. */
 export function cleanGitReason(cwd) {
-  const g = (a) => spawnSync("git", a, { cwd, encoding: "utf8" });
+  const g = (a) => safeGit(cwd, a);
   if (g(["rev-parse", "--is-inside-work-tree"]).status !== 0) return "not a git work tree";
-  const s = g(["status", "--porcelain"]);
+  // --ignored=no: a normal repo always holds ignored files (node_modules, build output), so they do not count as dirty; they are unprotected in in-place mode (see README)
+  const s = g(["status", "--porcelain", "--ignored=no"]);
   return s.status !== 0 ? "git status failed" : s.stdout.trim() ? "has uncommitted changes" : "";
 }
 /** { branch, headSha } of a folder, {} when it is not a git work tree: lets a caller cherry-pick without grepping. */
 export function gitInfo(dir) {
-  const g = (a) => { const r = spawnSync("git", a, { cwd: dir, encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() : ""; };
+  const g = (a) => { const r = safeGit(dir, a); return r.status === 0 ? r.stdout.trim() : ""; };
   const headSha = g(["rev-parse", "--verify", "HEAD"]); if (!headSha) return {};
   const branch = g(["rev-parse", "--abbrev-ref", "HEAD"]);
   return { ...(branch && branch !== "HEAD" ? { branch } : {}), headSha };
@@ -374,7 +380,7 @@ export const knownModes = (routes = {}) => new Set([routes.mode, ...Object.value
 export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate, routes = {} }) {
   const m = mode ?? "provider default";
   if (ro) return `read-only task ${o.type} (mode ${m}) asked for a permission it may not have (it can only read plain files inside the task folder; sensitive files, writes and shell are refused)`;
-  if (!o.worktree) return `edit task ${o.type} ran outside a worktree (mode ${m}) and asked for a permission the provider default mode does not grant: pass --new-workspace worktree, or --cwd a clean git work tree (full-access is dropped in a dirty or non-git folder, decision 21)`;
+  if (!o.worktree) return `edit task ${o.type} ran outside a worktree (mode ${m}) and asked for a permission the provider default mode does not grant: pass --new-workspace worktree, or --in-place on a clean git work tree (full-access is dropped otherwise, decision 21)`;
   const why = [];
   try { const g = gate(wt.path, gateOpts(routes, wt.path, undefined, o.base)); why.push(...(g?.reasons ?? []).filter((r) => /secret/i.test(r))); } catch { /* the gate result is only an explanation */ }
   try { const pend = paseo(["pending"]); for (const p of (Array.isArray(pend) ? pend : []).filter((x) => x.agentId === agentId)) why.push(`pending ${p.name ?? p.kind ?? "request"}${p.paths?.length ? " on " + p.paths.join(", ") : ""}`); } catch { /* optional */ }
@@ -477,9 +483,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base);
     }
     // an unsafe mode also runs in place when --cwd is a git work tree with nothing uncommitted (git can revert it); dirty or non-git stays on the provider default, with the reason
-    const inPlaceWhy = mode && !o.worktree && unsafeMode(mode) ? cleanGitReason(o.cwd) : null;
+    // fail closed: full access in place only with the explicit --in-place flag AND a clean git work tree; .git and paths outside cwd are not protected then
+    const inPlaceWhy = mode && !o.worktree && o.inPlace && unsafeMode(mode) ? cleanGitReason(o.cwd) : null;
     if (mode && (o.worktree || !unsafeMode(mode) || inPlaceWhy === "")) args.push("--mode", mode);
-    else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: ${inPlaceWhy ? `--cwd ${inPlaceWhy}, in-place edits need a clean git work tree or ` : "needs "}--new-workspace worktree` });
+    else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: ` + (!o.inPlace ? "use --in-place to edit this worktree directly, or --new-workspace worktree" : `--in-place needs a clean git work tree (--cwd ${inPlaceWhy}); commit or stash first, or use --new-workspace worktree`) });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
@@ -609,7 +616,7 @@ function main(argv) {
   }
   const [type, prompt, ...rest] = argv;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
-  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree] [--session ID] [--dev D] [--client C] [--home H] [--keep]'); return 2; }
+  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep]'); return 2; }
   const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
   const cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
@@ -625,7 +632,7 @@ function main(argv) {
   const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
   let res;
   try { res = runRoute({
-    providerState: pstate, marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
+    providerState: pstate, marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, freeMem: () => os.freemem() / 2 ** 30, laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
