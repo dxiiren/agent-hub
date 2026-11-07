@@ -1,11 +1,11 @@
-/*agent-hub-rev:12*/function __AhFresh(list,have){const k=s=>String(s==null?"":s).toLowerCase().replace(/\s*\([^)]*\)\s*$/,"").replace(/^[a-z0-9_-]+\//,"").trim(),h=new Set((have||[]).map(k));return(list||[]).filter(m=>m&&m.id&&!h.has(k(m.id)))}function __AhMsg(P,R){let m=null;if(P.length>200)m="Model ids are at most 200 characters.";else if(R.some(e=>e.id===P))m="This id is already in your custom models.";else if((globalThis.__ahHave||[]).includes(P))m="This provider already offers that model.";return m?(0,z.jsx)(t.Text,{style:L.errorText,children:m}):null}function __AhPick(p){
+/*agent-hub-rev:16*/function __AhDup(P){const k=s=>String(s==null?"":s).toLowerCase().replace(/\s*\([^)]*\)\s*$/,"").replace(/^[a-z0-9_-]+\//,"").trim(),q=k(P);return(globalThis.__ahHave||[]).some(h=>k(h)===q)}function __AhFresh(list,have){const k=s=>String(s==null?"":s).toLowerCase().replace(/\s*\([^)]*\)\s*$/,"").replace(/^[a-z0-9_-]+\//,"").trim(),h=new Set((have||[]).map(k));return(list||[]).filter(m=>m&&m.id&&!h.has(k(m.id)))}function __AhMsg(P,R){let m=null;if(P.length>200)m="Model ids are at most 200 characters.";else if(R.some(e=>e.id===P))m="This model is already in the list.";else if(__AhDup(P))m="This model is already in the list.";return m?(0,z.jsx)(t.Text,{style:L.errorText,children:m}):null}function __AhPick(p){
   // Add custom model (Settings > Providers > provider > Add model): a picker instead of a free-text box.
   // Source of the list: the agent-hub-providers plugin RPC "provider-models" (endpoint kinds: the endpoint's /v1/models, fetched by the daemon so keys stay server-side);
   // anything else: the daemon's own model list for that provider (the same catalog behind "N models"). Free text only through the last entry.
   const [st,setSt]=(0,d.useState)({s:"load"}),[pick,setPick]=(0,d.useState)(""),[tick,setTick]=(0,d.useState)(0),cl=(0,C.useHostRuntimeClient)(p.__s);
   (0,d.useEffect)(()=>{
     if(!p.__v)return;
-    let live=!0;setSt({s:"load"});setPick("");
+    let live=!0;globalThis.__ahHave=[];setSt({s:"load"});setPick("");
     (async()=>{
       let list=null,err=null,r=null,dl=null;
       if(cl){try{r=await cl.invokePluginRpc("agent-hub-providers","agent-hub-providers.call",{verb:"provider-models",args:{provider:p.__p}})}catch(e){r=null}}

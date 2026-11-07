@@ -266,7 +266,7 @@
   {
    "name": "custom-model-valid",
    "find": "V=P.length>0&&!R.some(e=>e.id===P),n[5]=R,n[6]=P,n[7]=V):V=n[7]",
-   "replace": "V=P.length>0&&P.length<=200&&!R.some(e=>e.id===P)&&!(globalThis.__ahHave||[]).includes(P),n[5]=R,n[6]=P,n[7]=V):V=n[7]"
+   "replace": "V=P.length>0&&P.length<=200&&!R.some(e=>e.id===P)&&!__AhDup(P),n[5]=R,n[6]=P,n[7]=V):V=n[7]"
   },
   {
    "name": "custom-model-msg",
@@ -300,8 +300,8 @@
   },
   {
    "name": "provider-switch-label",
-   "find": "accessibilityLabel:R(\"settings.providers.enableProvider\",{name:p.label})",
-   "replace": "accessibilityLabel:(x?\"Switch off \":\"Switch on \")+p.label"
+   "find": "(0,B.jsx)(I.Switch,{value:x,onValueChange:J,disabled:y||S,accessibilityLabel:R(\"settings.providers.enableProvider\",{name:p.label})})",
+   "replace": "(0,B.jsxs)(s.View,{style:{flexDirection:\"row\",alignItems:\"center\",gap:8},children:[x&&(\"warning\"===$.tone||\"danger\"===$.tone)?(0,B.jsx)(t.Text,{style:{fontSize:12,color:\"#b45309\"},children:\"Unavailable\"}):null,(0,B.jsx)(s.View,{style:x&&(\"warning\"===$.tone||\"danger\"===$.tone)?{opacity:.4}:null,children:(0,B.jsx)(I.Switch,{value:x,onValueChange:J,disabled:y||S,accessibilityLabel:(x?\"Switch off \":\"Switch on \")+p.label+(x&&(\"warning\"===$.tone||\"danger\"===$.tone)?\" (unavailable: \"+(H||\"not installed on this computer\")+\")\":\"\")})})]})"
   },
   {
    "name": "rename-default-maxlength",

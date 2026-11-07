@@ -217,8 +217,8 @@ test('model pickers hide providers that cannot run; the newest model becomes the
   assert.deepEqual(ctx.f([{ id: 'a', isDefault: true }]).map((r) => r.id), ['a'], 'no release note: unchanged');
 });
 test('custom model sheet: ids over 200 characters, custom duplicates and models the provider already offers are refused', () => {
-  const v = edit('custom-model-valid').replace; assert.ok(v.includes('P.length<=200') && v.includes('__ahHave'));
-  assert.ok(edit('custom-model-msg').replace.includes('__AhMsg(P,R)') && edit('model-picker-component').replace.includes('This provider already offers that model.'));
+  const v = edit('custom-model-valid').replace; assert.ok(v.includes('P.length<=200') && v.includes('__AhDup'));
+  assert.ok(edit('custom-model-msg').replace.includes('__AhMsg(P,R)') && edit('model-picker-component').replace.includes('This model is already in the list.'));
 });
 test('Overview starts the restart dialog when opened with ah-restart=1 (the provider form Restart now button)', () => {
   const r = edit('overview-auto-restart').replace; assert.ok(r.includes('ah-restart=1') && r.includes('D(!1)') && r.includes('replaceState'));
