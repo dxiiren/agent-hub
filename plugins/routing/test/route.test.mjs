@@ -811,3 +811,23 @@ test("read-only task on a Qwen-style provider gets the open-the-file reminder; a
   runRoute({ ...o, prompt: "edit y" }, q, routes);
   assert.equal(q.calls.find((c) => c[0] === "run").at(-1), "edit y");
 });
+
+test("timeouts: review and summarise get an 8 min attempt limit by default, routes.timeouts.<type> overrides, an explicit waitTimeout wins", async () => {
+  const { attemptLimit } = await import("../route.mjs");
+  assert.equal(attemptLimit({ type: "review" }, {}), 480); assert.equal(attemptLimit({ type: "summarise" }, { waitTimeout: "30m" }), 480);
+  assert.equal(attemptLimit({ type: "code-edit" }, {}), 600); assert.equal(attemptLimit({ type: "code-edit" }, { waitTimeout: "30m" }), 1800);
+  assert.equal(attemptLimit({ type: "review" }, { timeouts: { review: "3m" } }), 180); assert.equal(attemptLimit({ type: "review", waitTimeout: "90s" }, { timeouts: { review: "3m" } }), 90);
+});
+test("a read-only attempt that gets no answer in its limit fails with a plain reason and the chain moves on; the run call is bounded", () => {
+  let clock = 0; const calls = []; const runs = [];
+  const paseo = (a, opts) => { calls.push([a, opts]); if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); clock += runs.length === 1 ? 481_000 : 5_000; return runs.length === 1 ? { agentId: "H1", status: "running" } : { agentId: "H2", status: "completed" }; } if (a[0] === "logs") return { text: "answer text" }; if (a[0] === "provider") return [{ provider: "qwen-code" }, { provider: "claude-clean" }]; return a[0] === "ls" ? [] : {}; };
+  const r = runRoute({ type: "review", prompt: "p", cwd: tmpdir(), session: "s", now: () => clock, providerState: new Map([["qwen-code", true], ["claude-clean", true]]) }, paseo, { readOnlyModes: {}, routes: { review: ["qwen-code", "claude-clean"] } });
+  assert.match(r.trace[0].error, /^no answer in 8 min/); assert.equal(runs.length, 2); assert.equal(r.used, "claude-clean");
+  const run1 = calls.find(([a]) => a[0] === "run"); assert.equal(run1[0][run1[0].indexOf("--wait-timeout") + 1], "480s"); assert.equal(run1[1].timeoutMs, 510_000);
+});
+test("a laptop-hosted model that is refused for low RAM is skipped at once, not waited for", () => {
+  let slept = 0; const runs = [];
+  const paseo = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { agentId: "A", status: "completed" }; } return a[0] === "logs" ? { text: "ok" } : a[0] === "ls" ? [] : {}; };
+  const r = runRoute({ type: "review", prompt: "p", cwd: tmpdir(), session: "s", freeMem: () => 1, laptop: () => ({ freeGb: 8, cpuPct: 0 }), sleep: () => { slept++; }, providerState: new Map([["qwen-laptop", true], ["claude-clean", true]]) }, paseo, { slots: { "qwen-laptop": 1, "claude-clean": 2 }, minFreeRamGbByProvider: { "claude-clean": 0.5 }, routes: { review: ["qwen-laptop", "claude-clean"] } });
+  assert.equal(slept, 0); assert.match(r.trace[0].skip, /^low RAM.*skipped at once/); assert.deepEqual(runs, ["claude-clean"]);
+});

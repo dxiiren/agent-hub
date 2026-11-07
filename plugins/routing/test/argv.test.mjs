@@ -37,7 +37,7 @@ for (const text of TEXTS) {
 test("no paseo call site puts text before a marker: every send/run in route.mjs uses the marker", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../route.mjs", import.meta.url), "utf8");
-  for (const m of src.matchAll(/paseo\(\[("send"|\.\.\.args)[^\]]*\]\)/g)) assert.match(m[0], /"--"/, m[0].slice(0, 60));
+  for (const m of src.matchAll(/paseo\(\[("send"|\.\.\.args)[^\]]*\](?:\)|,)/g)) assert.match(m[0], /"--"/, m[0].slice(0, 60));
 });
 
 const RESERVED = ["CON", "PRN", "AUX", "NUL", ...[1, 2, 3, 4, 5, 6, 7, 8, 9].flatMap((n) => ["COM" + n, "LPT" + n])];

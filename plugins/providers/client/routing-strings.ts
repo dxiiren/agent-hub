@@ -3,7 +3,7 @@ export const R = {
   title: "Routing & slots (Agent Hub)",
   intro: "Which providers the hub may use, which of their models, how many tasks each runs at once, and the order of each task type's chain (first is tried first). Same as `agent-hub routes`. Every change is saved at once and can be undone.",
   total: (n: number) => `Configured slots: ${n}`,
-  effective: (n: number, laptopCap: number | null, cfgEff: number) => `Effective now: ${n}${laptopCap === null ? " (sum of the enabled providers' slots)" : n < cfgEff ? ` (the laptop holds ${laptopCap} agents now; the enabled providers' slots add up to ${cfgEff})` : " (limited by the enabled providers' slots, not by the laptop)"}`,
+  effective: (n: number, laptopCap: number | null, cfgEff: number) => `Effective now: ${n}${laptopCap === null ? " (sum of the enabled providers' slots)" : n < cfgEff ? ` (limited by this laptop: it has room for ${laptopCap} agent${laptopCap === 1 ? "" : "s"} now; the enabled providers' slots add up to ${cfgEff})` : " (limited by the enabled providers' slots, not by the laptop)"}`,
   cap: (n: number | null) => (n == null ? "Cap: its own slots (a disabled provider's slots are not moved here; set one with `agent-hub routes set <id> --cap N`)" : `Cap: up to ${n} slots when other providers are off`),
   providers: "Providers",
   noProviders: "No providers found. Is the daemon running?",

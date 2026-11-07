@@ -74,7 +74,7 @@ export function show(p = paths(), o = {}) {
   const ro = routes.readOnlyEnforced ?? READ_ONLY_ENFORCED;
   const providers = [...providerIds(p, o, routes).values()].map((d) => ({
     id: d.id, label: d.label, status: d.status ?? null, enabled: d.enabled,
-    slots: own(routes.slots, d.id) ?? null, cap: own(routes.slotCaps, d.id) ?? null, models: own(routes.allowedModels, d.id) ?? null, readOnlyAllowed: ro.includes(d.id) || d.id === 'claude',
+    routed: own(routes.slots, d.id) != null || types.some((t) => (own(routes.routes, t) ?? []).some((e) => baseOf(e) === d.id)), slots: own(routes.slots, d.id) ?? null, cap: own(routes.slotCaps, d.id) ?? null, models: own(routes.allowedModels, d.id) ?? null, readOnlyAllowed: ro.includes(d.id) || d.id === 'claude',
     chains: Object.fromEntries(types.map((t) => [t, (own(routes.routes, t) ?? []).filter((e) => baseOf(e) === d.id)])),
   }));
   const enabled = Object.fromEntries(providers.map((x) => [x.id, x.enabled]));
@@ -194,9 +194,14 @@ const USAGE = `usage:
   routes move <type> <entry> up|down|off
   routes undo`;
 
+const helpFor = (usage, cmd) => { const rows = usage.split('\n').slice(1), own = rows.filter((x) => new RegExp(`^\\s+(routes|provider) ${cmd}\\b`).test(x)), l = own.length ? own : rows.filter((x) => x.includes(` ${cmd} `) || x.includes(`| ${cmd}`)); return `usage:\n${(l.length ? l : rows).join('\n')}`; };
+
 function render(s) {
-  const L = [`Configured slots ${s.configuredTotal}   effective now ${s.effective.effective} (${s.effective.source}${s.effective.laptopCap === null ? '' : `, laptop holds ${s.effective.laptopCap}`})${s.effective.reasons.length ? '\n  ' + s.effective.reasons.join('\n  ') : ''}`, '', 'Providers:'];
-  for (const x of s.providers) L.push(`  ${x.id.padEnd(26)} ${x.enabled ? 'on ' : 'OFF'}  slots ${String(x.slots ?? '-').padEnd(3)} cap ${String(x.cap ?? '-').padEnd(3)} models ${x.models ? x.models.join(',') : 'all'}${x.readOnlyAllowed ? '  read-only ok' : ''}`);
+  const lim = s.effective.laptopCap !== null && s.effective.effective < s.effective.configEffective ? ' (limited by this laptop)' : '';
+  const L = [`Configured slots ${s.configuredTotal}   effective now ${s.effective.effective}${lim}${s.effective.reasons.length ? '\n  ' + s.effective.reasons.join('\n  ') : ''}`, '', 'Providers:'];
+  const routed = s.providers.filter((x) => x.routed), idle = s.providers.filter((x) => !x.routed);
+  for (const x of routed) L.push(`  ${x.id.padEnd(26)} ${x.enabled ? 'on ' : 'OFF'}  slots ${String(x.slots ?? 'no limit').padEnd(8)}${x.cap == null ? '' : ` cap ${String(x.cap).padEnd(3)}`} models ${x.models ? x.models.join(',') : 'all'}${x.readOnlyAllowed ? '  read-only ok' : ''}`);
+  if (idle.length) L.push(`  ${idle.length} other provider${idle.length === 1 ? '' : 's'} not used by routing (no slots, in no chain): ${idle.map((x) => x.id).join(', ')}`);
   L.push('', 'Chains (first is tried first):');
   for (const t of s.types) L.push(`  ${t.padEnd(15)} ${s.chains[t].map((e, i) => `${i + 1}. ${e}`).join('  ') || '(empty)'}`);
   return L.join('\n');
@@ -204,6 +209,7 @@ function render(s) {
 
 export async function main(argv, p = paths(), o = {}) {
   const [cmd, ...rest] = argv; const f = {}; const pos = [];
+  if (cmd && (rest.includes('--help') || rest.includes('-h'))) { console.log(helpFor(USAGE, cmd)); return 0; } // --help on any subcommand prints its usage
   for (let i = 0; i < rest.length; i++) { if (rest[i] === '--json') f.json = true; else if (rest[i].startsWith('--')) f[rest[i].slice(2)] = rest[++i]; else pos.push(rest[i]); }
   try {
     if (cmd === 'show') { const s = show(p, o); console.log(f.json ? JSON.stringify(s, null, 2) : render(s)); return 0; }

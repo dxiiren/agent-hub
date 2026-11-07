@@ -45,8 +45,8 @@ export function effectiveBudget({ slots = {}, enabled = {}, caps = {}, order = O
     const per = w.reduce((a, [id, n]) => a + cost(id) * n, 0) / tot || DEFAULT_COST_GB.other;
     const room = Math.max(0, Math.floor((freeGb - floorGb) / per));
     laptopCap = busy + room;
-    if (room === 0) reasons.push(`laptop: ${freeGb.toFixed(1)} GB free, floor ${floorGb} GB, one agent needs about ${per.toFixed(2)} GB: nothing new starts until RAM frees`);
-    else if (laptopCap < configEffective) reasons.push(`laptop: ${freeGb.toFixed(1)} GB free (floor ${floorGb} GB, about ${per.toFixed(2)} GB per agent) holds ${laptopCap}, not ${configEffective}`);
+    if (room === 0) reasons.push(`laptop: ${freeGb.toFixed(2)} GB free, floor ${floorGb} GB, one agent needs about ${per.toFixed(2)} GB: nothing new starts until RAM frees`);
+    else if (laptopCap < configEffective) reasons.push(`the laptop has room for ${room} more agent${room === 1 ? "" : "s"} (${freeGb.toFixed(2)} GB free - ${floorGb} GB floor, at about ${per.toFixed(2)} GB each, rounded down)${busy ? `, on top of ${busy} running now = ${laptopCap}` : ""}; the providers' slots add up to ${configEffective}`);
     if (Number.isFinite(cpuPct) && cpuPct > cpuMaxPct) { laptopCap = Math.min(laptopCap, busy); reasons.push(`laptop: CPU ${Math.round(cpuPct)}% is above ${cpuMaxPct}%: nothing new starts until it drops`); }
   }
   return { configured, effective: laptopCap === null ? configEffective : Math.min(configEffective, laptopCap), configEffective, laptopCap, perProvider, reasons, source };

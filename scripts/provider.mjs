@@ -410,6 +410,8 @@ const USAGE = `usage:
   provider list | models --kind <kind> [--url U] [--key K] | remove <name> [--purge]
   provider api            (JSON on stdin {verb,args}; used by the Settings screen)`;
 
+const helpFor = (usage, cmd) => { const rows = usage.split('\n').slice(1), own = rows.filter((x) => new RegExp(`^\\s+(routes|provider) ${cmd}\\b`).test(x)), l = own.length ? own : rows.filter((x) => x.includes(` ${cmd} `) || x.includes(`| ${cmd}`)); return `usage:\n${(l.length ? l : rows).join('\n')}`; };
+
 /** Model ids for the picker of Paseo's "Add custom model" sheet. A hub endpoint provider: its endpoint's /v1/models, fetched here with the stored key (the key never leaves the machine).
  *  A provider whose models the user names (local-llama): an empty list, and the daemon is NOT asked (asking would start the model server).
  *  Everything else (Claude, Codex, Qoder, accounts of them, any built-in): { daemon: true } = the page asks the daemon for the model list it already shows as "N models". */
@@ -436,6 +438,7 @@ export async function api({ verb, args = {} }, p = paths(), o = {}) {
 
 export async function main(argv) {
   const [cmd, ...rest] = argv; const o = {}; const pos = [];
+  if (cmd && cmd !== 'api' && (rest.includes('--help') || rest.includes('-h'))) { console.log(helpFor(USAGE, cmd)); return 0; } // --help on any subcommand prints its usage
   for (let i = 0; i < rest.length; i++) rest[i].startsWith('--') ? (o[rest[i].slice(2)] = rest[++i]) : pos.push(rest[i]);
   if (o.type && !o.kind) o.kind = o.type; // older spelling
   if (o.link && !o.url) o.url = o.link; // plain-words spelling of --url

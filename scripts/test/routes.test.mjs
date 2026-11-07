@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { show, set, undo, validate, api, main, modelsOf, TASK_TYPES } from '../routes.mjs';
+import { show, set, undo, validate, api, main, modelsOf, probeEndpoints, TASK_TYPES } from '../routes.mjs';
 import { effectiveBudget } from '../../plugins/routing/budget.mjs';
 import { modelNotAllowed } from '../../plugins/routing/allow.mjs';
 import { runRoute } from '../../plugins/routing/route.mjs';
@@ -132,7 +132,30 @@ test('cap: set/clear a per-provider cap, show reports it and the laptop-limited 
   await assert.rejects(set({ providers: { qoder: { cap: 1 } } }, p, o), /below its slots/);
   await assert.rejects(set({ providers: { qoder: { cap: 99 } } }, p, o), /cap must be a whole number/);
   const lap = show(p, { ...o, laptop: { freeGb: 2.3, cpuPct: 10 } }); // 0.3 GB above the floor: room for 1 agent
-  assert.equal(lap.effective.laptopCap, 1); assert.equal(lap.effective.effective, 1); assert.match(lap.effective.reasons.join(' '), /laptop: 2.3 GB free/);
+  assert.equal(lap.effective.laptopCap, 1); assert.equal(lap.effective.effective, 1); assert.match(lap.effective.reasons.join(' '), /the laptop has room for 1 more agent \(2.30 GB free - 2 GB floor/);
   await set({ providers: { qoder: { cap: null } } }, p, o);
   assert.equal(read().slotCaps, undefined);
+});
+
+const capture = async (fn) => { const l = console.log, e = console.error; let out = ''; console.log = (x) => { out += x + '\n'; }; console.error = (x) => { out += x + '\n'; }; try { return { code: await fn(), out }; } finally { console.log = l; console.error = e; } };
+test('--help on every routes subcommand prints its usage and exits 0, even without a provider id', async () => {
+  const { p, o } = box();
+  for (const c of ['set', 'chain', 'move', 'models', 'show', 'undo']) { const r = await capture(() => main([c, '--help'], p, o)); assert.equal(r.code, 0, c); assert.match(r.out, new RegExp('^usage:\n[^]*routes ' + c)); assert.doesNotMatch(r.out, /REFUSED/); }
+  const r = await capture(() => main(['set', '-h'], p, o)); assert.equal(r.code, 0);
+});
+test('routes show: the effective line says the laptop reason once, and providers not used by routing are one line, not slots - cap -', async () => {
+  const { p, o } = box();
+  const r = await capture(() => main(['show'], p, { ...o, paseoLs: () => [...o.paseoLs(), { provider: 'opencode', label: 'OpenCode', status: 'unavailable', enabled: 'Disabled' }], laptop: { freeGb: 2.45, cpuPct: 10 } }));
+  assert.equal((r.out.match(/laptop/g) ?? []).length, 2, r.out); // "(limited by this laptop)" + the one reason sentence
+  assert.match(r.out, /effective now 1 \(limited by this laptop\)/); assert.doesNotMatch(r.out, /laptop holds/);
+  assert.match(r.out, /room for 1 more agent \(2.45 GB free - 2 GB floor/);
+  assert.match(r.out, /1 other provider not used by routing \(no slots, in no chain\): /); assert.doesNotMatch(r.out, /slots -\s/);
+});
+test('probeEndpoints: a provider with an endpoint that does not answer reads "Not answering (checked HH:MM)", an answering one is null', async () => {
+  const { p, o } = box();
+  writeFileSync(p.paseo, JSON.stringify({ agents: { providers: { up1: { command: ['node', 'x.mjs', 'q', 'http://127.0.0.1:1/v1', 'm'] }, dn1: { command: ['node', 'x.mjs', 'q', 'http://127.0.0.1:2/v1', 'm'] }, codex: {} } } }));
+  const fetch = async (u) => { if (u.startsWith('http://127.0.0.1:2/')) { const e = new Error('f'); e.cause = { code: 'ECONNREFUSED' }; throw e; } return { status: 200 }; };
+  const r = await api({ verb: 'probe' }, p, { ...o, fetch });
+  assert.equal(r.probes.up1, null); assert.match(r.probes.dn1, /^Not answering \(checked \d\d:\d\d\): nothing is listening there$/); assert.equal(r.probes.codex, undefined);
+  assert.deepEqual(Object.keys((await probeEndpoints(p, { fetch })).probes).sort(), ['dn1', 'up1']);
 });

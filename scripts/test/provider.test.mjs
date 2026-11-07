@@ -120,3 +120,12 @@ test('provider-models: endpoint provider -> its /v1/models (key stays server sid
   assert.deepEqual(await providerModels(undefined, p, { f }), { daemon: true });
   await assert.rejects(providerModels('qwen-pm', p, { f: async () => ({ ok: false, status: 503 }) }), /endpoint check failed/);
 });
+
+test('--help on every provider subcommand prints its usage and exits 0', async () => {
+  const { main } = await import('../provider.mjs');
+  for (const c of ['add', 'edit', 'list', 'models', 'remove', 'kinds']) {
+    const l = console.log; let out = ''; console.log = (x) => { out += x + '\n'; };
+    try { assert.equal(await main([c, '--help']), 0, c); } finally { console.log = l; }
+    assert.match(out, /^usage:\n/); assert.ok(out.includes('provider ' + c) || out.includes('| ' + c), out); assert.doesNotMatch(out, /REFUSED|not a usable/);
+  }
+});

@@ -17,7 +17,7 @@ import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mj
 import { batchAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
 import { runDir } from "./runstate.mjs";
-import { effectiveBudget, chainOrder, costGb, laptopNow, dropWslCache, heldIn } from "./budget.mjs";
+import { effectiveBudget, chainOrder, costGb, laptopNow, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -44,6 +44,9 @@ export function loadRoutes(env = process.env) {
 export const createTimeoutS = (env = process.env) => Number(env.AGENT_HUB_CREATE_TIMEOUT_S) || 240;
 /** Seconds one `paseo logs` call may take (it answers in ~2 s when healthy). */
 export const logsTimeoutS = (env = process.env) => Number(env.AGENT_HUB_LOGS_TIMEOUT_S) || 30;
+/** Per-attempt time limit by task type: a read-only task that gets no answer in this long fails that provider and the chain moves on. routes.timeouts.<type> overrides it. */
+export const DEFAULT_TIMEOUTS = { review: "8m", summarise: "8m" };
+export const attemptLimit = (o, routes) => toSeconds(o.waitTimeout ?? own(routes.timeouts, o.type) ?? own(DEFAULT_TIMEOUTS, o.type) ?? routes.waitTimeout ?? "10m");
 export const toSeconds = (d) => { const m = /^(\d+)\s*(s|m|h)?$/.exec(String(d ?? "").trim()); return m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 }[m[2] ?? "s"]) : 900; };
 
 /** The ONE place a paseo argv is built. Callers put caller/agent text after a "--" marker; here the options (--home, --json) go BEFORE the "--" and the text after it, so text such as "--help" or "--provider x" arrives verbatim as a positional and never as an option. */
@@ -56,7 +59,7 @@ export function cliArgs(args, home, json) {
 /** Default CLI runner: parsed JSON of `paseo <args> --json`, or {error}. */
 export function cliPaseo(home, env = process.env, spawn = spawnSync) {
   const [cmd, ...pre] = paseoCommand(env);
-  return (args) => {
+  return (args, opts = {}) => {
     const create = args[0] === "run" && args.includes("--no-wait");
     if (args[0] === "pending") { // path-bearing pending permissions: the CLI's `permit ls` hides the path
       const q = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "pending.mjs")], { encoding: "utf8", timeout: 15_000, env });
@@ -65,10 +68,11 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
     const text = args[0] === "logs"; // `paseo logs` has no JSON output: hand back the raw text
     // Every CLI call is bounded (a hung `paseo logs` once held a route for the whole 15 min). Only wait/run legitimately run long; logs is short and retried once, then reported unreadable so the route still returns.
     const long = args[0] === "wait" || args[0] === "run";
-    const timeout = create ? createTimeoutS(env) * 1000 : text ? logsTimeoutS(env) * 1000 : long ? 15 * 60_000 : 2 * 60_000;
+    const timeout = opts.timeoutMs ?? (create ? createTimeoutS(env) * 1000 : text ? logsTimeoutS(env) * 1000 : long ? 15 * 60_000 : 2 * 60_000);
     const call = () => spawn(cmd, [...pre, ...cliArgs(args, home, !text)], { encoding: "utf8", timeout, killSignal: "SIGKILL", env });
     let r = call();
     if (text && r.error?.code === "ETIMEDOUT") { r = call(); if (r.error?.code === "ETIMEDOUT") return { error: `logs call hung and was killed after 2 x ${logsTimeoutS(env)} s` }; }
+    if (opts.timeoutMs && r.error?.code === "ETIMEDOUT") return { error: `no answer in ${Math.round(opts.timeoutMs / 1000)} s: the call was stopped` };
     if (create && r.error?.code === "ETIMEDOUT") return { error: `CREATE_TIMEOUT: the daemon did not create the agent within ${createTimeoutS(env)} s (saturated daemon or a provider that stalls at initialize; upstream Paseo, not a worktree bug). Check \`paseo ls\` and the laptop load, then retry; raise AGENT_HUB_CREATE_TIMEOUT_S if the host is just slow.` };
     const out = r.stdout || "";
     if (text) return r.status === 0 ? { text: out } : { error: `exit=${r.status} ` + String(r.stderr || out).slice(0, 300) };
@@ -79,9 +83,9 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
 /** Paseo's 1.5 s status probe fails while the daemon is busy (upstream #6584): retry the call, nothing was started. */
 export const transient = (j) => !j?.agentId && !/^CREATE_TIMEOUT/.test(String(j?.error ?? "")) && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
 export function withRetry(paseo, { tries = 6, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), jitter = () => Math.random() * 1000 } = {}) {
-  return (args) => {
-    let j = paseo(args);
-    for (let i = 1; i < tries && transient(j) && args[0] !== "stop"; i++) { sleep(2000 * 2 ** (i - 1) + jitter()); j = paseo(args); }
+  return (args, opts) => {
+    let j = paseo(args, opts);
+    for (let i = 1; i < tries && transient(j) && args[0] !== "stop"; i++) { sleep(2000 * 2 ** (i - 1) + jitter()); j = paseo(args, opts); }
     return j;
   };
 }
@@ -108,7 +112,7 @@ export const readOnlyMode = (prov, routes = {}) => {
   return own(routes.readOnlyModes, prov) === "read-only" ? "read-only" : undefined; // unknown kind: only the proxy's own mode counts
 };
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
-export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
+export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8, left = () => timeoutS) {
   for (let i = 0; i < max && j.status === "permission" && j.agentId; i++) {
     const pend = paseo(["pending"]);
     const mine = (Array.isArray(pend) ? pend : []).filter((p) => p.agentId === j.agentId);
@@ -117,7 +121,7 @@ export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8) {
     const v = batchAllowed(mine, roots);
     for (const p of mine) paseo(["permit", v.ok ? "allow" : "deny", j.agentId, p.id]);
     if (!v.ok) return { ...j, denied: v.why };
-    const w = paseo(["wait", j.agentId, "--timeout", String(timeoutS)]);
+    const w = paseo(["wait", j.agentId, "--timeout", String(left())]);
     j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
   }
   return j;
@@ -406,7 +410,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.freeMem) {
       const floor = routes.minFreeRamGbByProvider?.[base(prov)] ?? routes.minFreeRamGb ?? 2;
       const sleep = o.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
-      ramLeftMs ??= toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m") * 1000;
+      ramLeftMs ??= attemptLimit(o, routes) * 1000;
       // Hold until this laptop can carry one more agent: free RAM above the provider's floor AND the laptop budget (budget.mjs) not used up by the routes already running. A waiting route is "queued" (holds no slot) and starts no CLI.
       const blocked = () => {
         if (o.freeMem() < floor) return `low RAM: ${o.freeMem().toFixed(1)} GB free, floor ${floor} GB`;
@@ -414,6 +418,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
         return b.laptopCap !== null && held >= b.effective ? `laptop budget ${b.effective} used up (configured ${b.configured}): ${b.reasons.filter((r) => r.startsWith("laptop")).join("; ") || "all slots busy"}` : null;
       };
       let why = blocked(); let waited = false;
+      if (why && /^low RAM/.test(why) && kindOf(base(prov)) === "local") { setMarker(o.marker, null); trace.push({ provider: prov, skip: why + ": this model runs on the laptop, so it is skipped at once and the next provider is tried" }); continue; }
       if (why) {
         setMarker(o.marker, null); waited = true; trace.push({ provider: prov, note: `waiting, nothing started: ${why}` });
         if (routes.dropWslCache === true) { const l = (o.dropCache ?? (() => dropWslCache({ logDir: o.marker?.dir })))(); if (l) trace.push({ provider: prov, note: l }); why = blocked(); }
@@ -425,7 +430,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
     let wt = null; // this entry's route-created worktree
     // Qwen read-only: the launcher (acp-proxy.mjs) offers the session mode "read-only"; choosing it restarts qwen with the deny settings (config/qwen/system-settings-readonly.json). Nothing is ever written under the task cwd.
-    const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", o.waitTimeout ?? routes.waitTimeout ?? "10m"];
+    const lim = attemptLimit(o, routes); const t0 = (o.now ?? Date.now)(); const left = () => Math.max(1, Math.round(lim - ((o.now ?? Date.now)() - t0) / 1000)); // one provider attempt gets lim seconds in all (run, waits, permission rounds)
+    const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", `${lim}s`];
     const ro = readOnlyType(o.type, routes); // read-only types: the provider's read-only mode, whatever the caller or the routes file asks for
     if (ro && !readOnlyMode(base(prov), routes)) { trace.push({ provider: prov, skip: "provider has no verified read-only mode (read-only task types never run on it; for a Qwen provider run `agent-hub provider migrate`)" }); continue; }
     if (ro && !readOnlyEnforced(base(prov), routes)) { trace.push({ provider: prov, skip: "no enforced sensitive-read guard for this provider (read-only task types never run on it)" }); continue; }
@@ -449,13 +455,15 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
-    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt]);
+    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: (lim + 30) * 1000 });
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
-      const w = paseo(["wait", j.agentId, "--timeout", String(toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"))]);
+      const w = paseo(["wait", j.agentId, "--timeout", String(left())], { timeoutMs: (left() + 30) * 1000 });
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
-    if (ro && j.status === "permission") j = grantReads(paseo, j, toSeconds(o.waitTimeout ?? routes.waitTimeout ?? "10m"), { cwd: o.cwd, allow: routes.readAllow });
+    if (ro && j.status === "permission") j = grantReads(paseo, j, left(), { cwd: o.cwd, allow: routes.readAllow }, 8, left);
     const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes }) } : {};
+    const slow = (!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? ""));
+    if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: j.error } : hint), ...why });
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
