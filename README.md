@@ -93,7 +93,7 @@ Run `agent-hub --help` or `agent-hub <command> --help` (help never runs the comm
 | Agent asked a question (`status: "asking"`, exit 3) | `agent-hub reply <agentId> "<answer>"` (never put a secret in it; up to 3 questions per task) |
 | Routing & slots | `agent-hub routes show \| set <provider> --slots N --models a,b \| chain <type> a,b \| move <type> <entry> up\|down\|off \| undo` |
 | Providers | `agent-hub provider kinds \| list \| models --kind K --url U \| add NAME --kind K ... \| edit NAME --slots 4 \| remove NAME` |
-| Usage | `agent-hub usage --all`, `agent-hub usage --session <id> --json` |
+| Usage | `agent-hub usage --all`, `agent-hub usage --session <id> --json` (--session defaults to `AGENT_HUB_SESSION`, else `CLAUDE_CODE_SESSION_ID`, also for `route`) |
 | Health | `agent-hub doctor` (add `--deep` to run one tiny task per provider; uses tokens) |
 | Tidy up | `agent-hub cleanup --older-than 30m --dry-run`, then without `--dry-run` |
 | Daemon | `just up`, `just down`, `just status`, `just plugins` |

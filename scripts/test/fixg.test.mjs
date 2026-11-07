@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, parse } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { paths, add, remove } from '../provider.mjs';
 import { writeJsonKeepEol, writeAtomic } from '../../plugins/routing/jsonfile.mjs';
 import { absPath } from '../../plugins/routing/route.mjs';
-import { cleanGateTemp, staleProjects, removeStaleProjects } from '../../plugins/routing/cleanup.mjs';
+import { cleanGateTemp, staleProjects, removeStaleProjects, junkProjects } from '../../plugins/routing/cleanup.mjs';
 import { orphanSnapshotPids, reapAgentOrphans } from '../../plugins/routing/orphans.mjs';
 import { dropDefaults, readDefaults, normalizeConfigFile } from '../../plugins/routing/paseo-defaults.mjs';
 import { laptopPort, runDir, paseoHome } from '../../plugins/routing/runstate.mjs';
@@ -76,6 +76,28 @@ test('stale projects: only an absolute path that is gone, only with the delete c
   assert.ok(!calls.some((c) => c[1] === 'delete'));
   removeStaleProjects({ paseo });
   assert.deepEqual(calls.filter((c) => c[1] === 'delete'), [['project', 'delete', 'b']]);
+});
+
+test('--stale-projects also lists test leftovers (system folder, temp folder, _junk, hdad-*) and never a real repo', () => {
+  const R = mkdtempSync(join(tmpdir(), 'ah-junk-root-')), tmp = join(R, 'T'), sys = join(R, 'S');
+  const ex = (name, ...parts) => ({ projectId: name, path: join(...parts) });
+  const rows = [
+    ex('sys', sys), ex('tmp', tmp), ex('under-tmp', tmp, 'x'), ex('junk', R, 'code', 'worktree', '_junk'), ex('junk-deep', R, 'code', 'worktree', '_junk', 'final-round', 'v1', 'repo'),
+    ex('hdad', R, 'code', 'worktree', 'Proj-hdad-w2a-c01-main'), ex('hdad2', R, 'code', 'worktree', 'hdad-x'),
+    ex('hub', R, 'code', 'agent-hub'), ex('mon', R, 'code', 'Claude-Code-Usage-Monitor'), ex('ng', R, 'code', 'my-app-staging'), ex('other', R, 'code', 'worktree', 'real-repo-fix'), ex('tmpish', R, 'T-keep'),
+  ];
+  for (const r of rows) mkdirSync(r.path, { recursive: true }); // the folders exist: only the name patterns can select them
+  const calls = []; const paseo = (a) => { calls.push(a); return a[0] === 'ls' ? [] : a[1] === 'ls' ? rows : {}; };
+  assert.deepEqual(junkProjects(paseo, { tmp, sys }).map((p) => p.projectId), ['sys', 'tmp', 'under-tmp', 'junk', 'junk-deep', 'hdad', 'hdad2']);
+  assert.equal(removeStaleProjects({ paseo, dry: true, junk: true, tmp, sys }).length, 7);
+  assert.ok(!calls.some((c) => c[1] === 'delete'));
+  removeStaleProjects({ paseo, junk: true, tmp, sys });
+  assert.deepEqual(calls.filter((c) => c[1] === 'delete').map((c) => c[2]), ['sys', 'tmp', 'under-tmp', 'junk', 'junk-deep', 'hdad', 'hdad2']);
+  assert.deepEqual(removeStaleProjects({ paseo, dry: true, tmp, sys }), []); // without junk: only gone folders
+  const live = (cwd) => (a) => (a[0] === 'ls' ? [{ status: 'running', cwd }, { status: 'idle', cwd: join(R, 'code', 'worktree', 'hdad-x') }] : a[1] === 'ls' ? rows : {});
+  assert.deepEqual(junkProjects(live(join(R, 'code', 'worktree', 'Proj-hdad-w2a-c01-main')), { tmp, sys }).map((p) => p.projectId).includes('hdad'), false); // a running agent keeps its project
+  assert.ok(junkProjects(live(join(R, 'code', 'worktree', 'Proj-hdad-w2a-c01-main')), { tmp, sys }).some((p) => p.projectId === 'hdad2')); // an idle one does not
+  assert.deepEqual(junkProjects((a) => (a[0] === 'ls' ? { error: 'x' } : rows), { tmp, sys }), []); // agent list unreadable: remove nothing
 });
 
 test('reapAgentOrphans dry run lists the orphans and kills none', () => {

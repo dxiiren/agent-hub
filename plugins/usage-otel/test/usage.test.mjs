@@ -118,3 +118,16 @@ test("after a daemon restart the Qoder card shows the last saved numbers while t
   assert.deepEqual(r, saved.s);
   _resetForTest();
 });
+
+import { pollerDir } from "../server/qoder-usage.mjs";
+import { mkdirSync as mkd, writeFileSync as wf } from "node:fs";
+const pj = join;
+test("pollerDir: bundled plugin (import.meta.url undefined) and a temp PASEO_HOME still find the poller, or say what to set", () => {
+  const repo = mkdtempSync(pj(tmpdir(), "ah-poller-")), dir = pj(repo, "plugins", "usage-otel", "pollers"); mkd(dir, { recursive: true }); wf(pj(dir, "qoder_poll.py"), "");
+  const home = mkdtempSync(pj(tmpdir(), "ah-home-"));
+  assert.equal(pollerDir({ AGENT_HUB_POLLER_DIR: "/x" }, null), "/x");
+  assert.equal(pollerDir({ AGENT_HUB_REPO: repo, PASEO_HOME: home }, null), dir);
+  wf(pj(home, "config.json"), JSON.stringify({ plugins: { "agent-hub-usage": { path: pj(repo, "plugins", "usage-otel") } } }));
+  assert.equal(pollerDir({ PASEO_HOME: home }, null), dir);
+  assert.throws(() => pollerDir({ PASEO_HOME: mkdtempSync(pj(tmpdir(), "ah-empty-")) }, null), /AGENT_HUB_POLLER_DIR/);
+});

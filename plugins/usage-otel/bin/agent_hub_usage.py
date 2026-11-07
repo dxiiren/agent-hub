@@ -41,7 +41,7 @@ def main(argv):
         argv = argv[1:]
     opt = lambda n: argv[argv.index(n) + 1] if n in argv and argv.index(n) + 1 < len(argv) else None
     d = opt("--dir") or usage_dir()
-    sid = opt("--session")
+    sid = opt("--session") or (None if "--help" in argv or "-h" in argv else os.environ.get("AGENT_HUB_SESSION") or os.environ.get("CLAUDE_CODE_SESSION_ID"))
     if not sid and "--all" not in argv:
         sys.stderr.write("usage: agent-hub usage --session <id> [--json] [--dir D] | --all\n")
         return 2

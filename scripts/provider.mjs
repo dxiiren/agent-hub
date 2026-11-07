@@ -375,7 +375,7 @@ export function migrate(p = paths(), { undo, env } = {}) {
     }
     if (markedDone(p, e)) return { changed: false };
     const q = migrateQwen(p); const l = migrateLocalLlama(p, { env });
-    try { writeAtomic(markPath(p), migrateKey(p, e)); } catch { /* a missing marker only costs one more pass */ }
+    try { const k = migrateKey(p, e); if (!markedDone(p, e)) writeAtomic(markPath(p), k); } catch { /* a missing marker only costs one more pass */ }
     return l.changed ? { ...q, changed: true, localLlama: l.converted } : q;
   });
 }

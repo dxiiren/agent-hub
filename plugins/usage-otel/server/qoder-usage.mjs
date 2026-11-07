@@ -1,6 +1,6 @@
 // Qoder row for the Paseo web UI Usage panel (plugin usage source). Data = the account quota qoder_poll.py already reads (no new meter).
 import { execFileTree } from "./exec-tree.mjs";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,10 +21,24 @@ export function toReport(s) {
   };
 }
 
+/** Folder holding qoder_poll.py: AGENT_HUB_POLLER_DIR, else beside this module, else AGENT_HUB_REPO, else a plugin install path in the Paseo config. The Paseo plugin bundler leaves import.meta.url undefined (fileURLToPath then threw 'The "path" argument must be of type string' on the Usage card when the daemon had no AGENT_HUB_POLLER_DIR, e.g. a temp PASEO_HOME). */
+export function pollerDir(env = process.env, metaUrl = import.meta.url) {
+  if (env.AGENT_HUB_POLLER_DIR) return env.AGENT_HUB_POLLER_DIR;
+  const cands = [];
+  try { cands.push(join(dirname(fileURLToPath(metaUrl)), "..", "pollers")); } catch { /* bundled: no import.meta.url */ }
+  if (env.AGENT_HUB_REPO) cands.push(join(env.AGENT_HUB_REPO, "plugins", "usage-otel", "pollers"));
+  try {
+    const cfg = JSON.parse(readFileSync(join(env.PASEO_HOME || join(homedir(), ".paseo"), "config.json"), "utf8").replace(/^﻿/, ""));
+    for (const x of Object.values(cfg.plugins ?? {})) if (x?.path) cands.push(join(x.path, "..", "usage-otel", "pollers"), join(x.path, "pollers"));
+  } catch { /* no config */ }
+  const hit = cands.find((c) => existsSync(join(c, "qoder_poll.py")));
+  if (!hit) throw new Error("qoder_poll.py not found: set AGENT_HUB_POLLER_DIR");
+  return hit;
+}
+
 /** Run qoder_poll.py (about 3 s) and return its JSON summary; rejects on failure. Slow on a loaded laptop (3 s idle, 30 s+ busy), so use qoderSummary() for the panel. */
 export function pollQoder(env = process.env) {
-  const dir = env.AGENT_HUB_POLLER_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", "pollers");
-  return new Promise((res, rej) => execFileTree(env.AGENT_HUB_PYTHON ?? "python", [join(dir, "qoder_poll.py")], { env, timeout: 90_000 }, (e, out) => {
+  return new Promise((res, rej) => execFileTree(env.AGENT_HUB_PYTHON ?? "python", [join(pollerDir(env), "qoder_poll.py")], { env, timeout: 90_000 }, (e, out) => {
     try { res(JSON.parse(out)); } catch { rej(e ?? new Error("qoder_poll.py printed no JSON")); }
   }));
 }

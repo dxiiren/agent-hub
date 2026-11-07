@@ -749,10 +749,25 @@ test("claimSlot: simultaneous routes cannot all take one provider; the rest stay
   const rt = { slots: { codex: 2 } };
   const ms = [1, 2, 3].map((i) => { const un = markActive(rt, null, dir, null); return un; });
   // markers are created in one ms: make their stamps distinct and ordered
-  const ordered = ms.map((u, i) => { const f = joSt(dir, `t-9${i}-${1000 + i}.json`); u(); writeFileSync(f, JSON.stringify({ provider: null, state: "queued" })); const un = () => {}; un.file = f; un.dir = dir; return un; });
+  const ordered = ms.map((u, i) => { const f = joSt(dir, `t-${process.pid}-${1000 + i}.json`); u(); writeFileSync(f, JSON.stringify({ provider: null, state: "queued" })); const un = () => {}; un.file = f; un.dir = dir; return un; });
   assert.deepEqual(ordered.map((u) => claimSlot(u, "codex", 2)), [true, true, false]);
   assert.equal(JSON.parse(rdSt(ordered[2].file, "utf8")).provider, null);
   assert.equal(JSON.parse(rdSt(ordered[0].file, "utf8")).provider, "codex");
   setMarker(ordered[0], null); // a route that gave its slot back lets the queued one in
   assert.equal(claimSlot(ordered[2], "codex", 2), true);
+});
+
+test("claimSlot: a marker of a dead route holds no slot", () => {
+  const dir = mkdSt(joSt(tmpdir(), "ahub-claim-dead-"));
+  const dead = joSt(dir, "t-2147483646-1000.json"); writeFileSync(dead, JSON.stringify({ provider: "laptop", state: "run" }));
+  const mine = joSt(dir, `t-${process.pid}-2000.json`); writeFileSync(mine, JSON.stringify({ provider: null, state: "queued" }));
+  const un = () => {}; un.file = mine; un.dir = dir;
+  assert.equal(claimSlot(un, "laptop", 1), true);
+});
+
+import { sessionFromEnv } from "../route.mjs";
+test("session falls back from AGENT_HUB_SESSION to CLAUDE_CODE_SESSION_ID, else none", () => {
+  assert.equal(sessionFromEnv({ AGENT_HUB_SESSION: "a", CLAUDE_CODE_SESSION_ID: "b" }), "a");
+  assert.equal(sessionFromEnv({ CLAUDE_CODE_SESSION_ID: "b" }), "b");
+  assert.equal(sessionFromEnv({}), undefined);
 });

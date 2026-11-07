@@ -88,10 +88,27 @@ export function staleProjects(paseo) {
   const rows = paseo(["project", "ls"]);
   return (Array.isArray(rows) ? rows : []).filter((p) => p.projectId && typeof p.path === "string" && isAbsolute(p.path) && !existsSync(p.path));
 }
-export function removeStaleProjects({ paseo, dry = false }) {
-  const list = staleProjects(paseo);
+export function removeStaleProjects({ paseo, dry = false, junk = false, tmp = tmpdir(), sys = process.env.SystemRoot ?? process.env.windir }) {
+  const list = junk ? [...new Map([...staleProjects(paseo), ...junkProjects(paseo, { tmp, sys })].map((p) => [p.projectId, p])).values()] : staleProjects(paseo);
   if (!dry) for (const p of list) paseo(["project", "delete", p.projectId]);
   return list.map((p) => p.path);
+}
+
+const norm = (p) => resolve(p).replace(/[\\/]+$/, "").toLowerCase();
+const within = (p, root) => { if (!root) return false; const a = norm(p), b = norm(root); return a === b || a.startsWith(b + "\\") || a.startsWith(b + "/"); };
+/** Never junk, whatever else matches: the owner's real repos. Only folders no pattern below names are ever listed, this is a second belt. */
+const KEEP = /^(agent-hub|Claude-Code-Usage-Monitor)$/i;
+/** Test leftovers in the Paseo project list (for --stale-projects): the system folder and the temp folder (a Paseo project made from a bare cwd), anything in or under a `_junk` scratch folder, and per-run `*-hdad-*` worktrees. Folders that still exist qualify here, so only these name patterns do; a real repo never matches. */
+export function junkProjects(paseo, { tmp = tmpdir(), sys = process.env.SystemRoot ?? process.env.windir } = {}) {
+  const rows = paseo(["project", "ls"]);
+  // a project a live agent works in is never junk (the daemon prints cwd as "~\..."); an unreadable agent list means nothing is junk
+  const ag = paseo(["ls"]); if (!Array.isArray(ag)) return [];
+  const busy = ag.filter((a) => /^(running|permission|initializing|pending)$/i.test(String(a.status ?? "")) && typeof a.cwd === "string").map((a) => a.cwd.replace(/^~/, homedir()));
+  return (Array.isArray(rows) ? rows : []).filter((p) => {
+    if (!p.projectId || typeof p.path !== "string" || !isAbsolute(p.path) || KEEP.test(basename(p.path))) return false;
+    if (busy.some((c) => within(c, p.path))) return false;
+    return within(p.path, sys) || within(p.path, tmp) || norm(p.path).split(/[\\/]/).includes("_junk") || /(^|-)hdad-/i.test(basename(p.path));
+  });
 }
 
 /** Agent records written before the plain-model-id fix keep qwen's runtime id (`$runtime|openai|<id>(openai)` / `<id>(openai)`) in three model fields. Rewrites those fields to the plain served id, only where the value ends in "(openai)" (qwen's own suffix) and the agent is not running. Run with the daemon stopped (`just down`): a running daemon keeps its records in memory. Returns the number of records changed. */
@@ -149,7 +166,7 @@ export function main(argv, env = process.env) {
       if (dry && r.removed.length && !argv.includes("--dry-run")) console.log("preview only: stop the daemon (just down) and run again with --paseo-defaults --yes to apply");
     } catch (e) { console.error("cleanup: --paseo-defaults failed: " + e.message); return 1; }
   }
-  if (argv.includes("--stale-projects")) { const dry = argv.includes("--dry-run"); try { const gone = removeStaleProjects({ paseo: withRetry(cliPaseo(home, env)), dry }); console.log(`${dry ? "would remove" : "removed"} ${gone.length} Paseo project(s) whose folder no longer exists${gone.length ? ": " + gone.join(" ") : ""}`); } catch (e) { console.error("cleanup: --stale-projects failed: " + e.message); } }
+  if (argv.includes("--stale-projects")) { const dry = argv.includes("--dry-run"); try { const gone = removeStaleProjects({ paseo: withRetry(cliPaseo(home, env)), dry, junk: true }); console.log(`${dry ? "would remove" : "removed"} ${gone.length} Paseo project(s) whose folder is gone or that are test leftovers (system/temp folder, _junk, hdad-*)${gone.length ? ": " + gone.join(" ") : ""}`); } catch (e) { console.error("cleanup: --stale-projects failed: " + e.message); } }
   return 0;
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(main(process.argv.slice(2)));

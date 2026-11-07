@@ -3,6 +3,7 @@
 import { readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFileTree } from "./exec-tree.mjs";
+import { pollerDir } from "./qoder-usage.mjs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 
@@ -59,8 +60,7 @@ export function qoderSession(sessionId, homes = [join(os.homedir(), ".qoder"), j
 
 /** Account credits used so far (qoder_poll.py, about 3 s, async so the plugin loop is never blocked); null when the poller cannot run. */
 export function qoderCredits(env = process.env) {
-  let dir = env.AGENT_HUB_POLLER_DIR;
-  if (!dir) { try { dir = join(dirname(fileURLToPath(import.meta.url)), "..", "pollers"); } catch { return Promise.resolve(null); } }
+  let dir; try { dir = pollerDir(env); } catch { return Promise.resolve(null); }
   return new Promise((res) => execFileTree(env.AGENT_HUB_PYTHON ?? "python", [join(dir, "qoder_poll.py")], { env, timeout: 20_000 }, (e, out) => {
     try { const v = JSON.parse(out).credits_used; res(typeof v === "number" ? v : null); } catch { res(null); }
   }));

@@ -125,6 +125,8 @@ const TAG = /^\[[A-Z][A-Za-z_ ]*\](?: |$)/;
 const trimEnd = (l) => { while (l.length && !l[l.length - 1].trim()) l.pop(); return l; };
 const NL = String.fromCharCode(10);
 const lines = (t) => String(t ?? "").replace(/\r\n/g, NL).split(NL);
+/** Session id when --session is absent: AGENT_HUB_SESSION, else Claude Code's CLAUDE_CODE_SESSION_ID (set in every Bash call, inherited by its subagents), so any Claude helper lands under its session's usage counter. */
+export const sessionFromEnv = (env) => env.AGENT_HUB_SESSION || env.CLAUDE_CODE_SESSION_ID || undefined;
 /** The agent's last assistant message. `paseo logs` has no JSON, so two reads are combined: `full` is the whole transcript (tagged [User]/[Thought]/tool lines; a multi-line User or Thought block continues on untagged lines that look like an answer) and `assistant` is `paseo logs --filter assistant` (assistant messages only, untagged). The answer is the last untagged run of the full log, cut to the lines the assistant-only text also ends with, so a re-prompt tail or a thought continuation never leaks in. Without the assistant-only text (read failed) it is the last untagged run alone. Capped. */
 export function lastAnswer(full, cap = 4096, assistant = null) {
   const ls = lines(full);
@@ -485,12 +487,13 @@ export function setMarker(un, provider) { try { if (un?.file) writeFileSync(un.f
  * Slot reservation across processes. A route writes its provider into its own marker FIRST, then counts the live markers holding that provider in start order:
  * it keeps the slot only when its rank is below `slots`. Without it, 30 routes started in one second all read "0 busy" from `paseo ls` (agents are not registered yet) and all piled onto the same provider.
  */
+const pidAlive = (n) => { const pid = Number(n.split("-")[1]); if (!pid) return true; try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 export function claimSlot(un, provider, slots) {
   if (!un?.file || !Number.isFinite(slots)) return true;
   setMarker(un, provider);
   try {
     const stamp = (n) => Number(n.split("-")[2]?.replace(".json", "")) || 0;
-    const live = readdirSync(un.dir).filter((n) => n.startsWith("t-") && Date.now() - statSync(join(un.dir, n)).mtimeMs < markerAge)
+    const live = readdirSync(un.dir).filter((n) => n.startsWith("t-") && Date.now() - statSync(join(un.dir, n)).mtimeMs < markerAge && pidAlive(n)) // a killed route's marker holds no slot (it used to, for 30 min)
       .filter((n) => { try { return JSON.parse(readFileSync(join(un.dir, n), "utf8")).provider === provider; } catch { return false; } })
       .sort((a, b) => stamp(a) - stamp(b) || a.localeCompare(b));
     const rank = live.indexOf(basename(un.file));
@@ -524,7 +527,7 @@ function main(argv) {
   const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
   const cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
-  const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
+  const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? sessionFromEnv(process.env), dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
   if (early) { console.error("route: " + early); return 2; }
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
@@ -536,7 +539,7 @@ function main(argv) {
   let res;
   try { res = runRoute({
     providerState: pstate, marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree",
-    session: opt("--session") ?? process.env.AGENT_HUB_SESSION, dev,
+    session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, freeMem: () => os.freemem() / 2 ** 30,
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
