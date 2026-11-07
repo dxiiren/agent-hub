@@ -311,7 +311,7 @@ export const loadPark = (agentId, dir = parkDir()) => { try { return JSON.parse(
 const dropPark = (agentId, dir = parkDir()) => { try { const f = parkFile(dir, agentId); if (f) rmSync(f, { force: true }); } catch { /* best effort */ } };
 /** Stop and archive a parked agent (and its route-created worktree). */
 export function retireParked(paseo, rec) {
-  paseo(["stop", rec.agentId]); paseo(["archive", rec.agentId]);
+  { const r = paseo(["archive", rec.agentId, "--force"]); if (r?.error && !/not found|archived/i.test(String(r.error))) { paseo(["stop", rec.agentId]); paseo(["archive", rec.agentId]); } }
   if (rec.wt) paseo(["worktree", "archive", rec.wt.name, "--cwd", rec.cwd]);
 }
 /** Parked and still unanswered after the park time: retire it. A later park (new parkedAt) or a reply (file gone) cancels this reap. */
@@ -388,6 +388,8 @@ export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate
 }
 /** An unknown --mode is refused loudly (it used to be dropped silently on read-only types); null when fine or absent. */
 export const modeError = (mode, routes = {}) => (mode === undefined || mode === null || knownModes(routes).has(mode) ? null : `unknown --mode "${mode}": use one of ${[...knownModes(routes)].filter((m) => !m.startsWith("http")).sort().join(", ")} (read-only task types always run read-only whatever --mode says)`);
+/** Drain functions of the routes running in this process: main()'s exit/signal handler runs them. */
+export const ACTIVE = new Set();
 export function runRoute(o, paseo, routes, gate = runGate) {
   const bad = inputError(o) ?? modeError(o.mode, routes); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
   // a credential in the task or the gate command is refused before anything is created or sent (same scanner as reply and the diff gate; fails closed when the scanner is missing)
@@ -418,11 +420,29 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const rows = paseo(["ls"]); const live = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running").map((a) => pnorm(a.cwd?.replace(/^~(?=[\/])/, os.homedir())));
     for (const p of projects()) if (!projBefore.has(p.projectId) && targets.includes(pnorm(p.path)) && !live.includes(pnorm(p.path))) paseo(["project", "delete", p.projectId]);
   };
+  // Every agent this route creates is tracked until it is archived. `archive --force` interrupts a running agent and ends its CLI process tree (verified on Windows; `stop` alone leaves the CLI alive), retried once, then stop + archive.
+  const live = new Map(); // key -> { id, wt }: created and not yet retired
+  const rid = randomBytes(4).toString("hex"); let unnamed = false; // unnamed: a create call returned no agent id (timeout), found again by its route/run label
+  const ledger = () => { // survives a hard kill of this process (no handler can run then): the hub reaper archives these agents once this pid is dead
+    if (!o.ledgerDir || o.keep) return;
+    const f = join(o.ledgerDir, `agents-${process.pid}.json`);
+    if (!live.size) { try { rmSync(f, { force: true }); } catch { /* gone */ } return; }
+    tryWriteState(f, { pid: process.pid, home: o.home ?? null, cwd: o.cwd, agents: [...live.values()].filter((v) => !v.run).map((v) => ({ id: v.id ?? null, wt: v.wt ? { name: v.wt.name } : null })), runs: [...live.values()].some((v) => v.run) ? [rid] : [] }); // runs: a create call is in flight and its agent id is not known yet (found by the route/run label)
+  };
+  const track = (id, wt) => { if (o.keep || (!id && !wt)) return; live.set(id ?? "wt:" + wt.name, { id, wt }); ledger(); };
+  const archive = (id) => { let r = paseo(["archive", id, "--force"]); if (r?.error && !/not found|archived/i.test(String(r.error))) r = paseo(["archive", id, "--force"]); if (r?.error && !/not found|archived/i.test(String(r.error))) { paseo(["stop", id]); paseo(["archive", id]); } };
   const retire = (id, wt) => {
     if (o.keep) return;
-    if (id) { paseo(["stop", id]); paseo(["archive", id]); }
+    if (id) archive(id);
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
-    dropProjects(wt);
+    live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name);
+    dropProjects(wt); ledger();
+  };
+  // runs on every exit of the loop below (ok, gate fail, error, usage limit, timeout, refusal, an exception) and from the exit/signal handler in main()
+  const drain = () => {
+    if (o.keep) return;
+    for (const v of [...live.values()]) { if (v.run) continue; try { retire(v.id, v.wt); } catch { /* keep going: the reaper retries */ } }
+    if (unnamed) { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } unnamed = false; }
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
   const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path } : {}) }; retire(r.agentId, wt); return { ...r, ...info }; };
@@ -431,6 +451,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
   const installed = state ? new Set(state.keys()) : null;
   if (routes.slots) slots = budgetFor(routes, state, {}, 0).perProvider;
+  ACTIVE.add(drain);
+  try {
   for (const entry of chain) {
     let prov;
     try { prov = resolveCached(entry, paseo); } catch (e) { trace.push({ provider: entry, error: String(e.message) }); continue; }
@@ -463,7 +485,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       if (why) { trace.push({ provider: prov, skip: why }); continue; }
       if (waited && !claimSlot(o.marker, base(prov), own(slots, base(prov)))) { trace.push({ provider: prov, skip: `slots full: ${own(slots, base(prov))} other routes already hold ${base(prov)}` }); continue; }
     }
-    const labels = { "route/type": o.type, "route/provider": prov, dev: o.dev, caller: o.client, session: o.session };
+    const labels = { "route/type": o.type, "route/provider": prov, "route/run": rid, ...(process.env.CLAUDE_CODE_SESSION_ID && process.env.CLAUDE_CODE_SESSION_ID !== o.session ? { claude_session: process.env.CLAUDE_CODE_SESSION_ID } : {}), ...(o.keep ? { "route/keep": "1" } : {}), dev: o.dev, caller: o.client, session: o.session };
     let wt = null; // this entry's route-created worktree
     // Qwen read-only: the launcher (acp-proxy.mjs) offers the session mode "read-only"; choosing it restarts qwen with the deny settings (config/qwen/system-settings-readonly.json). Nothing is ever written under the task cwd.
     const lim = attemptLimit(o, routes); const t0 = (o.now ?? Date.now)(); const left = () => Math.max(1, Math.round(lim - ((o.now ?? Date.now)() - t0) / 1000)); // one provider attempt gets lim seconds in all (run, waits, permission rounds)
@@ -478,7 +500,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       if (!o.base || o.base === EMPTY_TREE) { trace.push({ provider: prov, error: "worktree task needs a git repo with at least one commit (the base commit is pinned at creation)" }); continue; }
       const c = paseo(["worktree", "create", "--mode", "branch-off", "--new-branch", "route-" + randomBytes(5).toString("hex"), "--base", o.base, "--cwd", o.cwd]);
       if (!c?.worktreePath || c.error) { trace.push({ provider: prov, error: "worktree create failed: " + String(c?.error ?? "no path returned").slice(0, 200) }); continue; }
-      wt = { name: c.name, path: c.worktreePath };
+      wt = { name: c.name, path: c.worktreePath }; track(null, wt);
       args[2] = wt.path;
       writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base);
     }
@@ -494,7 +516,9 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
+    live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
     let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: (lim + 30) * 1000 });
+    live.delete("run:" + rid); if (j?.agentId) track(j.agentId, wt); else { unnamed = true; ledger(); }
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(left())], { timeoutMs: (left() + 30) * 1000 });
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
@@ -518,6 +542,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const a = withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs);
       const q = parseAsk(a.answer);
       if (q && j.agentId) {
+        live.delete(j.agentId); if (wt) live.delete("wt:" + wt.name); ledger(); // parked: its own reaper owns it now
         park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
         return { ...a, status: "asking", question: q, round: 1, hint: `answer with: agent-hub reply ${j.agentId} "<text>" (a parked agent is stopped after ${PARK_SECONDS / 60} min with no reply)` };
       }
@@ -540,6 +565,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
     if (j.agentId || wt) retire(j.agentId, wt); // a timed-out agent must not keep running while the next entry works
   }
+  } finally { drain(); ACTIVE.delete(drain); }
   if (!partial && trace.length && trace.every((t) => /^provider not configured/.test(t.skip ?? ""))) trace.push({ error: `no provider configured for ${o.type}: add one in Settings > Providers` });
   return partial ? { used: null, status: "permission", partial, trace } : { used: null, trace };
 }
@@ -629,12 +655,13 @@ function main(argv) {
   const routes = loadRoutes();
   { const me = modeError(opt("--mode"), routes); if (me) { console.error("route: " + me); return 2; } }
   const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)));
+  { const bail = () => { for (const d of [...ACTIVE]) { try { d(); } catch { /* best effort */ } } }; process.on("exit", bail); for (const sg of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sg, () => process.exit(130)); } // Ctrl-C / kill: the exit handler archives what this route started
   const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
   let res;
   try { res = runRoute({
     providerState: pstate, marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
-    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, freeMem: () => os.freemem() / 2 ** 30, laptop: () => laptopNow(),
+    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => os.freemem() / 2 ** 30, laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;

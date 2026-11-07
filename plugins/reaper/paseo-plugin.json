@@ -1,0 +1,7 @@
+{
+  "id": "agent-hub-reaper",
+  "name": "Agent Hub reaper",
+  "description": "Every 5 minutes archives agent-hub agents that are idle, in error or closed for over 20 minutes, agents of dead route processes, and route agents still running long after their time limit, so no agent CLI process lingers.",
+  "media": [],
+  "requirements": { "paseo": ">=0.15.0" }
+}

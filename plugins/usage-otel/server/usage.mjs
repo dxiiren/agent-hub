@@ -21,6 +21,7 @@ export function toRecord(snap, now = new Date()) {
     ts: now.toISOString(),
     agent: snap.id,
     session,
+    alt: labels.claude_session && labels.claude_session !== session ? labels.claude_session : undefined, // the Claude Code session that made a tagged call (--session <tag>): its statusline reads this id
     sub: labels.parent_session && labels.session ? labels.session : undefined,
     provider: String(snap.provider ?? ""),
     model: String(snap.model ?? snap.runtimeInfo?.model ?? ""),
@@ -53,12 +54,14 @@ export function appendUsage(dir, rec) {
   mkdirSync(join(dir, "sessions"), { recursive: true });
   const line = JSON.stringify(rec) + "\n";
   appendFileSync(join(dir, "usage.jsonl"), line);
-  if (!rec.session) return;
-  const base = join(dir, "sessions", safe(rec.session));
-  appendFileSync(base + ".jsonl", line);
-  let sum;
-  try { sum = JSON.parse(readFileSync(base + ".sum.json", "utf8")); } catch { sum = { session: rec.session, providers: {}, total: zero() }; }
-  writeFileSync(base + ".sum.json", JSON.stringify(sumInto(sum, rec)));
+  for (const id of [rec.session, rec.alt]) { // the tag, and the Claude session id when they differ: each file is counted once, the global log above only once
+    if (!id) continue;
+    const base = join(dir, "sessions", safe(id));
+    appendFileSync(base + ".jsonl", line);
+    let sum;
+    try { sum = JSON.parse(readFileSync(base + ".sum.json", "utf8")); } catch { sum = { session: id, providers: {}, total: zero() }; }
+    writeFileSync(base + ".sum.json", JSON.stringify(sumInto(sum, rec)));
+  }
 }
 
 /** OTLP/JSON metrics body: counts only, attributes provider, model, dev, client (never the session id: cardinality). */

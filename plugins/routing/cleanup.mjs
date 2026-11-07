@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { cliPaseo, withRetry, loadRoutes } from "./route.mjs";
+import { asyncPaseo, reapFinished, reapDeadRoutes } from "./reaper.mjs";
 import { cleanModelId } from "./acp-proxy.mjs";
 
 export const DOCTOR_LABEL = "caller=agent-hub-doctor";
@@ -29,7 +30,7 @@ export function cleanup({ paseo, olderThan = 0, all = false, routes = {}, dry = 
   for (const a of pool.values()) {
     const age = ageSeconds(a.created); // an unreadable age is never "old enough": a cleanup that asked for an age limit leaves such an agent alone
     if (!FINISHED.test(String(a.status ?? "")) || (age === Infinity ? olderThan > 0 : age < olderThan)) { skipped++; continue; }
-    if (!dry) { paseo(["stop", a.id]); paseo(["archive", a.id]); }
+    if (!dry) { const x = paseo(["archive", a.id, "--force"]); if (x?.error && !/not found|archived/i.test(String(x.error))) { paseo(["stop", a.id]); paseo(["archive", a.id]); } }
     archived.push(a.id);
   }
   return { archived, skipped };
@@ -143,14 +144,17 @@ import { reapAgentOrphans } from "./orphans.mjs";
 import { normalizeConfigFile } from "./paseo-defaults.mjs";
 import { findServerDir } from "../../scripts/paseo-web-patch.mjs";
 
-export function main(argv, env = process.env) {
+export async function main(argv, env = process.env) {
   if (argv.includes("--fix-model-ids")) { const n = cleanAgentModelIds({ home: argv.includes("--home") ? argv[argv.indexOf("--home") + 1] : env.PASEO_HOME, dry: argv.includes("--dry-run") }); console.log(`${argv.includes("--dry-run") ? "would rewrite" : "rewrote"} the model id in ${n} old agent record(s) (stop the daemon first: it keeps records in memory)`); return 0; }
   const opt = (n) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
   if (argv.includes("--all") && argv.includes("--mine")) { console.error("cleanup: --mine and --all exclude each other"); return 2; }
   const olderThan = opt("--older-than") === undefined ? 0 : parseAge(opt("--older-than"));
   if (olderThan === null) { console.error("cleanup: --older-than takes a number and s|m|h|d, e.g. 30m"); return 2; }
   const home = opt("--home") ?? env.PASEO_HOME;
-  const r = cleanup({ paseo: withRetry(cliPaseo(home, env)), olderThan, all: argv.includes("--all"), routes: loadRoutes(env), dry: argv.includes("--dry-run") });
+  // parallel + archive --force (one call per agent, 6 at a time): the old stop+archive loop took over 120 s for 15 agents
+  const run = asyncPaseo(home, env); const dry = argv.includes("--dry-run");
+  try { const d = await reapDeadRoutes({ run, dry }); if (d.length) console.log(`${dry ? "would archive" : "archived"} ${d.length} agent(s) of dead route processes`); } catch { /* no run dir */ }
+  const r = await reapFinished({ run, olderThan, all: argv.includes("--all"), routes: loadRoutes(env), dry });
   console.log(`${argv.includes("--dry-run") ? "would archive" : "archived"} ${r.archived.length} agent(s), ${r.skipped} left (running, too new or not finished)${r.archived.length ? ": " + r.archived.map((i) => i.slice(0, 8)).join(" ") : ""}`);
   try { const d = cleanDoctorLeftovers({ paseo: withRetry(cliPaseo(home, env)), dry: argv.includes("--dry-run") }); if (d.dirs || d.projects) console.log(`${argv.includes("--dry-run") ? "would remove" : "removed"} ${d.dirs} leftover hub-doctor temp folder(s) and ${d.projects} of their Paseo project(s)`); } catch { /* the daemon may be down: the folders go next time */ }
   if (guard) { const dry = argv.includes("--dry-run"); try { for (const x of guard.reapOrphans({ idleMs: Number(env.LAPTOP_IDLE_MIN || 15) * 60_000, dry })) console.log(`${dry ? "would stop" : "stopped"} an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`); } catch { /* best effort */ }
@@ -170,4 +174,4 @@ export function main(argv, env = process.env) {
   if (argv.includes("--stale-projects")) { const dry = argv.includes("--dry-run"); try { const gone = removeStaleProjects({ paseo: withRetry(cliPaseo(home, env)), dry, junk: true }); console.log(`${dry ? "would remove" : "removed"} ${gone.length} Paseo project(s) whose folder is gone or that are test leftovers (system/temp folder, _junk, hdad-*)${gone.length ? ": " + gone.join(" ") : ""}`); } catch (e) { console.error("cleanup: --stale-projects failed: " + e.message); } }
   return 0;
 }
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(main(process.argv.slice(2)));
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(await main(process.argv.slice(2)));

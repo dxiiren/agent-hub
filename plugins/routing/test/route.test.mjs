@@ -20,12 +20,12 @@ test("default wins when healthy; labels carry session, dev, client", () => {
   const run = p.calls.find((c) => c[0] === "run");
   assert.ok(run.includes("session=S1") && run.includes("caller=claude") && run.includes("dev=d"));
 });
-test("failed or down default moves to the next entry and stops the dead agent", () => {
+test("failed or down default moves to the next entry and archives the dead agent", () => {
   const p = fake({ run: (a) => (a.includes("codex/a") ? { status: "timeout", agentId: "X" } : { status: "completed", agentId: "A2" }) });
   const r = runRoute(o, p, routes);
   assert.equal(r.used, "qwen/b");
   assert.deepEqual(r.trace.map((t) => t.provider), ["codex/a", "qwen/b"]);
-  assert.ok(p.calls.some((c) => c[0] === "stop" && c[1] === "X"));
+  assert.ok(p.calls.some((c) => c[0] === "archive" && c[1] === "X"));
 });
 test("busy provider is skipped", () => {
   const p = fake({ ls: [{ status: "running", provider: "codex" }], run: () => ({ status: "completed", agentId: "A3" }) });
@@ -208,7 +208,7 @@ test("re-prompt blocks (send, wait), freezes the agent (stop) and only then runs
   let n = 0;
   let r = runRoute({ ...o, gate: "g" }, mkp(null), routes, () => { order.push("gate"); return ++n === 1 ? { status: "FAIL", reasons: ["x"] } : { status: "PASS", reasons: [] }; });
   assert.equal(r.status, "completed");
-  assert.deepEqual(order.filter((x) => ["gate", "send", "wait", "stop"].includes(x)), ["gate", "send", "wait", "stop", "gate", "stop"]);
+  assert.deepEqual(order.filter((x) => ["gate", "send", "wait", "stop"].includes(x)), ["gate", "send", "wait", "stop", "gate"]);
   for (const bad of ["send", "wait"]) {
     r = runRoute({ ...o, gate: "g" }, mkp(bad), routes, () => ({ status: "FAIL", reasons: ["x"] }));
     assert.equal(r.status, "gate-failed"); assert.match(r.gate.reasons.join(), /failed: boom/);
@@ -436,7 +436,7 @@ test("a finished route stops and archives its agent after the answer is read; --
   const r = runRoute({ ...o, provider: "qwen/b" }, ok, routes);
   assert.equal(r.answer, "ans");
   assert.ok(order(ok).indexOf("logs") < order(ok).indexOf("archive"), "answer is read before the agent is archived");
-  assert.deepEqual(ok.calls.filter((c) => c[0] === "stop" || c[0] === "archive"), [["stop", "A1"], ["archive", "A1"]]);
+  assert.deepEqual(ok.calls.filter((c) => c[0] === "stop" || c[0] === "archive"), [["archive", "A1", "--force"]]); // archive --force ends the CLI process tree, one call
   const keep = mk((a) => (a[0] === "ls" ? [] : a[0] === "run" ? { status: "completed", agentId: "A2" } : {}));
   runRoute({ ...o, provider: "qwen/b", keep: true }, keep, routes);
   assert.ok(!keep.calls.some((c) => c[0] === "stop" || c[0] === "archive"));

@@ -293,7 +293,7 @@ async function doctor(deep) {
 function plugins() {
   const f = join(HOME, 'config.json'); const c = readJson(f, {});
   if (!c.pluginsEnabled) { c.pluginsEnabled = true; writeJson(f, c); ok('pluginsEnabled set; restart the daemon (just down ; just up) if the installs below fail'); }
-  for (const d of ['gate', 'usage-otel', 'providers']) {
+  for (const d of ['gate', 'usage-otel', 'providers', 'reaper']) {
     const r = paseo(['plugin', 'install', join(REPO, 'plugins', d)]);
     (r.status === 0 ? ok : (m) => console.log('[FAIL] ' + m))(`plugin ${d}: ${out(r).split(String.fromCharCode(10)).pop()}`);
   }

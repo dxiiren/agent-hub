@@ -131,3 +131,14 @@ test("pollerDir: bundled plugin (import.meta.url undefined) and a temp PASEO_HOM
   assert.equal(pollerDir({ PASEO_HOME: home }, null), dir);
   assert.throws(() => pollerDir({ PASEO_HOME: mkdtempSync(pj(tmpdir(), "ah-empty-")) }, null), /AGENT_HUB_POLLER_DIR/);
 });
+
+test("a call tagged --session <tag> is also booked under the Claude session id (statusline), counted once in the global log", () => {
+  const d = mkdtempSync(join(tmpdir(), "usage-alt-"));
+  appendUsage(d, toRecord(snap({ session: "hdad-w3b", claude_session: "CLAUDE-1" })));
+  appendUsage(d, toRecord(snap({ session: "CLAUDE-2", claude_session: "CLAUDE-2" }))); // same id: no duplicate file entry
+  assert.equal(readFileSync(join(d, "usage.jsonl"), "utf8").trim().split("\n").length, 2);
+  const py = (sid) => JSON.parse(spawnSync("python", [join(here, "..", "bin", "agent_hub_usage.py"), "usage", "--session", sid, "--json"], { encoding: "utf8", env: { ...process.env, AGENT_HUB_USAGE_DIR: d } }).stdout);
+  assert.equal(py("hdad-w3b").total.n, 1);
+  assert.equal(py("CLAUDE-1").total.n, 1);
+  assert.equal(py("CLAUDE-2").total.n, 1);
+});
