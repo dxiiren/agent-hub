@@ -20,6 +20,7 @@ import { own } from "./jsonfile.mjs";
 import { endpointSkip } from "./endpoint.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
 import { acquireEntry, maxInFlight } from "./entry-gate.mjs";
+import { spoolCleanup, workspaceCapError } from "./guards.mjs";
 import { effectiveBudget, chainOrder, costGb, laptopNow, availableGb, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -470,8 +471,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   };
   const track = (id, wt) => { if (o.keep || (!id && !wt)) return; live.set(id ?? "wt:" + wt.name, { id, wt }); ledger(); };
   const archive = (id) => { let r = paseo(["archive", id, "--force"]); if (r?.error && !/not found|archived/i.test(String(r.error))) r = paseo(["archive", id, "--force"]); if (r?.error && !/not found|archived/i.test(String(r.error))) { paseo(["stop", id]); paseo(["archive", id]); } };
-  const retire = (id, wt) => {
+  const retire = (id, wt, defer = false) => {
     if (o.keep) return;
+    // finished route: free the slot first, archive later (guards.mjs spool; the slow daemon archive used to hold the slot 40-55 s per call). Failed attempts still retire in line.
+    if (defer && o.deferCleanup && o.ledgerDir && (id || wt)) { try { spoolCleanup(o.ledgerDir, { agentId: id ?? null, wt: wt ? { name: wt.name } : null, cwd: o.cwd, home: o.home ?? null }); live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name); ledger(); return; } catch { /* spool unwritable: archive in line */ } }
     if (id) archive(id);
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
     live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name);
@@ -484,7 +487,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (unnamed) { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } unnamed = false; }
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
-  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path } : {}) }; retire(r.agentId, wt); return { ...r, ...info }; };
+  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path } : {}) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
@@ -725,6 +728,8 @@ function main(argv) {
     try { migrate(); } catch { /* best effort */ }
     const res = runReply(id, text, withRetry(cliPaseo(home)), loadRoutes(), { dir: parkDir(home) });
     console.log(JSON.stringify(res));
+  entry.release(); // the answer is out: free the hub slot now, the archive runs off-slot in a detached worker (and the reaper drains the same spool if this one dies)
+  try { spawn(process.execPath, [fileURLToPath(new URL("./reaper.mjs", import.meta.url)), "--spool", ...(home ? ["--home", home] : [])], { detached: true, stdio: "ignore", windowsHide: true }).unref(); } catch { /* the reaper drains it */ }
   if (!res.used && !res.status && (res.trace ?? []).every((t) => t.skip || t.error)) console.error(`route: no provider took this ${type} task (see trace). summarise/review run only on providers with an enforced read guard (a Qwen Code endpoint or claude-clean): add one with agent-hub provider add <name> --kind qwen-code --url <base>/v1 --model <id> --routes ${type}. code-edit works with codex or claude and needs --new-workspace worktree.`);
     return res.status === "completed" ? 0 : res.status === "asking" ? 3 : 1;
   }
@@ -752,6 +757,7 @@ function main(argv) {
   if (!(opt("--session") ?? sessionFromEnv(process.env))) console.error("route: note: no session id (CLAUDE_CODE_SESSION_ID is not set in this shell, e.g. a PowerShell tool), so this task is counted under no session; pass --session <id> or set AGENT_HUB_SESSION to see it in `agent-hub usage --session <id>`.");
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
   const routes0 = loadRoutes();
+  { const capErr = workspaceCapError(withRetry(cliPaseo(home)), Number(process.env.AGENT_HUB_WORKSPACE_CAP) || undefined); if (capErr) { console.error("route: " + capErr); return 1; } }
   const entry = (() => { try { return acquireEntry({ dir: runDir(), max: maxInFlight(routes0), onWait: (n, m) => console.error(`route: ${n}/${m} routes already in flight: queued here (no daemon traffic) until a slot frees`) }); } catch { return { release() {}, waitedMs: 0 }; } })();
   if (entry === null) { console.error("route: gave up waiting 30 min for a free hub slot (maxInFlight in routes.local.json, env AGENT_HUB_MAX_INFLIGHT); nothing was started"); return 1; }
   process.on("exit", () => entry.release()); // every exit path, including process.exit(130) from a signal
@@ -767,7 +773,7 @@ function main(argv) {
   try { res = runRoute({
     providerState: pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
-    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
+    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;

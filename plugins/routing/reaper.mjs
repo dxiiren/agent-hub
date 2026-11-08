@@ -10,6 +10,7 @@ import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
+import { drainSpool, reapStuckRoutes, sweepIdleWorkspaces } from "./guards.mjs";
 
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 60; // the env override is for the throwaway-hub proof
@@ -117,7 +118,9 @@ export async function reapOnce({ run, env = process.env, home = env.PASEO_HOME, 
   let dead = []; try { dead = await reapDeadRoutes({ run, dry: opts.dry, concurrency: opts.concurrency }); } catch { /* no run dir yet */ }
   const fin = await reapFinished({ run, routes: opts.routes ?? loadRoutes(env), parked, ...opts });
   let ghosts = { archived: [] }; if (opts.ghosts !== false) { try { ghosts = await reapGhostWorkspaces({ run, home, dry: opts.dry }); } catch { /* next pass */ } }
-  return { dead, ...fin, ghosts: ghosts.archived, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}) };
+  let spooled = [], stuck = []; // guards.mjs: off-slot cleanup of finished routes, and slots held by routes whose agents went silent
+  if (!opts.dry) { try { spooled = await drainSpool({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } try { stuck = await reapStuckRoutes({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } }
+  return { dead, ...fin, ghosts: ghosts.archived, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}), spooled, stuck };
 }
 
 /** Start the periodic reaper; returns stop(). One pass at a time; the timer never keeps the process alive. */
@@ -129,7 +132,10 @@ export function startReaper({ run, everyMs = REAP_EVERY_MS, log = (m) => console
     catch (e) { log("agent-hub reaper: " + String(e?.message ?? e)); } finally { busy = false; }
   };
   const t = setInterval(tick, everyMs); t.unref?.();
-  return () => clearInterval(t);
+  let sbusy = false; // workspace sweep every 10 min (guards.mjs): idle, clean worktree workspaces; the cap in route.mjs refuses routes over 20
+  const sweep = async () => { if (sbusy) return; sbusy = true; try { const r = await sweepIdleWorkspaces({ run, log }); if (r.archived.length) log(`agent-hub reaper: archived ${r.archived.length} idle workspace(s)`); } catch (e) { log("agent-hub reaper sweep: " + String(e?.message ?? e)); } finally { sbusy = false; } };
+  const t2 = setInterval(sweep, 10 * 60_000); t2.unref?.();
+  return () => { clearInterval(t); clearInterval(t2); };
 }
 
 // node reaper.mjs [--once] [--dry-run] [--older-than 20m] [--every 5m] [--home H]: standalone form of the daemon plugin (plugins/reaper)
@@ -138,6 +144,8 @@ import { parseAge } from "./cleanup.mjs";
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const a = process.argv.slice(2), opt = (n) => (a.includes(n) ? a[a.indexOf(n) + 1] : undefined);
   const run = asyncPaseo(opt("--home") ?? process.env.PASEO_HOME), olderThan = opt("--older-than") ? parseAge(opt("--older-than")) : REAP_AFTER_S, dry = a.includes("--dry-run");
+  if (a.includes("--spool")) { const done = await drainSpool({ runDir: runDir(), run, archiveAgent }); console.log(JSON.stringify({ spooled: done })); process.exit(0); } // detached worker started by a finished route
+  if (a.includes("--sweep")) { const r = await sweepIdleWorkspaces({ run, dry, log: console.log }); console.log(JSON.stringify({ archived: r.archived, skipped: r.skipped.length, failed: r.failed })); process.exit(0); }
   if (a.includes("--once") || dry) { const r = await reapOnce({ run, olderThan, dry }); console.log(JSON.stringify(r)); process.exit(0); }
   startReaper({ run, olderThan, everyMs: (opt("--every") ? parseAge(opt("--every")) : REAP_EVERY_MS / 1000) * 1000, log: console.log }); // the interval is unref'd, so hold the process open
   setInterval(() => {}, 1 << 30);
