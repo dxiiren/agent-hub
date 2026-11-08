@@ -24,7 +24,8 @@ export function workspaceCapError(paseo, cap = WORKSPACE_CAP) {
 
 /** A workspace is idle when it is a worktree-isolated one (or a ghost), is not a permanent NextGen folder, no unfinished agent runs in it, nothing in it changed for `idleS`, and it has no uncommitted work. */
 export async function sweepIdleWorkspaces({ run, now = Date.now, idleS = SWEEP_IDLE_S, max = 40, dry = false, exists = existsSync, mtimeMs = defaultMtime, dirty = gitDirty, log = () => {} }) {
-  const rows = await run(["workspace", "ls", "--json"]); if (!Array.isArray(rows)) return { archived: [], skipped: [], failed: rows?.error ? String(rows.error).slice(0, 120) : null };
+  let rows = await run(["workspace", "ls", "--json"]); if (!Array.isArray(rows)) rows = await run(["workspace", "ls", "--json"]); // one retry: a busy daemon drops the first call
+  if (!Array.isArray(rows)) return { archived: [], skipped: [], failed: rows?.error ? String(rows.error).slice(0, 120) : null };
   const agents = await run(["ls"]);
   const busy = new Set((Array.isArray(agents) ? agents : []).filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => norm(String(a.cwd ?? "").replace(/^~(?=[\\/])/, process.env.USERPROFILE || process.env.HOME || ""))));
   const victims = [], skipped = [];
