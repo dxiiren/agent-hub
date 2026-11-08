@@ -33,13 +33,15 @@ function Invoke-Ctl { param([string]$Step) $old = $ErrorActionPreference; $Error
 if ($Action -in 'start','stop') { Write-RestartLog }
 function Install-Watchdog {
   $node = (Get-Command node.exe -ErrorAction Stop).Source
-  $cmd = "& '$node' '$(Resolve-Path (Join-Path $PSScriptRoot '..\..\scripts\daemon-watchdog.mjs'))'"
+  # A task has no environment of its own: carry the variables that select a non-default hub (tests run a second home/port/task) in the command line.
+  $envs = (@('AGENT_HUB_HOME','AGENT_HUB_PORT','AGENT_HUB_TASK','AGENT_HUB_WATCHDOG_TIMEOUT_MS','AGENT_HUB_NO_USAGE_STACK','AGENT_HUB_NO_WEB_PATCH','AGENT_HUB_NO_SERVER_PATCH') | Where-Object { [Environment]::GetEnvironmentVariable($_) } | ForEach-Object { "`$env:$_='$([Environment]::GetEnvironmentVariable($_))'; " }) -join ''
+  $cmd = "$envs& '$node' '$(Resolve-Path (Join-Path $PSScriptRoot '..\..\scripts\daemon-watchdog.mjs'))'"
   $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$cmd`""
-  $trg = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
-  $set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+  $trg = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+  $set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
   $pri = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
   Register-ScheduledTask -TaskName $WatchTask -Action $act -Trigger $trg -Settings $set -Principal $pri -Force | Out-Null
-  Write-Host "[OK] task '$WatchTask' registered (every 2 min: health check, restart after 3 failures in a row)"
+  Write-Host "[OK] task '$WatchTask' registered (every 1 min: health check, hard recovery after 3 failures in a row; a run stuck past 5 min is killed so the next tick starts fresh)"
 }
 switch ($Action) {
   'install' {
@@ -59,7 +61,7 @@ switch ($Action) {
   'start'     { Remove-Item $Marker -ErrorAction SilentlyContinue; Invoke-WebPatch; Invoke-ServerPatch; Start-UsageStack
     if (Use-Ctl) { Invoke-Ctl 'heal' | Out-Null }
     if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[..] task '$Task' started, waiting for the daemon" } else { Invoke-Paseo @('daemon','start','--home',$Home_) -Scrub }
-    if (Use-Ctl) { if (-not (Invoke-Ctl 'ready')) { Write-Host "[FAIL] the hub did not come up: see $(Join-Path $Home_ 'daemon.log')"; exit 1 }; if (-not (Invoke-Ctl 'plugins')) { exit 1 }; try { & node (Join-Path $PSScriptRoot '....pluginsoutingcleanup.mjs') --stale-projects --home $Home_ 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { }; Write-Host "[OK] hub up" } else { Write-Host "[OK] start requested" } }
+    if (Use-Ctl) { if (-not (Invoke-Ctl 'ready')) { Write-Host "[FAIL] the hub did not come up: see $(Join-Path $Home_ 'daemon.log')"; exit 1 }; if (-not (Invoke-Ctl 'plugins')) { exit 1 }; try { & node (Join-Path $PSScriptRoot '..\..\plugins\routing\cleanup.mjs') --stale-projects --home $Home_ 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { }; Write-Host "[OK] hub up" } else { Write-Host "[OK] start requested" } }
   'stop'      { if ($env:AGENT_HUB_RESTART -ne '1' -and -not $env:AGENT_HUB_PASEO) { New-Item -ItemType Directory -Force -Path $Home_ | Out-Null; Set-Content -Path $Marker -Value (Get-Date -Format o) }; if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $Task | Out-Null; Stop-ScheduledTask -TaskName $Task }; Invoke-Paseo @('daemon','stop','--home',$Home_); if (Use-Ctl) { if (-not (Invoke-Ctl 'stop')) { exit 1 } }; if (-not $env:AGENT_HUB_PASEO) { & node (Join-Path $PSScriptRoot '..\..\scripts\hub.mjs') reap-laptop --now 2>&1 | Out-Host } }  # disabled so the 1-minute trigger cannot revive it; start re-enables
   'status'    { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Get-ScheduledTask -TaskName $Task | Get-ScheduledTaskInfo | Format-List TaskName, LastRunTime, LastTaskResult }; Invoke-Paseo @('daemon','status','--home',$Home_) }
 }

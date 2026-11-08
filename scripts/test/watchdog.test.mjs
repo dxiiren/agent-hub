@@ -6,7 +6,7 @@ import http from 'node:http';
 import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decide, tick, FAILS_TO_RESTART, MAX_RESTARTS, WINDOW_MS, runRestart } from '../daemon-watchdog.mjs';
+import { decide, tick, FAILS_TO_RESTART, MAX_RESTARTS, WINDOW_MS, runStart, killPlan, recover } from '../daemon-watchdog.mjs';
 import { probeDaemon } from '../daemon-health.mjs';
 import { isDaemonProcess, stopDaemon } from '../daemon-ctl.mjs';
 
@@ -75,10 +75,38 @@ test('tick: deliberate-stop marker blocks the restart even after many failures',
   assert.ok(existsSync(join(home, 'watchdog-state.json')));
 });
 
-test('runRestart: calls the service script with the reason in the environment', () => {
+test('runStart: calls `service start` (never restart: its stop half talks to the hung daemon), bounded, reason in the environment', () => {
   let seen;
-  const code = runRestart('why', { repo: '/r', platform: 'linux', run: (cmd, args, o) => { seen = { cmd, args, reason: o.env.AGENT_HUB_REASON }; return { status: 0 }; } });
-  assert.equal(code, 0); assert.equal(seen.cmd, 'sh'); assert.match(seen.args[0], /service\.sh$/); assert.equal(seen.args[1], 'restart'); assert.equal(seen.reason, 'why');
+  const code = runStart('why', { repo: '/r', platform: 'linux', run: (cmd, args, o) => { seen = { cmd, args, o }; return { status: 0 }; } });
+  assert.equal(code, 0); assert.equal(seen.cmd, 'sh'); assert.match(seen.args[0], /service\.sh$/); assert.equal(seen.args[1], 'start'); assert.equal(seen.o.env.AGENT_HUB_REASON, 'why');
+  assert.ok(seen.o.timeout > 0 && seen.o.timeout <= 300000, 'every step has a timeout'); assert.equal(seen.o.killSignal, 'SIGKILL');
+});
+
+// a snapshot as snapshot() returns it: 100 supervisor, 200 worker (holds the port), 210/220 its plugin processes, 300 foreign
+const snap = { procs: [
+  { pid: 100, ppid: 1, name: 'node.exe', ws: 1e7, cmd: 'node x/supervisor-entrypoint.js' }, { pid: 200, ppid: 100, name: 'node.exe', ws: 1e8, cmd: 'node x/daemon-worker.js' },
+  { pid: 210, ppid: 200, name: 'node.exe', ws: 1e7, cmd: 'node x/plugins/plugin-process.js' }, { pid: 220, ppid: 200, name: 'node.exe', ws: 1e7, cmd: 'node other-child.js' },
+  { pid: 300, ppid: 50, name: 'node.exe', ws: 1e7, cmd: 'node other.js' }] };
+
+test('killPlan: supervisor, worker and the worker plugin processes; not a foreign child, not an unproven holder', () => {
+  const p = killPlan({ rec: { pid: 100 }, holder: 200, snap, alive: () => true });
+  assert.deepEqual(p.kill, [100, 200, 210]); assert.equal(p.workerOk, true);
+  const f = killPlan({ rec: { pid: 100 }, holder: 300, snap, alive: () => true });
+  assert.deepEqual(f.kill, [100]); assert.equal(f.workerOk, false); assert.match(f.refused, /not provably/);
+  assert.deepEqual(killPlan({ rec: { pid: 100 }, holder: 300, snap, logPids: new Set([300]), alive: () => true }).kill, [100, 300], 'the pid the worker logged is proof too');
+  assert.deepEqual(killPlan({ rec: { pid: 300 }, holder: null, snap, alive: () => true }).kill, [], 'a recorded pid that is not a Paseo supervisor is never killed (pid reuse)');
+});
+
+test('recover: kills exact pids, waits for the port, starts once; a refused holder means no start', async () => {
+  const z = async () => {}; let held = 200; const killed = []; let starts = 0;
+  const d = { snapshot: () => snap, listener: () => held, pidFile: () => ({ pid: 100 }), alive: () => true, logPids: () => new Set(), sleepFn: z, kill: (p) => { killed.push(p); if (p === 200) held = null; }, start: () => { starts++; return 0; } };
+  const home = mkdtempSync(join(tmpdir(), 'wd-'));
+  const r = await recover({ home, port: 1, d });
+  assert.equal(r.ok, true); assert.deepEqual(killed, [100, 200, 210]); assert.equal(starts, 1);
+  assert.ok(existsSync(join(home, 'watchdog-evidence.log')), 'evidence written before the kill');
+  held = 300; killed.length = 0; starts = 0;
+  const r2 = await recover({ home, port: 1, d: { ...d, kill: (p) => killed.push(p) } });
+  assert.equal(r2.ok, false); assert.equal(starts, 0); assert.equal(r2.portStillHeldBy, 300); assert.deepEqual(killed, [100]);
 });
 
 // process table: 100 = supervisor (recorded), 200 = worker (holds the port), 250 = its child, 300 = foreign, 400 = orphaned worker
