@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { runRoute } from "../route.mjs";
 import { acquireEntry } from "../entry-gate.mjs";
 
 const ws = (n, extra = {}) => Array.from({ length: n }, (_, i) => ({ workspaceId: "wks_" + i, cwd: `C:/Users/u/Desktop/code/worktree/w${i}`, isolation: "worktree", ...extra }));
@@ -151,4 +152,15 @@ test("(sec) a running agent whose cwd is written ~\... (Windows) or ~/... keeps 
   const archived = []; const run = async (a) => (a[1] === "ls" ? rows : a[0] === "ls" ? [{ status: "running", cwd: "~\\Desktop\\code\\worktree\\a" }, { status: "running", cwd: "~/Desktop/code/worktree/b" }] : (archived.push(a[2]), {}));
   await sweepIdleWorkspaces({ run, exists: () => true, touched: () => false, paseoRoot: "c:/nowhere/" });
   assert.deepEqual(archived, ["w_idle"]);
+});
+
+test("(2) runRoute with deferCleanup: the answer comes back with NO archive call; the archive is spooled for the off-slot worker", () => {
+  const dir = tmp(), calls = [];
+  const paseo = (a) => { calls.push(a); return a[0] === "ls" ? [] : a[0] === "logs" ? { text: "[User] q\nans" } : a[0] === "run" ? { status: "completed", agentId: "A9" } : {}; };
+  const routes = { readOnlyEnforced: ["qwen"], readOnlyModes: { qwen: "read-only" }, slots: { qwen: 2 }, routes: { edit: ["qwen/b"] } };
+  const r = runRoute({ type: "edit", prompt: "p", cwd: "/r", session: "S1", dev: "d", client: "claude", answerRetryMs: 0, provider: "qwen/b", deferCleanup: true, ledgerDir: dir }, paseo, routes);
+  assert.equal(r.answer, "ans");
+  assert.ok(!calls.some((c) => c[0] === "archive" || c[0] === "stop"), "no archive in line");
+  assert.deepEqual(readdirSync(join(dir, "cleanup")), ["A9.json"]);
+  assert.equal(JSON.parse(readFileSync(join(dir, "cleanup", "A9.json"), "utf8")).agentId, "A9");
 });
