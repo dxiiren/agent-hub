@@ -20,7 +20,7 @@ import { own } from "./jsonfile.mjs";
 import { endpointSkip } from "./endpoint.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
 import { acquireEntry, maxInFlight } from "./entry-gate.mjs";
-import { spoolCleanup, workspaceCapError } from "./guards.mjs";
+import { recordHubWorktree, spoolCleanup, workspaceCapError } from "./guards.mjs";
 import { effectiveBudget, chainOrder, costGb, laptopNow, availableGb, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -547,6 +547,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       if (c?.daemonBusy) { trace.push({ provider: prov, error: c.error }); break; } // the daemon, not this provider, is the bottleneck: the next provider would queue another create behind this one
       if (!c?.worktreePath || c.error) { trace.push({ provider: prov, error: "worktree create failed: " + String(c?.error ?? "no path returned").slice(0, 200) }); continue; }
       wt = { name: c.name, path: c.worktreePath }; track(null, wt);
+      if (o.ledgerDir) recordHubWorktree(o.ledgerDir, c.worktreePath); // provably ours: the idle-workspace sweep may archive it (guards.mjs)
       args[2] = wt.path;
       writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines });
     }

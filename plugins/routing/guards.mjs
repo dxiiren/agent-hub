@@ -2,11 +2,9 @@
 // slot through the slow archive, and a stuck route held a slot for hours. Five guards, all pure functions with injected I/O so they are unit-tested without a daemon:
 //   1 workspace cap (refuse new routes over WORKSPACE_CAP) + sweep of idle workspaces      2 cleanup spool: a route frees its slot when the agent answered; archive runs off-slot
 //   3 stuck-route watchdog (no agent progress for STUCK_S)                                  4 healthLine() for `agent-hub doctor`
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-const devNull = process.platform === "win32" ? "NUL" : "/dev/null"; // os.devNull is a UNC-style path on Windows that git refuses
-import { execFile } from "node:child_process";
 
 export const WORKSPACE_CAP = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || 20;
 export const STUCK_S = Number(process.env.AGENT_HUB_STUCK_S) || 10 * 60;
@@ -23,13 +21,44 @@ export function workspaceCapError(paseo, cap = WORKSPACE_CAP) {
   return r.length > cap ? `WORKSPACE_CAP: ${r.length} active Paseo workspaces (limit ${cap}); every daemon git operation slows down with each one, so no new route starts. Run \`agent-hub reaper --once\` (archives idle workspaces) and retry.` : null;
 }
 
-/** A workspace is idle when it is a worktree-isolated one (or a ghost), is not a permanent NextGen folder, no unfinished agent runs in it, nothing in it changed for `idleS`, and it has no uncommitted work. */
-export async function sweepIdleWorkspaces({ run, now = Date.now, idleS = SWEEP_IDLE_S, max = 40, dry = false, exists = existsSync, mtimeMs = defaultMtime, dirty = gitDirty, log = () => {} }) {
+// NO git anywhere in this file (security review 08-11, three rounds): git run against a folder an agent could write to executes that folder's fsmonitor, hooks, filter drivers and submodule config. Idleness is read with lstat only.
+const SKIP_DIRS = new Set([".git", "node_modules", ".devdb"]);
+/** True when any regular file under `dir` (not .git/node_modules/.devdb) was modified after `sinceMs`. lstat only (a symlink is never followed), and it fails closed: a file/dir count over `cap`, a deadline overrun or any read error = true (treated as active). */
+export function recentlyTouched(dir, sinceMs, { cap = 20000, deadlineMs = 15000, lstat = lstatSync, readdir = readdirSync, now = Date.now } = {}) {
+  const t0 = now(); let seen = 0; const stack = [dir];
+  try {
+    while (stack.length) {
+      const d = stack.pop();
+      for (const e of readdir(d, { withFileTypes: true })) {
+        if (++seen > cap || now() - t0 > deadlineMs) return true;
+        if (e.isSymbolicLink()) continue;
+        const f = join(d, e.name);
+        if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) stack.push(f); continue; }
+        if (e.isFile() && lstat(f).mtimeMs > sinceMs) return true;
+      }
+    }
+    return false;
+  } catch { return true; }
+}
+/** Worktrees this hub created (route-*): a record per path under <run>/hubwt, written when the route's worktree exists. Paseo deletes the FOLDER of a worktree it owns when archiving, so only these (provably ours) are ever archived there. */
+export const hubWtDir = (runDir) => join(runDir, "hubwt");
+const wtKey = (p) => norm(p).replace(/[^a-z0-9]+/g, "_").slice(-120);
+export const recordHubWorktree = (runDir, path) => { try { mkdirSync(hubWtDir(runDir), { recursive: true }); writeFileSync(join(hubWtDir(runDir), wtKey(path) + ".json"), JSON.stringify({ path, at: Date.now() })); } catch { /* the reaper then treats it as unknown (kept) */ } };
+export const isHubWorktree = (runDir, path) => existsSync(join(hubWtDir(runDir), wtKey(path) + ".json"));
+export const forgetHubWorktree = (runDir, path) => { try { rmSync(join(hubWtDir(runDir), wtKey(path) + ".json"), { force: true }); } catch { /* gone */ } };
+const paseoWorktreesRoot = () => norm(join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "worktrees")) + "/";
+
+/**
+ * Archive idle Paseo workspaces (a record per workspace slows every daemon git queue). Skipped: the permanent NextGen folders, local (non-worktree) workspaces, anything with an unfinished agent in it, anything with a file touched
+ * in the last `idleS`, and - inside Paseo's own worktree root, where Paseo's archive DELETES the folder - anything this hub cannot prove it created. Outside that root Paseo's archive only drops its record and leaves the folder
+ * (proven live 08-11: a dirty worktree with an untracked file survived), so uncommitted work there is safe; the lstat scan only decides "someone is still working here".
+ */
+export async function sweepIdleWorkspaces({ run, runDir = null, now = Date.now, idleS = SWEEP_IDLE_S, max = 40, dry = false, exists = existsSync, touched = recentlyTouched, isHub = (cwd) => (runDir ? isHubWorktree(runDir, cwd) : false), paseoRoot = paseoWorktreesRoot(), log = () => {} }) {
   let rows = await run(["workspace", "ls", "--json"]); if (!Array.isArray(rows)) rows = await run(["workspace", "ls", "--json"]); // one retry: a busy daemon drops the first call
   if (!Array.isArray(rows)) return { archived: [], skipped: [], failed: rows?.error ? String(rows.error).slice(0, 120) : null };
   const agents = await run(["ls"]);
-  const busy = new Set((Array.isArray(agents) ? agents : []).filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => norm(String(a.cwd ?? "").replace(/^~(?=[\\/])/, process.env.USERPROFILE || process.env.HOME || ""))));
-  const victims = [], skipped = [], cands = [];
+  const busy = new Set((Array.isArray(agents) ? agents : []).filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => norm(String(a.cwd ?? "").replace(/^~(?=[\/])/, process.env.USERPROFILE || process.env.HOME || ""))));
+  const victims = [], skipped = [];
   for (const w of rows) {
     const cwd = String(w.cwd ?? ""), why = (m) => skipped.push({ id: w.workspaceId, cwd, why: m });
     if (!cwd || !w.workspaceId) continue;
@@ -37,58 +66,18 @@ export async function sweepIdleWorkspaces({ run, now = Date.now, idleS = SWEEP_I
     if (!exists(cwd)) { if (exists(dirname(cwd))) victims.push(w); else why("parent missing (unmounted volume?)"); continue; }
     if (w.isolation !== "worktree") { why("not a worktree workspace"); continue; }
     if (busy.has(norm(cwd))) { why("agent running"); continue; }
-    if (now() - mtimeMs(cwd) < idleS * 1000) { why("changed in the last " + idleS / 60 + " min"); continue; }
-    cands.push(w);
-  }
-  for (let i = 0; i < cands.length; i += 5) { // git status runs 5 at a time: 90 workspaces one by one took 3.5 min
-    const part = cands.slice(i, i + 5), d = await Promise.all(part.map((w) => dirty(String(w.cwd))));
-    part.forEach((w, k) => (d[k] ? skipped.push({ id: w.workspaceId, cwd: w.cwd, why: "uncommitted changes" }) : victims.push(w)));
+    if (norm(cwd).startsWith(paseoRoot) && !isHub(cwd)) { why("Paseo-owned folder not created by this hub (archive would delete it)"); continue; }
+    if (touched(cwd, now() - idleS * 1000)) { why("a file changed in the last " + idleS / 60 + " min (or the scan could not finish)"); continue; }
+    victims.push(w);
   }
   const archived = []; let failed = null;
   for (const w of victims.slice(0, max)) {
     if (dry) { archived.push(w.workspaceId); continue; }
     const r = await run(["workspace", "archive", w.workspaceId, "--json"]);
     if (r?.error && !/not found|archived/i.test(JSON.stringify(r.error))) { failed = JSON.stringify(r.error).slice(0, 160); break; }
-    archived.push(w.workspaceId); log(`archived ${w.workspaceId} ${w.cwd}`);
+    archived.push(w.workspaceId); if (runDir) forgetHubWorktree(runDir, w.cwd); log(`archived ${w.workspaceId} ${w.cwd}`);
   }
   return { archived, skipped, failed };
-}
-function defaultMtime(dir) { // newest of the folder, the git admin HEAD/index (a commit or checkout touches them even when the folder mtime does not)
-  let m = 0; const t = (f) => { try { m = Math.max(m, statSync(f).mtimeMs); } catch { /* absent */ } };
-  t(dir); t(join(dir, ".git"));
-  try { const g = safeGitdir(dir); if (g) { t(join(g, "HEAD")); t(join(g, "index")); } } catch { /* plain repo */ }
-  return m || Date.now();
-}
-const fwd = (p) => String(p).split("\\").join("/");
-export const GIT_ROOTS = () => [join(homedir(), "Desktop", "code"), join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "worktrees")];
-/**
- * The git admin dir of a linked worktree, or null. Trusted only when: <dir>/.git is a file naming a gitdir whose REAL path is <repo>/.git/worktrees/<name> with <repo> under an allowed root, and that gitdir's own
- * `gitdir` file points back at <dir>/.git (a crafted .git aimed at someone else's admin dir fails the round trip). A plain clone, a symlink trick or anything else -> null and the workspace is never touched.
- */
-export function safeGitdir(dir, roots = GIT_ROOTS()) {
-  try {
-    const g = readFileSync(join(dir, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim(); if (!g) return null;
-    const real = fwd(realpathSync.native(g)); if (!/\/\.git\/worktrees\/[^/]+$/.test(real)) return null;
-    const lower = real.toLowerCase(); if (!roots.some((r) => lower.startsWith(fwd(realpathSync.native(r)).toLowerCase() + "/"))) return null;
-    const back = readFileSync(join(real, "gitdir"), "utf8").trim();
-    return fwd(realpathSync.native(back)).toLowerCase() === fwd(realpathSync.native(join(dir, ".git"))).toLowerCase() ? real : null;
-  } catch { return null; }
-}
-/** Git without the workspace's own say: config can name core.fsmonitor, hooks and filter drivers (clean/smudge/process) that run code during `status`. All three are forced off, system and global config are ignored, no optional lock. */
-export const SAFE_GIT = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${devNull}`, "-c", "core.untrackedCache=false", "-c", `core.attributesFile=${devNull}`];
-export const SAFE_GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
-const git = (args, o = {}) => new Promise((res) => execFile("git", args, { env: SAFE_GIT_ENV, timeout: 30_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...o }, (e, out) => res({ e, out: String(out ?? "") })));
-/** `-c filter.<name>.{clean,smudge,process}= -c filter.<name>.required=false` for every filter driver the repo config defines (reading config runs nothing; a driver that is not defined cannot run). */
-export async function filterOffArgs(dir) {
-  const { e, out } = await git([...SAFE_GIT, "-C", dir, "config", "--get-regexp", "^filter\."]); if (e && !out) return [];
-  const names = new Set(); for (const l of out.split("\n")) { const k = l.split(/\s/)[0]; const m = /^filter\.(.+)\.[^.]+$/i.exec(k); if (m) names.add(m[1]); }
-  return [...names].flatMap((n) => ["-c", `filter.${n}.clean=`, "-c", `filter.${n}.smudge=`, "-c", `filter.${n}.process=`, "-c", `filter.${n}.required=false`]);
-}
-export async function gitDirty(dir, { roots } = {}) { // async (the sweep runs inside the daemon: a sync git call per workspace blocked its event loop for minutes); unreadable or unsafe = treated as dirty (never archive on doubt)
-  if (!safeGitdir(dir, roots)) return true;
-  const off = await filterOffArgs(dir);
-  const { e, out } = await git([...SAFE_GIT, ...off, "-C", dir, "status", "--porcelain"]);
-  return !!e || out.trim() !== "";
 }
 
 // ---- 2. cleanup spool: the route frees its slot as soon as the agent answered; this runs afterwards
