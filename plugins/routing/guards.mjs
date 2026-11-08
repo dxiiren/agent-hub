@@ -148,3 +148,19 @@ export function doneInWindow(usageFile, now = Date.now(), windowS = 30 * 60) {
   try { const ids = new Set(); for (const l of readFileSync(usageFile, "utf8").split("\n").slice(-4000)) { if (!l) continue; try { const j = JSON.parse(l); if (now - Date.parse(j.ts) <= windowS * 1000) ids.add(j.agent); } catch { /* torn line */ } } return ids.size; } catch { return 0; }
 }
 export const slotsHeld = (runDir) => { try { return readdirSync(join(runDir, "inflight")).filter((f) => /^slot-\d+\.json$/.test(f)).length; } catch { return 0; } };
+
+/**
+ * Archive idle workspaces straight in Paseo's registry file while the daemon is STOPPED (a daemon with ~90 active workspaces needed 12+ min to boot on 08-11, so it cannot be asked to archive them). Same rules as the live sweep
+ * (permanent folders, recent files, fail closed), no agent is running with the daemon down, and an offline edit deletes nothing on disk: a workspace is only marked archivedAt, exactly what Paseo's own archive writes.
+ * The file is backed up first; refuses to run when anything answers on the daemon port (caller checks) or the file is unreadable.
+ */
+export async function sweepRegistryOffline({ file, now = Date.now, backup = true, write = writeFileSync, read = readFileSync, ...opts }) {
+  const text = read(file, "utf8"), recs = JSON.parse(text.replace(/^﻿/, "")); if (!Array.isArray(recs)) throw new Error("workspaces.json is not a list");
+  const active = recs.filter((r) => !r.archivedAt), seen = new Set();
+  const rows = active.filter((r) => r.workspaceId && !seen.has(r.workspaceId) && seen.add(r.workspaceId)).map((r) => ({ workspaceId: r.workspaceId, cwd: r.cwd, isolation: r.kind === "worktree" || r.kind === "directory" ? "worktree" : r.kind }));
+  const ids = new Set();
+  const run = async (a) => (a[0] === "workspace" && a[1] === "ls" ? rows : a[0] === "ls" ? [] : (ids.add(a[2]), { status: "archived" }));
+  const r = await sweepIdleWorkspaces({ ...opts, run, now, max: 100000 });
+  if (ids.size && !opts.dry) { if (backup) write(file + ".bak-sweep-" + now(), text); const at = new Date(now()).toISOString(); for (const x of recs) if (ids.has(x.workspaceId) && !x.archivedAt) { x.archivedAt = at; x.updatedAt = at; } write(file, JSON.stringify(recs, null, 2)); }
+  return r;
+}

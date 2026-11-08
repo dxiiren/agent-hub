@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 import { runRoute } from "../route.mjs";
 import { acquireEntry } from "../entry-gate.mjs";
 
@@ -163,4 +163,18 @@ test("(2) runRoute with deferCleanup: the answer comes back with NO archive call
   assert.ok(!calls.some((c) => c[0] === "archive" || c[0] === "stop"), "no archive in line");
   assert.deepEqual(readdirSync(join(dir, "cleanup")), ["A9.json"]);
   assert.equal(JSON.parse(readFileSync(join(dir, "cleanup", "A9.json"), "utf8")).agentId, "A9");
+});
+
+test("(boot) offline registry sweep: idle records get archivedAt (backup kept), permanent/recent/local ones stay, nothing on disk is touched", async () => {
+  const base = tmp(), mk = (n, age) => { const d = join(base, n); mkdirSync(d); const f = join(d, "f.txt"); writeFileSync(f, "x"); const t = new Date(Date.now() - age); utimesSync(f, t, t); utimesSync(d, t, t); return d; };
+  const idle = mk("idle", 3 * 3600_000), fresh = mk("fresh", 1000);
+  const file = join(base, "workspaces.json");
+  const rec = (id, cwd, kind, extra = {}) => ({ workspaceId: id, cwd, kind, archivedAt: null, ...extra });
+  writeFileSync(file, JSON.stringify([rec("i", idle, "worktree"), rec("i2", idle, "directory"), rec("f", fresh, "worktree"), rec("l", idle, "local_checkout"), rec("old", idle, "worktree", { archivedAt: "2026-01-01T00:00:00Z" })]));
+  const r = await sweepRegistryOffline({ file, paseoRoot: "c:/nowhere/" });
+  const after = JSON.parse(readFileSync(file, "utf8")); const by = (id) => after.find((x) => x.workspaceId === id);
+  assert.ok(by("i").archivedAt && by("i2").archivedAt); assert.equal(by("f").archivedAt, null); assert.equal(by("l").archivedAt, null); assert.equal(by("old").archivedAt, "2026-01-01T00:00:00Z");
+  assert.ok(readdirSync(base).some((n) => n.startsWith("workspaces.json.bak-sweep-")));
+  assert.ok(existsSync(idle) && existsSync(join(idle, "f.txt")));
+  assert.equal(r.archived.length, 2);
 });
