@@ -61,7 +61,7 @@ test("(3) stuck route: alive pid, agent silent 10+ min -> slot released, own age
   writeFileSync(join(dir, "agents-111.json"), JSON.stringify({ pid: 111, agents: [{ id: "stuck-agent" }] }));
   writeFileSync(join(dir, "agents-222.json"), JSON.stringify({ pid: 222, agents: [{ id: "busy-agent" }] }));
   const arch = [], killed = [];
-  const run = async (a) => ({ UpdatedAt: new Date(a[1] === "stuck-agent" ? now - 11 * 60_000 : now - 30_000).toISOString() });
+  const run = async (a) => ({ UpdatedAt: new Date(a[1] === "stuck-agent" ? now - 26 * 60_000 : now - 30_000).toISOString() });
   const r = await reapStuckRoutes({ runDir: dir, run, now: () => now, isAlive: () => true, kill: (p) => killed.push(p), archiveAgent: async (_, id) => arch.push(id) });
   assert.deepEqual(r.map((x) => x.pid).sort(), [111, 333]);
   assert.deepEqual(arch, ["stuck-agent"]); assert.deepEqual(killed.sort(), [111, 333]);
@@ -184,9 +184,9 @@ test("HUB-HEALTH FAILs on a route stuck creating its worktree", async () => {
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
   const d = mkdtempSync(join(tmpdir(), "hh-")); mkdirSync(join(d, "inflight"));
   writeFileSync(join(d, "inflight", "slot-1.json"), JSON.stringify({ pid: 4242, at: 1000 })); // no agents-4242.json: never got an agent
-  assert.equal(stuckCreating(d, { now: () => 1000 + 11 * 60_000, isAlive: () => true }), 1);
+  assert.equal(stuckCreating(d, { now: () => 1000 + 26 * 60_000, isAlive: () => true }), 1);
   assert.equal(stuckCreating(d, { now: () => 1000 + 5 * 60_000, isAlive: () => true }), 0);
-  assert.equal(stuckCreating(d, { now: () => 1000 + 11 * 60_000, isAlive: () => false }), 0);
+  assert.equal(stuckCreating(d, { now: () => 1000 + 26 * 60_000, isAlive: () => false }), 0);
   const h = healthLine({ inflight: 1, max: 8, done30m: 9, workspaces: 2, creating: 1 }); assert.equal(h.ok, false); assert.match(h.line, /stuck creating/);
 });
 

@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 export const WORKSPACE_CAP = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || 20;
-export const STUCK_S = Number(process.env.AGENT_HUB_STUCK_S) || 10 * 60;
+export const STUCK_S = Number(process.env.AGENT_HUB_STUCK_S) || 25 * 60; // soak 08-11: a route queued behind the laptop budget waits 9-11 min before it has an agent, so 10 min reaped a healthy route
 export const SWEEP_IDLE_S = 30 * 60;
 const ARCHIVE_PARALLEL = 3;
 const norm = (p) => String(p ?? "").split("\\").join("/").replace(/\/+$/, "").toLowerCase();
