@@ -38,11 +38,11 @@ test('decide: deliberate stop never restarts and clears the streak', () => {
   assert.equal(r.action, 'skip'); assert.equal(r.state.fails, 0);
 });
 
-test('decide: after 3 restarts in an hour it backs off, logs once, and resumes when the window passes', () => {
-  const restarts = [T0 - 3000, T0 - 2000, T0 - 1000];
+test('decide: after MAX_RESTARTS restarts in an hour it backs off, logs once, and resumes when the window passes', () => {
+  const restarts = Array.from({ length: MAX_RESTARTS }, (_, i) => T0 - (MAX_RESTARTS - i) * 1000);
   assert.equal(restarts.length, MAX_RESTARTS);
   let r = decide({ state: { fails: FAILS_TO_RESTART - 1, restarts }, ok: false, now: T0 });
-  assert.equal(r.action, 'backoff'); assert.equal(r.state.restarts.length, 3); assert.equal(r.state.backoffAt, T0);
+  assert.equal(r.action, 'backoff'); assert.equal(r.state.restarts.length, MAX_RESTARTS); assert.equal(r.state.backoffAt, T0);
   r = decide({ state: { ...r.state }, ok: false, now: T0 + 1000 });
   assert.equal(r.action, 'none', 'second tick in backoff stays quiet'); assert.match(r.reason, /not restarting/);
   r = decide({ state: { fails: 5, restarts }, ok: false, now: T0 + WINDOW_MS + 5000 });

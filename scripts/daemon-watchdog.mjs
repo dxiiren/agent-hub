@@ -2,7 +2,7 @@
 // worker hung at 08:24, the hub was dead for 20 min until someone restarted it by hand). A scheduled task / systemd timer runs this every minute (3 failed ticks = about 3 min to detect, about 1 min to recover).
 //   node scripts/daemon-watchdog.mjs [--dry-run]     env: AGENT_HUB_HOME, AGENT_HUB_PORT, AGENT_HUB_WATCHDOG_TIMEOUT_MS (10000)
 // Rules: 3 failed checks in a row -> recover() (kill the recorded supervisor + the port-holding worker by exact pid, never ask the daemon, then `service start`); no restart while a deliberate stop (<home>/deliberate-stop, written by `service stop`) is in force;
-// at most 3 restarts per hour, then it only logs "backoff" (no loop). Every restart and backoff is a line in <home>/restart-requests.log (restart-log.mjs).
+// at most 6 restarts per hour, then it only logs "backoff" (no loop). Every restart and backoff is a line in <home>/restart-requests.log (restart-log.mjs).
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -12,7 +12,7 @@ import { probeDaemon } from './daemon-health.mjs';
 import { logRequest } from './restart-log.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const FAILS_TO_RESTART = 3, MAX_RESTARTS = 3, WINDOW_MS = 3600_000;
+export const FAILS_TO_RESTART = 3, MAX_RESTARTS = 6, WINDOW_MS = 3600_000;
 
 /** Pure decision. state = {fails, restarts:[ms], backoffAt}. -> {action:'none'|'skip'|'restart'|'backoff', state, reason} */
 export function decide({ state = {}, ok, now, deliberateStop = false }) {
