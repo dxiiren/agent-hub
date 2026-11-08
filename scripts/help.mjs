@@ -16,9 +16,15 @@ Example: agent-hub route summarise "Summarise README.md in 5 bullets" --cwd .`,
   route: `route: send one task to the first working provider of a task type.
 usage: agent-hub route <type> "<prompt>" [--cwd D] [--gate CMD] [--new-workspace worktree | --in-place]
          [--provider P/M] [--mode M] [--session ID] [--dev D] [--client C] [--home H] [--keep]
+         [--max-lines N] [--file PATH ...]
+       agent-hub route --status <agentId>     final status, gate and answer of a route that was cut off (its id is printed to stderr at start)
 types: code-edit, code-edit-easy, test-scaffold (edit files; use --new-workspace worktree and a --gate;
        --in-place edits --cwd directly with full access: clean git work tree only, .git and paths outside cwd are NOT protected)
        summarise, review (read-only; need a provider added with --routes summarise|review)
+--max-lines N: allow a diff of up to N lines for this call (default 400; split the task instead when you can).
+--file PATH: read-only types only; copies each file into a private folder used as the task's cwd, so inputs may live anywhere (no --cwd then).
+         Without it, summarise/review refuse files outside --cwd and fail if anything in --cwd changes during the call: pass a snapshot dir.
+an edit task whose gate sees no changed file fails ("no diff produced"); read-only tasks are not diff-gated (gate status N/A).
 output: one JSON line {used, agentId, status, gate, trace, answer}; exit 0 = completed,
         3 = the agent asked a question (answer it with: agent-hub reply), 1 = failed, 2 = bad input.
 example: agent-hub route code-edit "add a --version flag" --cwd . --new-workspace worktree --gate "npm test"`,

@@ -13,9 +13,9 @@ const norm = (cwd) => cwd.split(String.fromCharCode(92)).join("/").replace(/\/+$
 const reqFile = (dir, cwd) => join(dir, "requests", createHash("sha1").update(norm(cwd)).digest("hex") + ".json");
 
 /** Caller side: register the caller-supplied gate command for the next agent created in cwd. */
-export function writeRequest(dir, cwd, cmd, base = null) {
+export function writeRequest(dir, cwd, cmd, base = null, extra = {}) {
   mkdirSync(join(dir, "requests"), { recursive: true });
-  writeFileSync(reqFile(dir, cwd), JSON.stringify({ cmd: cmd ?? null, base }));
+  writeFileSync(reqFile(dir, cwd), JSON.stringify({ cmd: cmd ?? null, base, ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v)) })); // extra: { readOnly, maxLines }
 }
 
 /** Plugin side: take (and delete) the pending request for cwd. */
