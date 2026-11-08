@@ -2,9 +2,10 @@
 // slot through the slow archive, and a stuck route held a slot for hours. Five guards, all pure functions with injected I/O so they are unit-tested without a daemon:
 //   1 workspace cap (refuse new routes over WORKSPACE_CAP) + sweep of idle workspaces      2 cleanup spool: a route frees its slot when the agent answered; archive runs off-slot
 //   3 stuck-route watchdog (no agent progress for STUCK_S)                                  4 healthLine() for `agent-hub doctor`
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { devNull } from "node:os";
+import { homedir } from "node:os";
+const devNull = process.platform === "win32" ? "NUL" : "/dev/null"; // os.devNull is a UNC-style path on Windows that git refuses
 import { execFile } from "node:child_process";
 
 export const WORKSPACE_CAP = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || 20;
@@ -55,16 +56,36 @@ function defaultMtime(dir) { // newest of the folder, the git admin HEAD/index (
   try { const g = safeGitdir(dir); if (g) { t(join(g, "HEAD")); t(join(g, "index")); } } catch { /* plain repo */ }
   return m || Date.now();
 }
-/** The git admin dir of a worktree, only when it is a linked worktree of some repo (<repo>/.git/worktrees/<name>); anything else (a plain clone, a .git pointing elsewhere) -> null and the workspace is never touched. */
-export function safeGitdir(dir) {
-  try { const g = readFileSync(join(dir, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim(); return g && /\/\.git\/worktrees\/[^/]+$/.test(g.split("\\").join("/")) ? g : null; } catch { return null; }
+const fwd = (p) => String(p).split("\\").join("/");
+export const GIT_ROOTS = () => [join(homedir(), "Desktop", "code"), join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "worktrees")];
+/**
+ * The git admin dir of a linked worktree, or null. Trusted only when: <dir>/.git is a file naming a gitdir whose REAL path is <repo>/.git/worktrees/<name> with <repo> under an allowed root, and that gitdir's own
+ * `gitdir` file points back at <dir>/.git (a crafted .git aimed at someone else's admin dir fails the round trip). A plain clone, a symlink trick or anything else -> null and the workspace is never touched.
+ */
+export function safeGitdir(dir, roots = GIT_ROOTS()) {
+  try {
+    const g = readFileSync(join(dir, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim(); if (!g) return null;
+    const real = fwd(realpathSync.native(g)); if (!/\/\.git\/worktrees\/[^/]+$/.test(real)) return null;
+    const lower = real.toLowerCase(); if (!roots.some((r) => lower.startsWith(fwd(realpathSync.native(r)).toLowerCase() + "/"))) return null;
+    const back = readFileSync(join(real, "gitdir"), "utf8").trim();
+    return fwd(realpathSync.native(back)).toLowerCase() === fwd(realpathSync.native(join(dir, ".git"))).toLowerCase() ? real : null;
+  } catch { return null; }
 }
-/** Git without the workspace's own say: a repo or worktree config can name core.fsmonitor or hooks that run code, so both are forced off, system config is ignored, and no optional lock is taken. */
-export const SAFE_GIT = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${devNull}`, "-c", "core.untrackedCache=false"];
-export const SAFE_GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
-export function gitDirty(dir) { // async (the sweep runs inside the daemon: a sync git call per workspace blocked its event loop for minutes); unreadable or unsafe = treated as dirty (never archive on doubt)
-  if (!safeGitdir(dir)) return Promise.resolve(true);
-  return new Promise((res) => execFile("git", [...SAFE_GIT, "-C", dir, "status", "--porcelain"], { env: SAFE_GIT_ENV, timeout: 30_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (e, out) => res(!!e || String(out).trim() !== "")));
+/** Git without the workspace's own say: config can name core.fsmonitor, hooks and filter drivers (clean/smudge/process) that run code during `status`. All three are forced off, system and global config are ignored, no optional lock. */
+export const SAFE_GIT = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${devNull}`, "-c", "core.untrackedCache=false", "-c", `core.attributesFile=${devNull}`];
+export const SAFE_GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
+const git = (args, o = {}) => new Promise((res) => execFile("git", args, { env: SAFE_GIT_ENV, timeout: 30_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...o }, (e, out) => res({ e, out: String(out ?? "") })));
+/** `-c filter.<name>.{clean,smudge,process}= -c filter.<name>.required=false` for every filter driver the repo config defines (reading config runs nothing; a driver that is not defined cannot run). */
+export async function filterOffArgs(dir) {
+  const { e, out } = await git([...SAFE_GIT, "-C", dir, "config", "--get-regexp", "^filter\."]); if (e && !out) return [];
+  const names = new Set(); for (const l of out.split("\n")) { const k = l.split(/\s/)[0]; const m = /^filter\.(.+)\.[^.]+$/i.exec(k); if (m) names.add(m[1]); }
+  return [...names].flatMap((n) => ["-c", `filter.${n}.clean=`, "-c", `filter.${n}.smudge=`, "-c", `filter.${n}.process=`, "-c", `filter.${n}.required=false`]);
+}
+export async function gitDirty(dir, { roots } = {}) { // async (the sweep runs inside the daemon: a sync git call per workspace blocked its event loop for minutes); unreadable or unsafe = treated as dirty (never archive on doubt)
+  if (!safeGitdir(dir, roots)) return true;
+  const off = await filterOffArgs(dir);
+  const { e, out } = await git([...SAFE_GIT, ...off, "-C", dir, "status", "--porcelain"]);
+  return !!e || out.trim() !== "";
 }
 
 // ---- 2. cleanup spool: the route frees its slot as soon as the agent answered; this runs afterwards

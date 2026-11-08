@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,10 +93,30 @@ test("(sec) a workspace config naming core.fsmonitor / hooks never runs code dur
   g("init", "-q", repo); writeFileSync(join(repo, "a.txt"), "a"); g("-C", repo, "add", "a.txt"); g("-C", repo, "commit", "-qm", "i"); g("-C", repo, "worktree", "add", "-q", wt, "-b", "w");
   const cmd = `node -e "require('fs').writeFileSync(process.argv[1],'x')" ${marker.split("\\").join("/")}`;
   g("-C", repo, "config", "core.fsmonitor", cmd); g("-C", repo, "config", "core.hooksPath", join(base, "hooks"));
-  assert.match(safeGitdir(wt), /\/\.git\/worktrees\/wt$/);
-  assert.equal(await gitDirty(wt), false); // clean, and the configured command did not run
+  const R = [base]; assert.match(safeGitdir(wt, R), /\/\.git\/worktrees\/wt$/);
+  assert.equal(await gitDirty(wt, { roots: R }), false); // clean, and the configured command did not run
   assert.equal(existsSync(marker), false, "fsmonitor command ran");
-  writeFileSync(join(wt, "u.txt"), "u"); assert.equal(await gitDirty(wt), true);
-  assert.equal(safeGitdir(repo), null); assert.equal(await gitDirty(repo), true); // a plain clone's .git is a directory: refused
-  const fake = join(base, "fake"); mkdirSync(fake); writeFileSync(join(fake, ".git"), "gitdir: C:/elsewhere/evil"); assert.equal(safeGitdir(fake), null);
+  writeFileSync(join(wt, "u.txt"), "u"); assert.equal(await gitDirty(wt, { roots: R }), true);
+  assert.equal(safeGitdir(repo, R), null); assert.equal(await gitDirty(repo, { roots: R }), true); // a plain clone's .git is a directory: refused
+  const fake = join(base, "fake"); mkdirSync(fake); writeFileSync(join(fake, ".git"), "gitdir: C:/elsewhere/evil"); assert.equal(safeGitdir(fake, R), null);
+});
+
+test("(sec) a clean/smudge filter driver defined for the workspace never runs; a .git aimed at another worktree's admin dir or outside the allowed roots is refused", async () => {
+  const base = tmp(), repo = join(base, "repo"), wt = join(base, "wt"), other = join(base, "other"), marker = join(base, "FILTERED"), fwd = (p) => p.split("\\").join("/");
+  const g = (...a) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: base, stdio: "pipe" });
+  g("init", "-q", repo); writeFileSync(join(repo, ".gitattributes"), "*.txt filter=pw\n"); writeFileSync(join(repo, "a.txt"), "a"); g("-C", repo, "add", "."); g("-C", repo, "commit", "-qm", "i");
+  g("-C", repo, "worktree", "add", "-q", wt, "-b", "w"); g("-C", repo, "worktree", "add", "-q", other, "-b", "o");
+  const cmd = `node -e "require('fs').writeFileSync('${fwd(marker)}','x');process.stdin.pipe(process.stdout)"`;
+  g("-C", repo, "config", "filter.pw.clean", cmd); g("-C", repo, "config", "filter.pw.required", "true");
+  writeFileSync(join(wt, "a.txt"), "b");
+  const R = [base];
+  assert.equal(await gitDirty(wt, { roots: R }), true); // modified: dirty, and the driver did not run
+  assert.equal(existsSync(marker), false, "filter driver ran");
+  execFileSync("git", ["-C", wt, "status", "--porcelain"], { stdio: "pipe" }); // the attack is real: plain git runs it
+  assert.equal(existsSync(marker), true, "test premise: plain git status runs the filter");
+  // round trip: wt/.git pointing at other worktree's admin dir (which points back at ITS dir) is refused
+  const evil = join(base, "evil"); mkdirSync(evil); writeFileSync(join(evil, ".git"), readFileSync(join(other, ".git"), "utf8"));
+  assert.equal(safeGitdir(evil, R), null);
+  assert.ok(safeGitdir(other, R));
+  assert.equal(safeGitdir(other, [join(tmpdir(), "no-such-root-" + Date.now())]), null); // outside the allowed roots
 });
