@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { workspaceCapError, sweepIdleWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { gitDirty, safeGitdir, workspaceCapError, sweepIdleWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 import { acquireEntry } from "../entry-gate.mjs";
 
 const ws = (n, extra = {}) => Array.from({ length: n }, (_, i) => ({ workspaceId: "wks_" + i, cwd: `C:/Users/u/Desktop/code/worktree/w${i}`, isolation: "worktree", ...extra }));
@@ -84,4 +85,18 @@ test("(4) done30m counts distinct agents inside the window", () => {
   writeFileSync(f, [L("a", 1), L("a", 2), L("b", 29), L("c", 31)].join("\n"));
   assert.equal(doneInWindow(f, now), 2);
   assert.equal(doneInWindow(join(dir, "none"), now), 0);
+});
+
+test("(sec) a workspace config naming core.fsmonitor / hooks never runs code during the dirty check; a .git that is not a linked worktree is refused", async () => {
+  const base = tmp(), repo = join(base, "repo"), wt = join(base, "wt"), marker = join(base, "PWNED");
+  const g = (...a) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: base, stdio: "pipe" });
+  g("init", "-q", repo); writeFileSync(join(repo, "a.txt"), "a"); g("-C", repo, "add", "a.txt"); g("-C", repo, "commit", "-qm", "i"); g("-C", repo, "worktree", "add", "-q", wt, "-b", "w");
+  const cmd = `node -e "require('fs').writeFileSync(process.argv[1],'x')" ${marker.split("\\").join("/")}`;
+  g("-C", repo, "config", "core.fsmonitor", cmd); g("-C", repo, "config", "core.hooksPath", join(base, "hooks"));
+  assert.match(safeGitdir(wt), /\/\.git\/worktrees\/wt$/);
+  assert.equal(await gitDirty(wt), false); // clean, and the configured command did not run
+  assert.equal(existsSync(marker), false, "fsmonitor command ran");
+  writeFileSync(join(wt, "u.txt"), "u"); assert.equal(await gitDirty(wt), true);
+  assert.equal(safeGitdir(repo), null); assert.equal(await gitDirty(repo), true); // a plain clone's .git is a directory: refused
+  const fake = join(base, "fake"); mkdirSync(fake); writeFileSync(join(fake, ".git"), "gitdir: C:/elsewhere/evil"); assert.equal(safeGitdir(fake), null);
 });
