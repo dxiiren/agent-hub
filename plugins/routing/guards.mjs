@@ -138,10 +138,22 @@ export async function reapStuckRoutes({ runDir, run, archiveAgent, now = Date.no
 
 // ---- 4. health line
 /** One stable line for `agent-hub doctor` and peer reports. FAIL: every slot busy while fewer than 4 tasks finished in 30 min, or workspaces over the cap. */
-export function healthLine({ inflight, max, done30m, workspaces, cap = WORKSPACE_CAP }) {
-  const jam = max > 0 && inflight >= max && done30m < 4, over = workspaces > cap;
-  const why = [jam ? `${inflight}/${max} slots busy but only ${done30m} done in 30 min` : "", over ? `workspaces ${workspaces} > ${cap}` : ""].filter(Boolean).join("; ");
-  return { ok: !jam && !over, line: `HUB-HEALTH: slots ${inflight}/${max}, done30m ${done30m}, workspaces ${workspaces} -> ${jam || over ? "FAIL (" + why + ")" : "OK"}` };
+export function healthLine({ inflight, max, done30m, workspaces, cap = WORKSPACE_CAP, creating = 0 }) {
+  const jam = max > 0 && inflight >= max && done30m < 4, over = workspaces > cap, hung = creating > 0;
+  const why = [jam ? `${inflight}/${max} slots busy but only ${done30m} done in 30 min` : "", over ? `workspaces ${workspaces} > ${cap}` : "", hung ? `${creating} route(s) stuck creating the worktree/agent over ${Math.round(STUCK_S / 60)} min` : ""].filter(Boolean).join("; ");
+  return { ok: !jam && !over && !hung, line: `HUB-HEALTH: slots ${inflight}/${max}, done30m ${done30m}, workspaces ${workspaces} -> ${why ? "FAIL (" + why + ")" : "OK"}` };
+}
+/** Live routes that hold a slot for over STUCK_S and never got an agent (hung while creating the worktree): HUB-HEALTH FAILs on them. */
+export function stuckCreating(runDir, { now = Date.now, stuckS = STUCK_S, isAlive = alive } = {}) {
+  let n = 0; const dir = join(runDir, "inflight");
+  let slots = []; try { slots = readdirSync(dir).filter((f) => /^slot-\d+\.json$/.test(f)); } catch { return 0; }
+  for (const f of slots) {
+    let slot; try { slot = JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { continue; }
+    if (!Number.isInteger(slot?.pid) || !isAlive(slot.pid) || now() - (slot.at ?? now()) < stuckS * 1000) continue;
+    let led = null; try { led = JSON.parse(readFileSync(join(runDir, `agents-${slot.pid}.json`), "utf8")); } catch { /* none */ }
+    if (!(led?.agents ?? []).some((a) => a?.id)) n++;
+  }
+  return n;
 }
 /** Tasks finished in the last 30 min, from ~/.paseo/usage/usage.jsonl (one line per finished agent turn; distinct agent ids). */
 export function doneInWindow(usageFile, now = Date.now(), windowS = 30 * 60) {
@@ -163,4 +175,19 @@ export async function sweepRegistryOffline({ file, now = Date.now, backup = true
   const r = await sweepIdleWorkspaces({ ...opts, run, now, max: 100000 });
   if (ids.size && !opts.dry) { if (backup) write(file + ".bak-sweep-" + now(), text); const at = new Date(now()).toISOString(); for (const x of recs) if (ids.has(x.workspaceId) && !x.archivedAt) { x.archivedAt = at; x.updatedAt = at; } write(file, JSON.stringify(recs, null, 2)); }
   return r;
+}
+
+/**
+ * Drops archived records from Paseo's registry while the daemon is STOPPED. 08-11: 2664 of 2669 records were archived, and the daemon's workspace-reconciliation ran `git status` in every one whose folder still
+ * existed (1391, NextGen worktrees among them): it saturated git/disk, provider ACP starts timed out and HTTP stopped answering. Backup first; keeps every active or pinned record and the newest `keep` archived ones.
+ * Deletes no folder. -> {before, after}
+ */
+export function pruneArchivedOffline({ file, keep = 50, backup = true, now = Date.now, read = readFileSync, write = writeFileSync }) {
+  const text = read(file, "utf8"), recs = JSON.parse(text.replace(/^﻿/, "")); if (!Array.isArray(recs)) throw new Error("workspaces.json is not a list");
+  const arch = recs.filter((r) => r.archivedAt && !r.pinnedAt).sort((a, b) => String(b.archivedAt).localeCompare(String(a.archivedAt)));
+  const drop = new Set(arch.slice(keep));
+  if (!drop.size) return { before: recs.length, after: recs.length };
+  if (backup) write(file + ".bak-prune-" + now(), text);
+  const out = recs.filter((r) => !drop.has(r)); write(file, JSON.stringify(out, null, 2));
+  return { before: recs.length, after: out.length };
 }

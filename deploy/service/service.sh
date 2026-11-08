@@ -24,7 +24,7 @@ if [ "$ACTION" = start ] && [ -z "${AGENT_HUB_NO_WEB_PATCH:-}" ] && [ -z "${AGEN
 if [ "$ACTION" = start ] && [ -z "${AGENT_HUB_NO_SERVER_PATCH:-}" ] && [ -z "${AGENT_HUB_PASEO:-}" ]; then node "$(dirname "$LAUNCH")/paseo-server-patch.mjs" apply --quiet || true; fi
 if ! have systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
   case "$ACTION" in
-    start) node "$LAUNCH" "$(command -v paseo)" daemon start --home "$HOME_DIR" || exit $?; ctl ready && ctl plugins && echo "[OK] hub up"; exit $? ;;
+    start) ctl guard || { ctl ready; exit $?; }; node "$LAUNCH" "$(command -v paseo)" daemon start --home "$HOME_DIR" || exit $?; ctl ready && ctl plugins && echo "[OK] hub up"; exit $? ;;
     stop) paseo daemon stop --home "$HOME_DIR"; ctl stop; rc=$?; [ -z "${AGENT_HUB_PASEO:-}" ] && node "$(dirname "$LAUNCH")/hub.mjs" reap-laptop --now; exit $rc ;;
     status) paseo daemon status --home "$HOME_DIR"; exit $? ;;
     *) echo "[SKIP] no systemd user session here (container or non-systemd host): the daemon runs via 'just up'"; exit 0 ;;

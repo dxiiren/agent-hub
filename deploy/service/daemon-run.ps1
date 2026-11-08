@@ -25,6 +25,9 @@ if (-not $paseo) { $paseo = (Get-Command paseo -ErrorAction Stop).Source }
 # Own hidden console + new process group: a stray CTRL_C_EVENT aimed at another console group (e.g. os.kill(pid, 0) on Windows) cannot reach the daemon.
 # Through scripts/daemon-env.mjs: the daemon and every agent it starts get an allow-listed environment (no tokens, keys or passwords of the launching shell).
 $node = (Get-Command node.exe -ErrorAction Stop).Source
+# The 1-minute trigger must never add a second daemon tree next to one that is alive (found by command line; the 08-11 second tree wedged on the same home).
+& $node (Join-Path $Repo 'scripts\daemon-ctl.mjs') guard | Out-Null
+if ($LASTEXITCODE -eq 3) { exit 0 }
 $p = Start-Process -FilePath $node -ArgumentList @((Join-Path $Repo 'scripts\daemon-env.mjs'),$paseo,'daemon','run','--home',$Home_) -WindowStyle Hidden -PassThru
 $p.WaitForExit()
 exit $p.ExitCode

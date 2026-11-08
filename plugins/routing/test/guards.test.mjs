@@ -178,3 +178,26 @@ test("(boot) offline registry sweep: idle records get archivedAt (backup kept), 
   assert.ok(existsSync(idle) && existsSync(join(idle, "f.txt")));
   assert.equal(r.archived.length, 2);
 });
+
+test("HUB-HEALTH FAILs on a route stuck creating its worktree", async () => {
+  const { stuckCreating } = await import("../guards.mjs");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "hh-")); mkdirSync(join(d, "inflight"));
+  writeFileSync(join(d, "inflight", "slot-1.json"), JSON.stringify({ pid: 4242, at: 1000 })); // no agents-4242.json: never got an agent
+  assert.equal(stuckCreating(d, { now: () => 1000 + 11 * 60_000, isAlive: () => true }), 1);
+  assert.equal(stuckCreating(d, { now: () => 1000 + 5 * 60_000, isAlive: () => true }), 0);
+  assert.equal(stuckCreating(d, { now: () => 1000 + 11 * 60_000, isAlive: () => false }), 0);
+  const h = healthLine({ inflight: 1, max: 8, done30m: 9, workspaces: 2, creating: 1 }); assert.equal(h.ok, false); assert.match(h.line, /stuck creating/);
+});
+
+test("pruneArchivedOffline keeps active, pinned and the newest archived; backs up first; deletes nothing else", async () => {
+  const { pruneArchivedOffline } = await import("../guards.mjs");
+  const { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const d = mkdtempSync(join(tmpdir(), "pr-")), file = join(d, "workspaces.json");
+  const recs = [{ workspaceId: "a" }, { workspaceId: "p", archivedAt: "2026-01-01", pinnedAt: "x" }, ...[1, 2, 3, 4].map((i) => ({ workspaceId: "z" + i, archivedAt: `2026-02-0${i}` }))];
+  writeFileSync(file, JSON.stringify(recs));
+  const r = pruneArchivedOffline({ file, keep: 2 });
+  assert.deepEqual(r, { before: 6, after: 4 });
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).map((x) => x.workspaceId), ["a", "p", "z3", "z4"].sort((x, y) => recs.findIndex((q) => q.workspaceId === x) - recs.findIndex((q) => q.workspaceId === y)));
+  assert.ok(readdirSync(d).some((f) => f.includes(".bak-prune-")));
+});

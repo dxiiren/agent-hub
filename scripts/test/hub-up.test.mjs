@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stopDaemon, waitReady, ensurePlugins, pluginIds } from '../daemon-ctl.mjs';
+import { stopDaemon, waitReady, sweepTrees, ensurePlugins, pluginIds } from '../daemon-ctl.mjs';
 
 const P = [
   { id: 'agent-hub-gate', path: '/repo/plugins/gate' },
@@ -46,10 +46,10 @@ test('stopDaemon: kill, port stays → !ok', async () => {
   assert.equal(r.ok, false);
 });
 
-test('waitReady: 200, ls false → !ok, paseo ls', async () => {
+test('waitReady: 200 but ls slow → ok + STARTING (not a failure)', async () => {
   let t = 0;
   const r = await waitReady({ port: 1, paseoLs: () => false, fetchFn: async () => ({ status: 200, text: async () => '' }), timeoutMs: 50, intervalMs: 10, sleepFn: z, now: () => (t += 20) });
-  assert.equal(r.ok, false); assert.match(r.detail, /paseo ls/);
+  assert.equal(r.ok, true); assert.equal(r.starting, true); assert.match(r.detail, /STARTING/);
 });
 
 test('waitReady: 200, ls true → ok', async () => {
@@ -133,4 +133,17 @@ test('removeStaleWorkspaces: archives a gone folder and a _junk one, keeps a liv
   assert.ok(!calls.some((c) => c[1] === 'archive'));
   removeStaleWorkspaces({ paseo, ...opts });
   assert.deepEqual(calls.filter((c) => c[1] === 'archive'), [['workspace', 'archive', 'gone'], ['workspace', 'archive', 'junk']]);
+});
+
+test('sweepTrees: kills every tree pid found by command line, then proves none is left; reports the survivors', async () => {
+  let alive = [10, 11, 50]; const killedArgs = [];
+  const snap = () => alive.map((pid) => ({ pid, ppid: 1, name: 'node.exe', cmd: 'x', born: '' }));
+  // trees finder is real: feed a process table where pid 10 is a root and 50 an orphan patch helper
+  const table = () => alive.map((pid) => pid === 50 ? { pid, ppid: 999, name: 'node.exe', cmd: 'node paseo-server-patch.mjs apply' } : { pid, ppid: 1, name: 'node.exe', cmd: 'node paseo daemon run --home /h' });
+  void snap;
+  const r = await sweepTrees({ home: '/h', snap: table, kill: (p) => { killedArgs.push(...p); alive = []; return { killed: p, failed: [] }; }, sleepFn: z, waitMs: 10, log: () => {} });
+  assert.equal(r.ok, true); assert.deepEqual(killedArgs.sort((a, b) => a - b), [10, 11, 50]);
+  alive = [10];
+  const r2 = await sweepTrees({ home: '/h', snap: table, kill: () => ({ killed: [], failed: [10] }), sleepFn: z, waitMs: 10, log: () => {} });
+  assert.equal(r2.ok, false); assert.deepEqual(r2.left, [10]);
 });

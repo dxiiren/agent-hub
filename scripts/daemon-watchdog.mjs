@@ -9,19 +9,23 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { context, isAlive, isDaemonProcess, listenerPid, readDaemonPid } from './daemon-ctl.mjs';
 import { probeDaemon } from './daemon-health.mjs';
+import { homedir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { logRequest } from './restart-log.mjs';
+import { findDaemonTrees, oldestStart, orphanPatchHelpers, snapshotProcs } from './daemon-trees.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const FAILS_TO_RESTART = 3, MAX_RESTARTS = 6, WINDOW_MS = 3600_000;
-/** A cold start of the daemon takes 3-15 min on a saturated disk (08-11 11:07-11:27): never count failed checks, and never restart again, while the last restart is younger than this (a second restart kills the daemon that is still booting). */
-export const START_GRACE_MS = 8 * 60_000;
+export const FAILS_TO_RESTART = 2, MAX_RESTARTS = 6, WINDOW_MS = 3600_000;
+/** A cold start of the daemon takes 8-13 min on a saturated disk (08-11 measured): never count failed checks while the CURRENT daemon (oldest process of its tree) is younger than this, and never restart more than once per this window (21:59 EPIPE crash: 3 restarts in 2 min killed a daemon that was still booting). */
+export const START_GRACE_MS = Number(process.env.AGENT_HUB_WATCHDOG_BOOT_MIN || 10) * 60_000;
 
 /** Pure decision. state = {fails, restarts:[ms], backoffAt}. -> {action:'none'|'skip'|'restart'|'backoff', state, reason} */
-export function decide({ state = {}, ok, now, deliberateStop = false }) {
+export function decide({ state = {}, ok, now, deliberateStop = false, daemonStartedAt = null }) {
   const restarts = (state.restarts ?? []).filter((t) => t > now - WINDOW_MS);
   const base = { restarts, backoffAt: state.backoffAt && state.backoffAt > now - WINDOW_MS ? state.backoffAt : 0 };
   if (deliberateStop) return { action: 'skip', reason: 'deliberate stop in force', state: { ...base, fails: 0 } };
   if (ok) return { action: 'none', state: { ...base, fails: 0 } };
+  if (daemonStartedAt && now - daemonStartedAt < START_GRACE_MS) return { action: 'none', reason: `daemon process started ${Math.round((now - daemonStartedAt) / 1000)} s ago, inside the ${Math.round(START_GRACE_MS / 60000)} min boot window`, state: { ...base, fails: 0 } };
   const last = Math.max(0, ...restarts);
   if (last && now - last < START_GRACE_MS) return { action: 'none', reason: `restarted ${Math.round((now - last) / 1000)} s ago, still booting`, state: { ...base, fails: 0 } };
   const fails = (state.fails ?? 0) + 1;
@@ -36,14 +40,52 @@ export function decide({ state = {}, ok, now, deliberateStop = false }) {
 export const readState = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return {}; } };
 export const writeState = (file, s) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file + '.tmp', JSON.stringify(s)); renameSync(file + '.tmp', file); };
 
+/** Providers that are Enabled but report status "error" (08-11 22:30: HTTP 200 while qoder and both Qwens were in error and every route hung). Pure. */
+export const providerErrors = (list) => (Array.isArray(list) ? list : []).filter((x) => /^enabled$/i.test(String(x.enabled)) && x.status === 'error').map((x) => x.provider);
+
+/** HTTP health, then the daemon must answer `paseo ls`, and no enabled provider may be in error. -> {state:'up'|'sick'|'hung'|'down', detail} */
+export async function deepProbe(port, home, { http = (p) => probeDaemon(p, { attempts: 1, timeoutMs: Number(process.env.AGENT_HUB_WATCHDOG_TIMEOUT_MS || 10000) }), run = null } = {}) {
+  const h = await http(port); if (h.state !== 'up') return h;
+  const paseo = run ?? ((args, ms) => spawnSync(process.platform === 'win32' ? 'paseo.cmd' : 'paseo', ['--home', home, ...args], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', windowsHide: true, shell: process.platform === 'win32' }));
+  const ls = paseo(['ls', '--json'], 30000);
+  if (ls.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo ls` does not' };
+  const pr = paseo(['provider', 'ls', '--json'], 90000);
+  if (pr.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo provider ls` does not' };
+  let bad = []; try { bad = providerErrors(JSON.parse(pr.stdout || '[]')); } catch { return { state: 'sick', detail: '`paseo provider ls` printed no JSON' }; }
+  return bad.length ? { state: 'sick', detail: `provider status error: ${bad.join(', ')}` } : { state: 'up' };
+}
+
+export const alertFile0 = () => process.env.AGENT_HUB_ALERT_FILE || 'C:/Users/kollectsystems/Desktop/code/worktree/_junk/hubkeeper/HUB-ALERT.txt';
+export const incidentLog0 = () => process.env.AGENT_HUB_INCIDENT_LOG || 'C:/Users/kollectsystems/Desktop/code/worktree/_junk/ci-speed/pool-feedback.md';
+/** HUB-ALERT.txt exists exactly while the hub is unhealthy; each incident is one line in pool-feedback.md at its start and one at its end. */
+export function syncAlert({ ok, detail, now = Date.now(), alertFile = alertFile0(), incidentLog = incidentLog0() }) {
+  const t = new Date(now).toISOString().slice(11, 16);
+  try {
+    if (!ok && !existsSync(alertFile)) {
+      mkdirSync(dirname(alertFile), { recursive: true }); writeFileSync(alertFile, `HUB UNHEALTHY since ${new Date(now).toISOString()}: ${detail}
+The watchdog acts once per incident (single clean restart); this file is removed when the hub is healthy.
+`);
+      appendFileSync(incidentLog, `${t} | hub-watchdog | incident | ${detail} | watchdog restarts once after ${FAILS_TO_RESTART} failed checks | -
+`);
+    } else if (!ok) writeFileSync(alertFile, readFileSync(alertFile, 'utf8').split(/\r?\n/).slice(0, 2).join('\n') + `
+last check ${new Date(now).toISOString()}: ${detail}
+`);
+    else if (ok && existsSync(alertFile)) { rmSync(alertFile, { force: true }); appendFileSync(incidentLog, `${t} | hub-watchdog | recovered | healthy again | - | -
+`); }
+  } catch { /* alerting must never break the watchdog */ }
+}
+
+const deliberateStopNow = (home) => existsSync(join(home, 'deliberate-stop'));
 /** One tick. All side effects injectable (tests). -> the decision */
-export async function tick({ home, port, probe = (p) => probeDaemon(p, { attempts: 1, timeoutMs: Number(process.env.AGENT_HUB_WATCHDOG_TIMEOUT_MS || 10000) }), restart, log = logRequest, now = Date.now(), dryRun = false }) {
+export async function tick({ home, port, trees = () => { const p = snapshotProcs(); return oldestStart(p, findDaemonTrees(p, home).pids); }, probe = (p) => deepProbe(p, home), restart, log = logRequest, now = Date.now(), dryRun = false }) {
   const stateFile = join(home, 'watchdog-state.json');
   const p = await probe(port);
-  const d = decide({ state: readState(stateFile), ok: p.state === 'up', now, deliberateStop: existsSync(join(home, 'deliberate-stop')) });
+  const daemonStartedAt = p.state === 'up' ? null : trees(); // one process-table call, only while the probe fails
+  const d = decide({ state: readState(stateFile), ok: p.state === 'up', now, deliberateStop: existsSync(join(home, 'deliberate-stop')), daemonStartedAt });
   const detail = `${d.reason ?? ''}${p.state === 'up' ? '' : ` (${p.state}: ${p.detail ?? ''})`}`.trim();
   if (d.action === 'restart' || d.action === 'backoff') log(d.action === 'restart' ? 'restart' : 'restart-backoff', `watchdog: ${detail}`, { home });
   writeState(stateFile, d.state);
+  if (!dryRun && !deliberateStopNow(home)) syncAlert({ ok: p.state === 'up', detail: detail || 'unhealthy', now });
   if (d.action === 'restart' && !dryRun) { const r = await restart(); d.restartExit = r; }
   return { ...d, probe: p };
 }
@@ -82,11 +124,12 @@ export function killPlan({ rec, holder, snap, logPids = new Set(), alive = isAli
   const isSupervisor = (pid) => /supervisor-entrypoint|daemon-worker|bin[\/]paseo\s+daemon\s+run/.test(byPid.get(pid)?.cmd ?? '');
   const workerOk = holder != null && (isDaemonProcess(holder, rec?.pid ?? -1, { info: (p) => (byPid.get(p) ? [byPid.get(p).ppid, byPid.get(p).cmd] : null), alive }).ok || logPids.has(holder));
   const kill = [];
+  for (const pid of snap.treePids ?? []) kill.push(pid);
   if (rec?.pid && alive(rec.pid) && (isSupervisor(rec.pid) || byPid.get(holder)?.ppid === rec.pid)) kill.push(rec.pid);
   if (workerOk) kill.push(holder);
   const workers = new Set(kill);
   for (const p of snap.procs ?? []) if (workers.has(p.ppid) && /plugin-process\.js/.test(p.cmd) && !kill.includes(p.pid)) kill.push(p.pid);
-  return { kill, workerOk, refused: holder != null && !workerOk ? `port ${holder} holder is not provably the daemon` : null };
+  return { kill: [...new Set(kill)], workerOk, refused: holder != null && !workerOk ? `port ${holder} holder is not provably the daemon` : null };
 }
 
 /**
@@ -99,6 +142,7 @@ export async function recover({ home, port, repo = REPO, platform = process.plat
     start: (reason) => runStart(reason, { repo, platform }), ...d,
   };
   const rec = D.pidFile(home); const holder = D.listener(port); const snap = D.snapshot(port);
+  try { const all = snapshotProcs(); if (!d.snapshot) { snap.treePids = [...findDaemonTrees(all, home).pids, ...orphanPatchHelpers(all)]; } } catch { /* the pid-file plan still runs */ }
   const plan = killPlan({ rec, holder, snap, logPids: D.logPids(home), alive: D.alive });
   try {
     const lines = [`${new Date().toISOString()} hung-daemon evidence: recorded=${rec?.pid ?? '-'} holder=${holder ?? '-'} freeRamKB=${snap.freeKb ?? '?'} tcp=${JSON.stringify(snap.tcp ?? {})}`];

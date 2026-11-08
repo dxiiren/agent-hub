@@ -1,16 +1,18 @@
 // Reliable `just down` / `just up`: verifies what Paseo's own stop/start only claim.
 //   node scripts/daemon-ctl.mjs stop      daemon stop, then prove it is gone; if not, stop the pid recorded in <home>/paseo.pid (exact pid, only while it is the one holding the port)
 //   node scripts/daemon-ctl.mjs heal      before a start: a daemon that holds the port but does not answer is stopped the same way
-//   node scripts/daemon-ctl.mjs ready     wait until HTTP /api/health AND `paseo ls` answer (exit 1 with the log path otherwise)
+//   node scripts/daemon-ctl.mjs ready     wait until HTTP /api/health AND `paseo ls` answer; HTTP up but `paseo ls` slow = STARTING (exit 0, says so); exit 1 only when HTTP never answers
 //   node scripts/daemon-ctl.mjs plugins   install every missing hub plugin, reload any that is not running, then check all of them
 // Env: AGENT_HUB_HOME (Paseo home), AGENT_HUB_PORT (default: the port in paseo.pid, else 6767), AGENT_HUB_PASEO (a fake paseo, tests),
-//      AGENT_HUB_READY_S (ready deadline, default 180).
+//      AGENT_HUB_READY_S (ready deadline, default 600: measured cold boots took 8-13 min).
+//   node scripts/daemon-ctl.mjs guard     exit 3 + the pids when ANY `paseo daemon run --home <home>` tree is alive (matched by command line); service start refuses to spawn a second one
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSyncSafe } from '../plugins/routing/spawn-safe.mjs';
+import { findDaemonTrees, killPids, orphanPatchHelpers, snapshotProcs } from './daemon-trees.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const PLUGIN_DIRS = ['gate', 'usage-otel', 'providers', 'reaper'];
@@ -91,8 +93,8 @@ async function health(port, fetchFn, ms = 3000) {
   try { const r = await fetchFn(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(ms) }); await r.text(); return r.status === 200; } catch { return false; }
 }
 
-/** Ready = HTTP /api/health 200 AND `paseo ls` exit 0. -> {ok, seconds, detail} */
-export async function waitReady({ port, paseoLs, fetchFn = fetch, timeoutMs = 180000, intervalMs = 2000, sleepFn = sleep, now = Date.now }) {
+/** Ready = HTTP /api/health 200 AND `paseo ls` exit 0. HTTP up but `paseo ls` still slow at the deadline = ok + starting (the daemon is booting, not dead). -> {ok, starting?, seconds, detail} */
+export async function waitReady({ port, paseoLs, fetchFn = fetch, timeoutMs = 600000, intervalMs = 2000, sleepFn = sleep, now = Date.now }) {
   const t0 = now(); let http = false, ls = false;
   do {
     http = await health(port, fetchFn);
@@ -100,7 +102,22 @@ export async function waitReady({ port, paseoLs, fetchFn = fetch, timeoutMs = 18
     if (http && ls) return { ok: true, seconds: Math.round((now() - t0) / 100) / 10 };
     await sleepFn(intervalMs);
   } while (now() - t0 < timeoutMs);
-  return { ok: false, seconds: Math.round((now() - t0) / 100) / 10, detail: `HTTP ${http ? 'answers' : 'does not answer'}, \`paseo ls\` ${ls ? 'answers' : 'does not answer'} after ${Math.round(timeoutMs / 1000)} s` };
+  const seconds = Math.round((now() - t0) / 100) / 10;
+  if (http) return { ok: true, starting: true, seconds, detail: `HTTP answers but \`paseo ls\` does not yet after ${Math.round(timeoutMs / 1000)} s: the hub is STARTING (still loading), not failed` };
+  return { ok: false, seconds, detail: `HTTP does not answer after ${Math.round(timeoutMs / 1000)} s` };
+}
+
+/**
+ * Stop EVERY daemon tree of this home, found by command line (a tree paseo.pid does not know, e.g. a second one started while the first was wedged), plus orphaned
+ * paseo-server-patch helpers, by exact pid; then prove none is left. -> {ok, killed, left}
+ */
+export async function sweepTrees({ home, snap = snapshotProcs, kill = killPids, sleepFn = sleep, waitMs = 10000, log = console.log }) {
+  const look = () => { const p = snap(); return [...findDaemonTrees(p, home).pids, ...orphanPatchHelpers(p)]; };
+  const first = look(); if (!first.length) return { ok: true, killed: [], left: [] };
+  log(`[WARN] stopping daemon process tree pids ${first.join(', ')} (matched by command line, home ${home})`);
+  const r = kill(first); let left = look();
+  for (let t = 0; left.length && t < waitMs; t += 500) { await sleepFn(500); left = look(); }
+  return { ok: left.length === 0, killed: r.killed, left };
 }
 
 /** [{dir, id}] from each plugin folder's paseo-plugin.json. */
@@ -143,15 +160,20 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (cmd === 'stop' || cmd === 'heal') {
     if (cmd === 'heal') { if (listenerPid(port) === null || await health(port, fetch, 5000)) process.exit(0); console.log(`[WARN] port ${port} is held by a daemon that does not answer; stopping it first`); }
     const r = await stopDaemon({ home, port, paseoStop: () => paseo(['daemon', 'stop'], { stdio: 'inherit' }) });
+    if (cmd === 'stop') { const sw = await sweepTrees({ home }); if (!sw.ok) { console.log(`[FAIL] daemon process tree still alive: pids ${sw.left.join(', ')}`); process.exit(1); } if (!r.ok && listenerPid(port) === null) { r.ok = true; r.how = 'sweep'; } }
     console.log(r.ok ? `[OK] daemon stopped, port ${port} is free${r.how === 'pid' ? ` (by recorded ${r.detail})` : ''}` : `[FAIL] daemon is still running: ${r.detail}`);
     process.exit(r.ok ? 0 : 1);
+  } else if (cmd === 'guard') {
+    const p = snapshotProcs(); const t = findDaemonTrees(p, home);
+    if (t.pids.length) { console.log(`[..] a daemon tree for ${home} is already alive (pids ${t.pids.join(', ')}); not starting a second one. Wait for it, or run service.ps1 stop.`); process.exit(3); }
+    process.exit(0);
   } else if (cmd === 'ready') {
-    const r = await waitReady({ port, timeoutMs: Number(process.env.AGENT_HUB_READY_S || 180) * 1000, paseoLs: () => paseo(['ls', '--json'], { timeout: 20000 }).status === 0 });
-    console.log(r.ok ? `[OK] daemon ready on port ${port} in ${r.seconds} s (HTTP and paseo ls answer)` : `[FAIL] daemon did not become ready: ${r.detail}; ${logHint}`);
+    const r = await waitReady({ port, timeoutMs: Number(process.env.AGENT_HUB_READY_S || 600) * 1000, paseoLs: () => paseo(['ls', '--json'], { timeout: 20000 }).status === 0 });
+    console.log(r.starting ? `[..] hub is STARTING: ${r.detail}; ${logHint}` : r.ok ? `[OK] daemon ready on port ${port} in ${r.seconds} s (HTTP and paseo ls answer)` : `[FAIL] daemon did not become ready: ${r.detail}; ${logHint}`);
     process.exit(r.ok ? 0 : 1);
   } else if (cmd === 'plugins') {
     const r = await ensurePlugins({ paseo });
     if (!r.ok) console.log(`[FAIL] not every plugin is running; ${logHint}`);
     process.exit(r.ok ? 0 : 1);
-  } else { console.log('usage: daemon-ctl.mjs stop | heal | ready | plugins'); process.exit(2); }
+  } else { console.log('usage: daemon-ctl.mjs stop | heal | guard | ready | plugins'); process.exit(2); }
 }

@@ -10,7 +10,7 @@ import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
-import { drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline } from "./guards.mjs";
+import { drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
 
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 60; // the env override is for the throwaway-hub proof
@@ -145,6 +145,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const a = process.argv.slice(2), opt = (n) => (a.includes(n) ? a[a.indexOf(n) + 1] : undefined);
   const run = asyncPaseo(opt("--home") ?? process.env.PASEO_HOME), olderThan = opt("--older-than") ? parseAge(opt("--older-than")) : REAP_AFTER_S, dry = a.includes("--dry-run");
   if (a.includes("--spool")) { const done = await drainSpool({ runDir: runDir(), run, archiveAgent }); console.log(JSON.stringify({ spooled: done })); process.exit(0); } // detached worker started by a finished route
+  if (a.includes("--prune-offline")) { // daemon STOPPED: drop archived records (backup first) so boot-time git reconciliation has nothing to scan
+    const home = opt("--home") ?? process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"); const port = process.env.AGENT_HUB_PORT ?? "6767"; const up = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(3000) }).then(() => true, () => false);
+    if (up) { console.log(JSON.stringify({ refused: "daemon answers on port " + port + ": prune only while it is stopped" })); process.exit(0); }
+    console.log(JSON.stringify(pruneArchivedOffline({ file: join(home, "projects", "workspaces.json") }))); process.exit(0);
+  }
   if (a.includes("--sweep-offline")) { // daemon STOPPED: archive idle workspaces in ~/.paseo/projects/workspaces.json (backup first)
     const home = opt("--home") ?? process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"); const r = await sweepRegistryOffline({ file: join(home, "projects", "workspaces.json"), runDir: runDir(), dry, log: console.log });
     console.log(JSON.stringify({ archived: r.archived.length, skipped: r.skipped.map((x) => `${x.cwd}: ${x.why}`), failed: r.failed })); process.exit(0);

@@ -3,14 +3,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import http from 'node:http';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decide, tick, START_GRACE_MS, FAILS_TO_RESTART, MAX_RESTARTS, WINDOW_MS, runStart, killPlan, recover } from '../daemon-watchdog.mjs';
+import { deepProbe, providerErrors, syncAlert, decide, tick, START_GRACE_MS, FAILS_TO_RESTART, MAX_RESTARTS, WINDOW_MS, runStart, killPlan, recover } from '../daemon-watchdog.mjs';
 import { probeDaemon } from '../daemon-health.mjs';
 import { isDaemonProcess, stopDaemon } from '../daemon-ctl.mjs';
 
 const T0 = 1_000_000_000_000;
+const SCRATCH = mkdtempSync(join(tmpdir(), 'wd-alert-'));
+process.env.AGENT_HUB_ALERT_FILE = join(SCRATCH, 'HUB-ALERT.txt'); process.env.AGENT_HUB_INCIDENT_LOG = join(SCRATCH, 'pool-feedback.md');
 
 test('decide: healthy resets the counter, one failure does nothing', () => {
   let r = decide({ state: { fails: 2 }, ok: true, now: T0 });
@@ -56,7 +58,7 @@ test('decide: after MAX_RESTARTS restarts in an hour it backs off, logs once, an
   assert.equal(r.action, 'restart', 'old restarts left the window');
 });
 
-test('tick: a really hung port (accepts, never answers) -> restart on the 3rd tick, logged with the reason; healthy port -> none', async () => {
+test('tick: a really hung port (accepts, never answers) -> restart on the 2nd tick, logged with the reason; healthy port -> none', async () => {
   const home = mkdtempSync(join(tmpdir(), 'wd-'));
   const hung = net.createServer((s) => s.on('error', () => {})); // accepts and stays silent
   await new Promise((r) => hung.listen(0, '127.0.0.1', r));
@@ -64,13 +66,13 @@ test('tick: a really hung port (accepts, never answers) -> restart on the 3rd ti
   const logs = []; let restarts = 0;
   const run = (now) => tick({ home, port, now, probe: (p) => probeDaemon(p, { attempts: 1, timeoutMs: 200 }), restart: () => { restarts++; return 0; }, log: (a, r) => logs.push([a, r]) });
   assert.equal((await run(T0)).action, 'none');
-  assert.equal((await run(T0 + 120000)).action, 'none');
-  const r3 = await run(T0 + 240000);
+
+  const r3 = await run(T0 + 120000);
   assert.equal(r3.action, 'restart'); assert.equal(restarts, 1); assert.equal(r3.probe.state, 'hung');
-  assert.match(logs[0][1], /watchdog: 3 failed health checks in a row \(hung/);
+  assert.match(logs[0][1], /watchdog: 2 failed health checks in a row \(hung/);
   hung.closeAllConnections?.(); hung.close();
   const ok = http.createServer((q, s) => { s.end('{}'); }); await new Promise((r) => ok.listen(0, '127.0.0.1', r));
-  const r4 = await tick({ home, port: ok.address().port, now: T0 + 300000, restart: () => { throw Error('no'); }, log: () => {} });
+  const r4 = await tick({ home, port: ok.address().port, now: T0 + 300000, probe: (p) => probeDaemon(p, { attempts: 1, timeoutMs: 500 }), restart: () => { throw Error('no'); }, log: () => {} });
   assert.equal(r4.action, 'none'); ok.close();
 });
 
@@ -145,4 +147,59 @@ test('stopDaemon: port held by a foreign process -> refused, nothing killed (unc
   const r = await stopDaemon({ home: '/x', port: 1, paseoStop: () => {}, listener: () => 300, alive: () => true, related: (h, rec) => isDaemonProcess(h, rec, { info }),
     kill: (p) => killed.push(p), pidFile: () => ({ pid: 100 }), sleepFn: z, waitMs: 10, log: () => {} });
   assert.equal(r.ok, false); assert.deepEqual(killed, []); assert.match(r.detail, /not killed/);
+});
+
+test('decide (fake clock): a young daemon process is never restarted, however many checks failed; an old one is', () => {
+  const young = decide({ state: { fails: 5 }, ok: false, now: T0, daemonStartedAt: T0 - 9 * 60_000 });
+  assert.equal(young.action, 'none'); assert.equal(young.state.fails, 0); assert.match(young.reason, /boot window/);
+  assert.equal(decide({ state: { fails: 2 }, ok: false, now: T0, daemonStartedAt: T0 - 10 * 60_000 - 1000 }).action, 'restart');
+  assert.equal(decide({ state: { fails: 2 }, ok: false, now: T0, daemonStartedAt: null }).action, 'restart', 'no process at all = nothing is booting');
+});
+
+test('decide (fake clock): at most one restart per 10 min, even with an old daemon process', () => {
+  assert.equal(START_GRACE_MS, 10 * 60_000);
+  const r = decide({ state: { fails: 2, restarts: [T0 - 9 * 60_000] }, ok: false, now: T0, daemonStartedAt: T0 - 60 * 60_000 });
+  assert.equal(r.action, 'none'); assert.match(r.reason, /still booting/);
+  assert.equal(decide({ state: { fails: 2, restarts: [T0 - 10 * 60_000 - 1000] }, ok: false, now: T0, daemonStartedAt: T0 - 60 * 60_000 }).action, 'restart');
+});
+
+test('tick: the restart reason is logged and a young process tree defers it (trees injected)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'wd-')); const logs = []; let restarts = 0;
+  const base = { home, port: 1, probe: async () => ({ state: 'down', detail: 'x' }), restart: () => { restarts++; return 0; }, log: (a, r) => logs.push([a, r]) };
+  for (let i = 0; i < 4; i++) await tick({ ...base, now: T0 + i * 60_000, trees: () => T0 - 60_000 });
+  assert.equal(restarts, 0);
+  let r; for (let i = 0; i < FAILS_TO_RESTART; i++) r = await tick({ ...base, now: T0 + 20 * 60_000 + i * 60_000, trees: () => T0 - 60_000 });
+  assert.equal(r.action, 'restart'); assert.equal(restarts, 1); assert.match(logs[0][1], new RegExp('watchdog: ' + FAILS_TO_RESTART + ' failed health checks in a row'));
+});
+
+test('deepProbe: HTTP up but `paseo ls` failing is sick; an enabled provider in error is sick; all good is up', async () => {
+  const up = async () => ({ state: 'up' });
+  const mk = (ls, prov) => (args) => (args[0] === 'ls' ? ls : prov);
+  assert.equal((await deepProbe(1, 'h', { http: up, run: mk({ status: 1 }, { status: 0, stdout: '[]' }) })).state, 'sick');
+  const bad = JSON.stringify([{ provider: 'qoder', status: 'error', enabled: 'Enabled' }, { provider: 'codex', status: 'error', enabled: 'Disabled' }]);
+  const r = await deepProbe(1, 'h', { http: up, run: mk({ status: 0 }, { status: 0, stdout: bad }) });
+  assert.equal(r.state, 'sick'); assert.match(r.detail, /qoder/); assert.doesNotMatch(r.detail, /codex/);
+  assert.equal((await deepProbe(1, 'h', { http: up, run: mk({ status: 0 }, { status: 0, stdout: '[]' }) })).state, 'up');
+  assert.equal((await deepProbe(1, 'h', { http: async () => ({ state: 'hung' }), run: () => { throw Error('not reached'); } })).state, 'hung');
+  assert.deepEqual(providerErrors(JSON.parse(bad)), ['qoder']);
+});
+
+test('provider error for 3 ticks restarts once; an in-progress boot younger than the window never restarts', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'wd-prov-')); let restarts = 0;
+  const probe = async () => ({ state: 'sick', detail: 'provider status error: qoder' });
+  const base = { home, port: 1, probe, restart: () => { restarts++; return 0; }, log: () => {} };
+  for (let i = 0; i < 3; i++) await tick({ ...base, now: T0 + i * 60_000, trees: () => T0 - 60 * 60_000 });
+  assert.equal(restarts, 1);
+  const h2 = mkdtempSync(join(tmpdir(), 'wd-boot-')); restarts = 0;
+  for (let i = 0; i < 5; i++) await tick({ ...base, home: h2, now: T0 + i * 60_000, trees: () => T0 - 2 * 60_000 }); // daemon is 2-7 min old
+  assert.equal(restarts, 0);
+});
+
+test('syncAlert: file exists exactly while unhealthy, one incident line per incident, a recovered line at the end', () => {
+  const d = mkdtempSync(join(tmpdir(), 'wd-sa-')); const alertFile = join(d, 'a.txt'), incidentLog = join(d, 'log.md');
+  syncAlert({ ok: false, detail: 'x', alertFile, incidentLog }); syncAlert({ ok: false, detail: 'x', alertFile, incidentLog });
+  assert.ok(existsSync(alertFile));
+  syncAlert({ ok: true, alertFile, incidentLog });
+  assert.ok(!existsSync(alertFile));
+  const lines = readFileSync(incidentLog, 'utf8').trim().split(/\r?\n/); assert.equal(lines.length, 2); assert.match(lines[0], /incident/); assert.match(lines[1], /recovered/);
 });

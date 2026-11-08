@@ -8,6 +8,7 @@ import { qoderSummary, toReport } from "./server/qoder-usage.mjs";
 import { paseoHome, selfHostedProviders, selfHostedReport, kindId, readLocal, readJson, usesQwenCli } from "./server/selfhosted-usage.mjs";
 import { readFileSync } from "node:fs";
 import { accountGroups, groupReport } from "./server/accounts-usage.mjs";
+import { safeFetch } from "./server/safe-fetch.mjs";
 import { hubTasksReport } from "./server/hub-tasks-usage.mjs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
@@ -50,7 +51,7 @@ export default function contribute(server: PluginServerContext) {
     label: "Qoder",
     input: z.object({}),
     discover: async () => [{ key: "account", label: "Qoder account", harness: "Qoder", input: {} }],
-    fetch: async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+    fetch: safeFetch(async () => { try { return toReport(await qoderSummary()); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } }),
   });
   const local: any = readLocal();
   // One usage source (one card) per self-hosted provider KIND, e.g. "Qwen Code": totals first, then a row per endpoint.
@@ -65,7 +66,7 @@ export default function contribute(server: PluginServerContext) {
       label: kind,
       input: z.object({ id: z.string() }),
       discover: async () => (selfHostedProviders(readJson(join(paseoHome(), "config.json")), readLocal()).some((x) => kindId(x.kind) === id) ? [{ key: id, label: "Checked from this computer", harness: "Self-hosted", input: { id } }] : []), // no providers of this kind now = no card
-      fetch: async (input: { id: string }) => { try { return await selfHostedReport(input.id); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+      fetch: safeFetch(async (input: { id: string }) => { try { return await selfHostedReport(input.id); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } }),
     });
   }
   // One card per CLI kind that has extra accounts (Claude Code, Codex, Qoder): Total + a line per account. Read from hub.local.json at plugin load.
@@ -75,10 +76,10 @@ export default function contribute(server: PluginServerContext) {
       label: `${g.label} accounts`,
       input: z.object({ kind: z.string() }),
       discover: async () => [{ key: kind, label: g.label, harness: g.label, input: { kind } }],
-      fetch: async (input: { kind: string }) => {
+      fetch: safeFetch(async (input: { kind: string }) => {
         try { let feed = ""; try { feed = readFileSync(join(usageDir(), "usage.jsonl"), "utf8"); } catch { /* none yet */ } return await groupReport(input.kind, { local, feed }); }
         catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; }
-      },
+      }),
     });
   }
   // Hub task totals for every provider, the same numbers as `agent-hub usage --all` (all time) plus the last 7 days
@@ -87,7 +88,7 @@ export default function contribute(server: PluginServerContext) {
     label: "Agent Hub task log",
     input: z.object({}),
     discover: async () => [{ key: "all", label: "From the hub task log", harness: "Agent Hub", input: {} }],
-    fetch: async () => { try { let feed = ""; try { feed = readFileSync(join(usageDir(), "usage.jsonl"), "utf8"); } catch { /* none yet */ } return hubTasksReport(feed); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } },
+    fetch: safeFetch(async () => { try { let feed = ""; try { feed = readFileSync(join(usageDir(), "usage.jsonl"), "utf8"); } catch { /* none yet */ } return hubTasksReport(feed); } catch (e) { return { status: "error", error: String(e?.message ?? e).slice(0, 200) }; } }),
   });
   qoderSummary().catch(() => {}); // warm the cache: the poller takes 3-60 s, so the first panel open already has a number
   return () => { clearTimeout(timer); };

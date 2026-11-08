@@ -213,10 +213,10 @@ async function doctor(deep) {
   } catch (e) { console.log(`WARN  running daemon environment check failed: ${String(e.message).slice(0, 120)}`); }
   if (dp.state !== 'up') { console.log(daemonAdvice(dp)); process.exit(1); }
   try { // throughput health (guards.mjs): one stable line per run, FAIL at 8/8 slots with < 4 tasks done in 30 min, or more than 20 active workspaces
-    const { healthLine, doneInWindow, slotsHeld } = await import('../plugins/routing/guards.mjs'); const { runDir, paseoHome } = await import('../plugins/routing/runstate.mjs');
+    const { healthLine, doneInWindow, slotsHeld, stuckCreating } = await import('../plugins/routing/guards.mjs'); const { runDir, paseoHome } = await import('../plugins/routing/runstate.mjs');
     const { maxInFlight } = await import('../plugins/routing/entry-gate.mjs'); const { loadRoutes } = await import('../plugins/routing/route.mjs');
     let wsn = 0; try { wsn = JSON.parse(paseo(['workspace', 'ls', '--json']).stdout || '[]').length; } catch { /* unreadable: 0 */ }
-    const h = healthLine({ inflight: slotsHeld(runDir()), max: maxInFlight(loadRoutes()), done30m: doneInWindow(join(paseoHome(), 'usage', 'usage.jsonl')), workspaces: wsn });
+    const h = healthLine({ inflight: slotsHeld(runDir()), max: maxInFlight(loadRoutes()), done30m: doneInWindow(join(paseoHome(), 'usage', 'usage.jsonl')), workspaces: wsn, creating: stuckCreating(runDir()) });
     row(h.ok, h.line);
   } catch (e) { row(false, 'HUB-HEALTH', `could not be computed: ${String(e.message).slice(0, 120)}`); }
   if (process.env.AGENT_HUB_NO_USAGE_STACK !== '1') { // the one usage UI: collector + Prometheus + Grafana must answer
