@@ -16,6 +16,7 @@
     "codex": "full-access"
   },
   "waitTimeout": "15m",
+  "maxInFlight": 8,
   "routes": {
     "code-edit": [
       "codex/latest-terra",

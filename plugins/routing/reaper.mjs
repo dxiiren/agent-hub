@@ -4,8 +4,9 @@
 //   2. agent-hub-created agents (route/type=* or doctor label) that are idle/error/closed for longer than `olderThan` (20 min); running, permission and parked agents and `--keep` routes are never touched.
 // `archive --force` ends the CLI process tree. Calls are async (it runs inside the daemon as a plugin, and as `agent-hub reaper`), `concurrency` at a time: the CLI takes seconds per call.
 import { execFile } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
@@ -81,13 +82,42 @@ export async function reapFinished({ run, routes = {}, all = false, olderThan = 
   return { archived: victims, skipped: pool.size - victims.length };
 }
 
+export const GHOST_MAX_PER_PASS = 15, GHOST_ROUTE_IDLE_S = 30 * 60;
+/**
+ * Workspaces that only cost the daemon git work. Paseo's reconciliation runs git rev-parse/status/config for every ACTIVE workspace every 5 min and at boot behind one git queue; on 08-11 the registry held 325
+ * (84 with the folder gone, 63 more finished route-* worktrees) and the queue never drained: event-loop stalls of 40-250 s, then two hangs (upstream getpaseo/paseo #3426, #8244). Paseo itself never archives a workspace
+ * whose project root is gone too, so route worktrees the route had removed stayed active forever. Archived here, a few per pass, one at a time (an archive is a daemon request):
+ *   1. cwd missing while its parent folder exists (a missing parent = an unmounted volume, proves nothing: left alone),
+ *   2. a route-* worktree under <paseo home>/worktrees with no unfinished agent in it, untouched for 30 min (a route between worktree create and agent create is younger).
+ * Stops the pass at the first failed archive (a busy daemon): the next pass continues. Returns { archived: [workspaceId], failed }.
+ */
+export async function reapGhostWorkspaces({ run, home, exists = existsSync, mtimeMs = (f) => { try { return statSync(f).mtimeMs; } catch { return Date.now(); } }, now = Date.now, dry = false, max = GHOST_MAX_PER_PASS }) {
+  const rows = await run(["workspace", "ls", "--json"]); if (!Array.isArray(rows)) return { archived: [], failed: rows?.error ? String(rows.error).slice(0, 120) : null };
+  const agents = await run(["ls"]); const live = new Set((Array.isArray(agents) ? agents : []).filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => String(a.cwd ?? "").replace(/^~(?=[\/])/, os.homedir()).split("\\").join("/").toLowerCase()));
+  const wt = join(home || join(os.homedir(), ".paseo"), "worktrees").split("\\").join("/").toLowerCase() + "/";
+  const norm = (p) => String(p).split("\\").join("/").toLowerCase();
+  const victims = rows.filter((w) => {
+    const cwd = String(w.cwd ?? ""); if (!cwd || !w.workspaceId) return false;
+    if (!exists(cwd)) return exists(dirname(cwd));
+    return norm(cwd).startsWith(wt) && /(^|\/)route-[0-9a-f]+/.test(norm(cwd)) && !live.has(norm(cwd)) && now() - mtimeMs(cwd) > GHOST_ROUTE_IDLE_S * 1000;
+  }).slice(0, max);
+  const archived = []; let failed = null;
+  if (!dry) for (const w of victims) {
+    const r = await run(["workspace", "archive", w.workspaceId, "--json"]);
+    if (r?.error && !/not found|archived/i.test(JSON.stringify(r.error))) { failed = JSON.stringify(r.error).slice(0, 160); break; }
+    archived.push(w.workspaceId);
+  } else archived.push(...victims.map((w) => w.workspaceId));
+  return { archived, failed };
+}
+
 /** One reaper pass: dead routes' agents, then old finished agents. */
 export async function reapOnce({ run, env = process.env, home = env.PASEO_HOME, ...opts }) {
   const parkDir = join(home || join(env.USERPROFILE || env.HOME || "", ".paseo"), "usage", "parked");
   const parked = (id) => { try { readFileSync(parkFile(parkDir, id), "utf8"); return true; } catch { return false; } };
   let dead = []; try { dead = await reapDeadRoutes({ run, dry: opts.dry, concurrency: opts.concurrency }); } catch { /* no run dir yet */ }
   const fin = await reapFinished({ run, routes: opts.routes ?? loadRoutes(env), parked, ...opts });
-  return { dead, ...fin };
+  let ghosts = { archived: [] }; if (opts.ghosts !== false) { try { ghosts = await reapGhostWorkspaces({ run, home, dry: opts.dry }); } catch { /* next pass */ } }
+  return { dead, ...fin, ghosts: ghosts.archived, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}) };
 }
 
 /** Start the periodic reaper; returns stop(). One pass at a time; the timer never keeps the process alive. */

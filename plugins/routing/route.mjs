@@ -19,6 +19,7 @@ import { batchAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
 import { endpointSkip } from "./endpoint.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
+import { acquireEntry, maxInFlight } from "./entry-gate.mjs";
 import { effectiveBudget, chainOrder, costGb, laptopNow, availableGb, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
@@ -264,7 +265,7 @@ export function agentCwd(paseo, agentId) {
 export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   // `paseo ls` abbreviates the home folder as "~"
   // `paseo ls` can fail or miss the agent while the daemon is busy: fall back to the cwd the route started the agent in
-  const cwdOf = () => agentCwd(paseo, agentId) ?? agentCwd(paseo, agentId) ?? o.knownCwd;
+  const cwdOf = () => agentCwd(paseo, agentId) ?? o.knownCwd; // ONE `paseo ls` (it lists every agent; two in a row doubled the load on a busy daemon), then the cwd the route started the agent in
   const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
   let res = gate(cwd, gateOpts(routes, cwd, o.gate, o.base));
@@ -422,6 +423,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   // A finished agent keeps its provider process (a claude is ~250 MB idle): stop and archive it once its answer and gate are read, unless --keep.
   // A route-created worktree (--new-workspace worktree) is removed with its agent, or it piles up under ~/.paseo/worktrees. The route creates it itself (named, so retire needs no lookup).
   // The daemon registers a Paseo project for every cwd and route worktree a run touches; remove the ones this route created (not in the before-snapshot, path = this run's cwd or worktree) once no other agent still runs there, or the UI project list fills with scratch folders.
+  // `paseo ls` lists every agent of the daemon and costs a CLI process + websocket each time: the per-entry busy check reads one list at most every 5 s per route (the retire path below always reads fresh)
+  let lsAt = 0, lsRows; const lsCached = () => { const t = (o.now ?? Date.now)(); if (lsRows === undefined || t - lsAt > 5000 || Array.isArray(lsRows) === false) { lsRows = paseo(["ls"]); lsAt = t; } return lsRows; };
   const projects = () => { try { const r = paseo(["project", "ls"]); return Array.isArray(r) ? r : []; } catch { return []; } };
   const pnorm = (p) => String(p ?? "").split(String.fromCharCode(92)).join("/").replace(/\/+$/, "").toLowerCase();
   const projBefore = o.keep ? null : new Set(projects().map((p) => p.projectId));
@@ -472,7 +475,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     { const dn = o.endpointDown?.(base(prov)); if (dn) { trace.push({ provider: prov, skip: dn }); continue; } } // a known-down endpoint is skipped at once, not retried for minutes
     { const oh = outsideHours(routes, entry, (o.now ?? Date.now)()); if (oh) { trace.push({ provider: prov, skip: oh }); continue; } } // chain entry with a time window (routes.hours)
     { const na = modelNotAllowed(routes, prov); if (na) { trace.push({ provider: prov, skip: na }); continue; } } // Routing & slots model allow-list
-    const rows = paseo(["ls"]);
+    const rows = lsCached();
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
     if (busy >= (own(slots, base(prov)) ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${own(slots, base(prov))}` }); continue; }
     if (!claimSlot(o.marker, base(prov), own(slots, base(prov)))) { trace.push({ provider: prov, skip: `slots full: ${own(slots, base(prov))} other routes already hold ${base(prov)}` }); continue; }
@@ -672,6 +675,10 @@ function main(argv) {
   if (early) { console.error("route: " + early); return 2; }
   if (!(opt("--session") ?? sessionFromEnv(process.env))) console.error("route: note: no session id (CLAUDE_CODE_SESSION_ID is not set in this shell, e.g. a PowerShell tool), so this task is counted under no session; pass --session <id> or set AGENT_HUB_SESSION to see it in `agent-hub usage --session <id>`.");
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
+  const routes0 = loadRoutes();
+  const entry = (() => { try { return acquireEntry({ dir: runDir(), max: maxInFlight(routes0), onWait: (n, m) => console.error(`route: ${n}/${m} routes already in flight: queued here (no daemon traffic) until a slot frees`) }); } catch { return { release() {}, waitedMs: 0 }; } })();
+  if (entry === null) { console.error("route: gave up waiting 30 min for a free hub slot (maxInFlight in routes.local.json, env AGENT_HUB_MAX_INFLIGHT); nothing was started"); return 1; }
+  process.on("exit", () => entry.release()); // every exit path, including process.exit(130) from a signal
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed
   const routes = loadRoutes();

@@ -1,15 +1,43 @@
 {
  "paseo": "0.15.2",
- "rev": 1,
+ "rev": 2,
  "files": [
   {
    "path": "dist/server/server/agent/provider-snapshot-manager.js",
    "sha256": "eea46ce5097f7a3610937f246de0f698cab0bcc836fa8367cc3ede31091a44fb",
    "edits": [
-    { "name": "probe-budget-helpers", "find": "import pLimit from \"p-limit\";", "replaceFile": "server-limit.js", "prepend": "import pLimit from \"p-limit\";\n" },
-    { "name": "probe-budget-use", "find": "discoveryLimit: previous?.discoveryLimit ?? pLimit({ concurrency: 4, rejectOnClear: true }),", "replace": "discoveryLimit: previous?.discoveryLimit ?? __ahDiscoveryLimit()," },
-    { "name": "probe-deadline", "find": "const DEFAULT_REFRESH_TIMEOUT_MS = 120000;", "replace": "const DEFAULT_REFRESH_TIMEOUT_MS = 60000;" },
-    { "name": "short-error", "find": "function toErrorMessage(error) {", "replace": "function toErrorMessage(error) {\n    return __ahShortError(__ahRawErrorMessage(error));\n}\nfunction __ahRawErrorMessage(error) {" }
+    {
+     "name": "probe-budget-helpers",
+     "find": "import pLimit from \"p-limit\";",
+     "replaceFile": "server-limit.js",
+     "prepend": "import pLimit from \"p-limit\";\n"
+    },
+    {
+     "name": "probe-budget-use",
+     "find": "discoveryLimit: previous?.discoveryLimit ?? pLimit({ concurrency: 4, rejectOnClear: true }),",
+     "replace": "discoveryLimit: previous?.discoveryLimit ?? __ahDiscoveryLimit(),"
+    },
+    {
+     "name": "probe-deadline",
+     "find": "const DEFAULT_REFRESH_TIMEOUT_MS = 120000;",
+     "replace": "const DEFAULT_REFRESH_TIMEOUT_MS = 60000;"
+    },
+    {
+     "name": "short-error",
+     "find": "function toErrorMessage(error) {",
+     "replace": "function toErrorMessage(error) {\n    return __ahShortError(__ahRawErrorMessage(error));\n}\nfunction __ahRawErrorMessage(error) {"
+    }
+   ]
+  },
+  {
+   "path": "dist/server/server/workspace-reconciliation-service.js",
+   "sha256": "e34c9ffb77239db7f295c91b0e2abf0da36f32125d5855df92bdc5ba35e90015",
+   "edits": [
+    {
+     "name": "rescan-30min",
+     "find": "const DEFAULT_RESCAN_INTERVAL_MS = 5 * 60000;",
+     "replace": "/*agent-hub-server-rev:2*/const DEFAULT_RESCAN_INTERVAL_MS = 30 * 60000; // was 5 min: the full rescan runs git for every active workspace behind one queue; on 08-11 it never drained (getpaseo/paseo#3426, #8244)"
+    }
    ]
   }
  ]

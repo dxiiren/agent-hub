@@ -1,4 +1,4 @@
-/*agent-hub-server-rev:1*/
+/*agent-hub-server-rev:2*/
 // One probe budget for the whole daemon: Paseo limits probes per provider (4 each), so 100 enabled providers started 100 cold CLI processes at once and starved the daemon's HTTP for a minute.
 const __ahProbeLimit = pLimit(4);
 function __ahDiscoveryLimit() {
