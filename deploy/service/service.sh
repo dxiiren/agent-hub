@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Agent Hub daemon as a systemd user unit. Usage: service.sh install|uninstall|start|stop|status
+# Agent Hub daemon as a systemd user unit. Usage: service.sh install|uninstall|start|stop|restart|status
 set -u
 ACTION="${1:-}"
 UNIT=agent-hub
@@ -9,6 +9,15 @@ DIR="$HOME/.config/systemd/user"
 case "$ACTION" in start|stop) [ -z "${AGENT_HUB_PASEO:-}" ] && [ "${AGENT_HUB_NO_RESTART_LOG:-}" != 1 ] && { node "$(dirname "$LAUNCH")/restart-log.mjs" "$ACTION" >/dev/null 2>&1 || true; } ;; esac
 # scripts/daemon-ctl.mjs: verified stop, ready wait (HTTP + paseo ls), plugin check. Skipped under the fake-paseo test hook unless AGENT_HUB_CTL=1.
 ctl() { if [ -n "${AGENT_HUB_PASEO:-}" ] && [ "${AGENT_HUB_CTL:-}" != 1 ]; then return 0; fi; node "$(dirname "$LAUNCH")/daemon-ctl.mjs" "$1"; }
+# restart = stop + start, without the deliberate-stop marker the hang watchdog (scripts/daemon-watchdog.mjs) honours.
+if [ "$ACTION" = restart ]; then AGENT_HUB_RESTART=1 "$0" stop || exit $?; exec "$0" start; fi
+# A deliberate stop leaves <home>/deliberate-stop (the watchdog restarts nothing while it exists); start removes it.
+if [ -z "${AGENT_HUB_PASEO:-}" ]; then
+  case "$ACTION" in
+    stop) [ "${AGENT_HUB_RESTART:-}" = 1 ] || { mkdir -p "$HOME_DIR" && date -u +%FT%TZ > "$HOME_DIR/deliberate-stop"; } ;;
+    start) rm -f "$HOME_DIR/deliberate-stop" ;;
+  esac
+fi
 have() { command -v "$1" >/dev/null 2>&1; }
 # Put the Agent Hub kinds into Paseo's own Add-provider list (version+hash checked, idempotent, never fails the start).
 if [ "$ACTION" = start ] && [ -z "${AGENT_HUB_NO_WEB_PATCH:-}" ] && [ -z "${AGENT_HUB_PASEO:-}" ]; then node "$(dirname "$LAUNCH")/paseo-web-patch.mjs" apply --quiet || true; fi
@@ -38,11 +47,31 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 UNITEOF
-    systemctl --user daemon-reload && systemctl --user enable "$UNIT" && echo "[OK] unit $UNIT enabled"
+    # Hang watchdog: every 2 min, 3 failed health checks in a row -> service.sh restart (Restart=on-failure only covers a crash).
+    cat > "$DIR/$UNIT-watchdog.service" <<UNITEOF
+[Unit]
+Description=Agent Hub hang watchdog
+
+[Service]
+Type=oneshot
+ExecStart=$(command -v node) $(dirname "$LAUNCH")/daemon-watchdog.mjs
+UNITEOF
+    cat > "$DIR/$UNIT-watchdog.timer" <<UNITEOF
+[Unit]
+Description=Agent Hub hang watchdog, every 2 min
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
+UNITEOF
+    systemctl --user daemon-reload && systemctl --user enable "$UNIT" && systemctl --user enable --now "$UNIT-watchdog.timer" && echo "[OK] unit $UNIT enabled, watchdog timer on"
     have loginctl && loginctl enable-linger "$(id -un)" 2>/dev/null && echo "[OK] linger on: starts at boot without a login" ;;
-  uninstall) systemctl --user disable --now "$UNIT" 2>/dev/null; paseo daemon stop --home "$HOME_DIR" 2>/dev/null; rm -f "$DIR/$UNIT.service"; systemctl --user daemon-reload; echo "[OK] unit removed" ;;
+  uninstall) systemctl --user disable --now "$UNIT-watchdog.timer" 2>/dev/null; rm -f "$DIR/$UNIT-watchdog.timer" "$DIR/$UNIT-watchdog.service"; systemctl --user disable --now "$UNIT" 2>/dev/null; paseo daemon stop --home "$HOME_DIR" 2>/dev/null; rm -f "$DIR/$UNIT.service"; systemctl --user daemon-reload; echo "[OK] unit removed" ;;
   start) ctl heal; systemctl --user start "$UNIT" && ctl ready && ctl plugins && echo "[OK] hub up" ;;
   stop) systemctl --user stop "$UNIT"; ctl stop && echo "[OK] stopped"; [ -z "${AGENT_HUB_PASEO:-}" ] && node "$(dirname "$LAUNCH")/hub.mjs" reap-laptop --now; : ;;
   status) systemctl --user status "$UNIT" --no-pager ;;
-  *) echo "usage: service.sh install|uninstall|start|stop|status"; exit 2 ;;
+  *) echo "usage: service.sh install|uninstall|start|stop|restart|status"; exit 2 ;;
 esac

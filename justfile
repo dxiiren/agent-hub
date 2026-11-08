@@ -39,6 +39,15 @@ down:
 down:
     @sh '{{justfile_directory()}}/deploy/service/service.sh' stop
 
+# Stop then start (recognises a hung worker; the hang watchdog calls this).
+[windows]
+restart:
+    @& '{{justfile_directory()}}/deploy/service/service.ps1' restart
+
+[unix]
+restart:
+    @sh '{{justfile_directory()}}/deploy/service/service.sh' restart
+
 # Show the service and daemon state.
 [windows]
 status:

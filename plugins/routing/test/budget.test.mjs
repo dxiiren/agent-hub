@@ -188,3 +188,16 @@ test("dropWslCache logs failure status", () => {
     rmSync(logDir, { recursive: true, force: true });
   }
 });
+
+test("availableGb: Windows reads Available MBytes (free + standby), not FreePhysicalMemory; falls back to os.freemem; cached 5 s", async () => {
+  const { availableGb, resetAvailableCache } = await import("../budget.mjs");
+  resetAvailableCache();
+  let calls = 0; const run = (cmd, args) => { calls++; assert.match(args.join(" "), /Win32_PerfFormattedData_PerfOS_Memory/); return { status: 0, stdout: "1536" }; };
+  assert.equal(availableGb({ now: 1000, platform: "win32", run, fallback: () => 0.3 }), 1.5);
+  assert.equal(availableGb({ now: 3000, platform: "win32", run, fallback: () => 0.3 }), 1.5); assert.equal(calls, 1);
+  resetAvailableCache();
+  assert.equal(availableGb({ now: 1000, platform: "win32", run: () => ({ status: 1, stdout: "" }), fallback: () => 0.3 }), 0.3);
+  resetAvailableCache();
+  assert.equal(availableGb({ now: 1000, platform: "linux", readFile: () => ["MemTotal: 1 kB", "MemAvailable:  2097152 kB", ""].join(String.fromCharCode(10)), fallback: () => 0.3 }), 2);
+  resetAvailableCache();
+});

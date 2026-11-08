@@ -19,7 +19,7 @@ import { batchAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
 import { endpointSkip } from "./endpoint.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
-import { effectiveBudget, chainOrder, costGb, laptopNow, dropWslCache, heldIn, kindOf } from "./budget.mjs";
+import { effectiveBudget, chainOrder, costGb, laptopNow, availableGb, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
 /** The Windows npm shim paseo.cmd cuts multi-line args, so run the CLI entry through node directly. */
 export function paseoCommand(env = process.env) {
@@ -684,7 +684,7 @@ function main(argv) {
   try { res = runRoute({
     providerState: pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
-    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => os.freemem() / 2 ** 30, laptop: () => laptopNow(),
+    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;

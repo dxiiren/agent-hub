@@ -35,24 +35,56 @@ export function listenerPid(port, platform = process.platform) {
   return n > 0 ? n : null;
 }
 
+/** [parentPid, commandLine] of a process, or null. Windows: CIM; elsewhere /proc. */
+export function procInfo(pid, platform = process.platform) {
+  try {
+    if (platform === 'win32') {
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', `$x=Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}" -EA 0;if($x){"$($x.ParentProcessId)|$($x.CommandLine)"}`], { encoding: 'utf8', timeout: 15000 });
+      const l = (r.stdout || '').trim(); if (!l) return null; const i = l.indexOf('|'); return [Number(l.slice(0, i)), l.slice(i + 1)];
+    }
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return [Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]), readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ')];
+  } catch { return null; }
+}
+
+/**
+ * Is `holder` (the pid on the port) the recorded daemon or part of it? Paseo's supervisor (the pid in paseo.pid) runs the real server as a child
+ * `daemon-worker.js`, and that child holds the port. True when the recorded pid is an ancestor of holder (max 6 levels), or when holder is a
+ * daemon-worker whose supervisor is gone. Anything else (a foreign process) is false. -> {ok, chain}
+ */
+export function isDaemonProcess(holder, recPid, { info = procInfo, alive = isAlive } = {}) {
+  const chain = []; let p = holder;
+  for (let i = 0; i < 6 && p > 0; i++) {
+    const row = info(p); if (!row) break;
+    chain.push(p);
+    if (row[0] === recPid) return { ok: true, chain: [...chain, recPid] };
+    if (i === 0 && /daemon-worker\.js/.test(row[1]) && !alive(recPid)) return { ok: true, chain };
+    p = row[0];
+  }
+  return { ok: false, chain };
+}
+
 async function until(cond, ms, sleepFn, stepMs = 500) { for (let t = 0; t <= ms; t += stepMs) { if (cond()) return true; await sleepFn(stepMs); } return cond(); }
 
 /**
  * Stop the daemon and prove it. Order: `paseo daemon stop`; wait for the port to be free; if it is not, kill the recorded pid
  * (never by name, and only while that pid is what holds the port); wait again. -> {ok, how, detail}
  */
-export async function stopDaemon({ home, port, paseoStop, listener = listenerPid, alive = isAlive, kill = (pid) => process.kill(pid, 'SIGKILL'), pidFile = readDaemonPid, sleepFn = sleep, waitMs = 20000, log = console.log }) {
+export async function stopDaemon({ home, port, paseoStop, listener = listenerPid, alive = isAlive, related = (holder, recPid) => isDaemonProcess(holder, recPid, { alive }), kill = (pid) => process.kill(pid, 'SIGKILL'), pidFile = readDaemonPid, sleepFn = sleep, waitMs = 20000, log = console.log }) {
   try { paseoStop(); } catch { /* verified below, not trusted */ }
   const gone = () => listener(port) === null;
   if (await until(gone, waitMs, sleepFn)) return { ok: true, how: 'paseo' };
   const rec = pidFile(home);
   const holder = listener(port);
   if (!rec || holder === null) return { ok: await until(gone, waitMs, sleepFn), how: 'paseo', detail: 'late' };
-  if (holder !== rec.pid) return { ok: false, how: 'none', detail: `port ${port} is held by pid ${holder}, not the daemon pid ${rec.pid} recorded in ${join(home, 'paseo.pid')}; not killed` };
-  log(`[WARN] paseo daemon stop left the daemon (pid ${rec.pid}) on port ${port}; stopping that exact pid`);
-  try { kill(rec.pid); } catch (e) { if (alive(rec.pid)) return { ok: false, how: 'kill', detail: `could not stop pid ${rec.pid}: ${e.message}` }; }
+  // The port holder is normally the supervisor's child (daemon-worker.js); kill the supervisor first so it cannot respawn the worker, then the holder. Exact pids only.
+  const child = holder !== rec.pid;
+  if (child && !related(holder, rec.pid).ok) return { ok: false, how: 'none', detail: `port ${port} is held by pid ${holder}, not the daemon pid ${rec.pid} recorded in ${join(home, 'paseo.pid')} or a child of it; not killed` };
+  const targets = child ? [...(alive(rec.pid) ? [rec.pid] : []), holder] : [rec.pid];
+  log(`[WARN] paseo daemon stop left the daemon on port ${port}; stopping exact pid${targets.length > 1 ? 's' : ''} ${targets.join(', ')}`);
+  for (const t of targets) { try { kill(t); } catch (e) { if (alive(t)) return { ok: false, how: 'kill', detail: `could not stop pid ${t}: ${e.message}` }; } }
   const ok = await until(gone, waitMs, sleepFn);
-  return ok ? { ok, how: 'pid', detail: `pid ${rec.pid}` } : { ok, how: 'kill', detail: `pid ${rec.pid} stopped but port ${port} is still held by ${listener(port)}` };
+  return ok ? { ok, how: 'pid', detail: `pid ${targets.join('+')}` } : { ok, how: 'kill', detail: `pid ${targets.join('+')} stopped but port ${port} is still held by ${listener(port)}` };
 }
 
 async function health(port, fetchFn, ms = 3000) {
@@ -96,7 +128,7 @@ export async function ensurePlugins({ paseo, plugins = pluginIds(), sleepFn = sl
   return { ok: rows.every((r) => r.status === 'running'), rows };
 }
 
-function context() {
+export function context() {
   const home = resolve(process.env.AGENT_HUB_HOME || join(homedir(), '.paseo'));
   const listen = readDaemonPid(home)?.listen ?? '';
   const port = Number(process.env.AGENT_HUB_PORT || /:(\d+)$/.exec(listen)?.[1] || 6767);

@@ -1,9 +1,11 @@
-# Agent Hub daemon as a per-user Task Scheduler task (no admin). Usage: service.ps1 install|uninstall|start|stop|status
+# Agent Hub daemon as a per-user Task Scheduler task (no admin). Usage: service.ps1 install|uninstall|start|stop|restart|status|watchdog-install|watchdog-uninstall
 # Two triggers: at logon, and every minute with MultipleInstances=IgnoreNew. RestartOnFailure alone did NOT restart a killed daemon (tested 04-11).
-param([Parameter(Mandatory)][ValidateSet('install','uninstall','start','stop','status')][string]$Action)
+param([Parameter(Mandatory)][ValidateSet('install','uninstall','start','stop','restart','status','watchdog-install','watchdog-uninstall')][string]$Action)
 $ErrorActionPreference = 'Stop'
 $Task  = if ($env:AGENT_HUB_TASK) { $env:AGENT_HUB_TASK } else { 'AgentHub' }
 $Home_ = if ($env:AGENT_HUB_HOME) { $env:AGENT_HUB_HOME } else { Join-Path $HOME '.paseo' }
+$WatchTask = if ($env:AGENT_HUB_WATCHDOG_TASK) { $env:AGENT_HUB_WATCHDOG_TASK } else { 'AgentHubWatchdog' }
+$Marker = Join-Path $Home_ 'deliberate-stop'  # written by a deliberate `stop`, removed by `start`: the hang watchdog (scripts/daemon-watchdog.mjs) restarts nothing while it exists
 $paseo = (Get-Command paseo.cmd -ErrorAction SilentlyContinue).Source
 if (-not $paseo) { $paseo = (Get-Command paseo -ErrorAction Stop).Source }
 if ($env:AGENT_HUB_PASEO) { $paseo = $env:AGENT_HUB_PASEO }  # test hook: a fake paseo
@@ -29,6 +31,16 @@ function Use-Ctl { return (-not $env:AGENT_HUB_PASEO) -or $env:AGENT_HUB_CTL -eq
 function Invoke-Ctl { param([string]$Step) $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try { & node (Join-Path $PSScriptRoot '..\..\scripts\daemon-ctl.mjs') $Step 2>&1 | ForEach-Object { "$_" } | Out-Host; return ($LASTEXITCODE -eq 0) } finally { $ErrorActionPreference = $old } }
 if ($Action -in 'start','stop') { Write-RestartLog }
+function Install-Watchdog {
+  $node = (Get-Command node.exe -ErrorAction Stop).Source
+  $cmd = "& '$node' '$(Resolve-Path (Join-Path $PSScriptRoot '..\..\scripts\daemon-watchdog.mjs'))'"
+  $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$cmd`""
+  $trg = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
+  $set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+  $pri = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+  Register-ScheduledTask -TaskName $WatchTask -Action $act -Trigger $trg -Settings $set -Principal $pri -Force | Out-Null
+  Write-Host "[OK] task '$WatchTask' registered (every 2 min: health check, restart after 3 failures in a row)"
+}
 switch ($Action) {
   'install' {
     $cmd = "& '$(Join-Path $PSScriptRoot 'daemon-run.ps1')'"
@@ -38,13 +50,16 @@ switch ($Action) {
     $set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     $pri = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $Task -Action $act -Trigger @($t1,$t2) -Settings $set -Principal $pri -Force | Out-Null
-    Write-Host "[OK] task '$Task' registered (logon + every minute, IgnoreNew)"
+    Write-Host "[OK] task '$Task' registered (logon + every minute, IgnoreNew)"; Install-Watchdog
   }
-  'uninstall' { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue; Invoke-Paseo @('daemon','stop','--home',$Home_); Unregister-ScheduledTask -TaskName $Task -Confirm:$false; Write-Host "[OK] task '$Task' removed" } else { Write-Host "[OK] task '$Task' not present" } }
-  'start'     { Invoke-WebPatch; Invoke-ServerPatch; Start-UsageStack
+  'watchdog-install' { Install-Watchdog }
+  'watchdog-uninstall' { if (Get-ScheduledTask -TaskName $WatchTask -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $WatchTask -Confirm:$false; Write-Host "[OK] task '$WatchTask' removed" } else { Write-Host "[OK] task '$WatchTask' not present" } }
+  'restart'   { $env:AGENT_HUB_RESTART = '1'; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath stop; $stopCode = $LASTEXITCODE; if ($stopCode -ne 0) { Write-Host "[FAIL] restart: stop failed ($stopCode)"; exit $stopCode }; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath start; exit $LASTEXITCODE }
+  'uninstall' { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue; Invoke-Paseo @('daemon','stop','--home',$Home_); Unregister-ScheduledTask -TaskName $Task -Confirm:$false; if (Get-ScheduledTask -TaskName $WatchTask -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $WatchTask -Confirm:$false }; Write-Host "[OK] task '$Task' removed" } else { Write-Host "[OK] task '$Task' not present" } }
+  'start'     { Remove-Item $Marker -ErrorAction SilentlyContinue; Invoke-WebPatch; Invoke-ServerPatch; Start-UsageStack
     if (Use-Ctl) { Invoke-Ctl 'heal' | Out-Null }
     if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Enable-ScheduledTask -TaskName $Task | Out-Null; Start-ScheduledTask -TaskName $Task; Write-Host "[..] task '$Task' started, waiting for the daemon" } else { Invoke-Paseo @('daemon','start','--home',$Home_) -Scrub }
     if (Use-Ctl) { if (-not (Invoke-Ctl 'ready')) { Write-Host "[FAIL] the hub did not come up: see $(Join-Path $Home_ 'daemon.log')"; exit 1 }; if (-not (Invoke-Ctl 'plugins')) { exit 1 }; try { & node (Join-Path $PSScriptRoot '....pluginsoutingcleanup.mjs') --stale-projects --home $Home_ 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { }; Write-Host "[OK] hub up" } else { Write-Host "[OK] start requested" } }
-  'stop'      { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $Task | Out-Null; Stop-ScheduledTask -TaskName $Task }; Invoke-Paseo @('daemon','stop','--home',$Home_); if (Use-Ctl) { if (-not (Invoke-Ctl 'stop')) { exit 1 } }; if (-not $env:AGENT_HUB_PASEO) { & node (Join-Path $PSScriptRoot '..\..\scripts\hub.mjs') reap-laptop --now 2>&1 | Out-Host } }  # disabled so the 1-minute trigger cannot revive it; start re-enables
+  'stop'      { if ($env:AGENT_HUB_RESTART -ne '1' -and -not $env:AGENT_HUB_PASEO) { New-Item -ItemType Directory -Force -Path $Home_ | Out-Null; Set-Content -Path $Marker -Value (Get-Date -Format o) }; if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $Task | Out-Null; Stop-ScheduledTask -TaskName $Task }; Invoke-Paseo @('daemon','stop','--home',$Home_); if (Use-Ctl) { if (-not (Invoke-Ctl 'stop')) { exit 1 } }; if (-not $env:AGENT_HUB_PASEO) { & node (Join-Path $PSScriptRoot '..\..\scripts\hub.mjs') reap-laptop --now 2>&1 | Out-Host } }  # disabled so the 1-minute trigger cannot revive it; start re-enables
   'status'    { if (Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue) { Get-ScheduledTask -TaskName $Task | Get-ScheduledTaskInfo | Format-List TaskName, LastRunTime, LastTaskResult }; Invoke-Paseo @('daemon','status','--home',$Home_) }
 }

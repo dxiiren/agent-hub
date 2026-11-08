@@ -52,10 +52,31 @@ export function effectiveBudget({ slots = {}, enabled = {}, caps = {}, order = O
   return { configured, effective: laptopCap === null ? configEffective : Math.min(configEffective, laptopCap), configEffective, laptopCap, perProvider, reasons, source };
 }
 
+// Free RAM the way the OS means it. Windows: perf counter "\Memory\Available MBytes" = free + standby (reclaimable cache), via CIM so it works on any display language.
+// os.freemem() on Windows is FreePhysicalMemory (free list only) and ignores the standby cache; the floor (minFreeRamGb) is judged on Available.
+// Linux: MemAvailable from /proc/meminfo. Falls back to os.freemem() when the counter cannot be read. Cached 5 s (one PowerShell call is about 0.7 s). Injectable for tests.
+let availCache = null;
+export function availableGb({ now = Date.now(), platform = process.platform, run = spawnSync, readFile = readFileSync, fallback = () => os.freemem() / 2 ** 30, ttl = 5000 } = {}) {
+  if (availCache && now - availCache.at < ttl) return availCache.gb;
+  let gb;
+  try {
+    if (platform === "win32") {
+      const r = run("powershell.exe", ["-NoProfile", "-Command", "(Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory).AvailableMBytes"], { encoding: "utf8", timeout: 8000, windowsHide: true });
+      const mb = Number(String(r.stdout ?? "").trim()); if (r.status === 0 && mb > 0) gb = mb / 1024;
+    } else if (platform === "linux") {
+      const kb = Number(/MemAvailable:\s+(\d+)/.exec(String(readFile("/proc/meminfo", "utf8")))?.[1]); if (kb > 0) gb = kb / 1048576;
+    }
+  } catch { /* fall back */ }
+  gb ??= fallback();
+  availCache = { at: now, gb };
+  return gb;
+}
+export const resetAvailableCache = () => { availCache = null; };
+
 let cpuPrev = null; let snap = null;
 const cpuTimes = () => os.cpus().reduce((a, c) => { const t = c.times; a.idle += t.idle; a.total += t.user + t.nice + t.sys + t.idle + t.irq; return a; }, { idle: 0, total: 0 });
-/** Free RAM (GB) and CPU % of this machine, cached 10 s. CPU is the load since the previous reading (first call: since boot, so treated as unknown). Injectable for tests. */
-export function laptopNow({ now = Date.now(), freeMem = () => os.freemem() / 2 ** 30, cpu = cpuTimes, ttl = 10000 } = {}) {
+/** Available RAM (GB, see availableGb) and CPU % of this machine, cached 10 s. CPU is the load since the previous reading (first call: since boot, so treated as unknown). Injectable for tests. */
+export function laptopNow({ now = Date.now(), freeMem = () => availableGb(), cpu = cpuTimes, ttl = 10000 } = {}) {
   if (snap && now - snap.at < ttl) return snap;
   const c = cpu(); let cpuPct;
   if (cpuPrev && c.total > cpuPrev.total) cpuPct = 100 * (1 - (c.idle - cpuPrev.idle) / (c.total - cpuPrev.total));
