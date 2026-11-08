@@ -13,6 +13,8 @@ import { logRequest } from './restart-log.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const FAILS_TO_RESTART = 3, MAX_RESTARTS = 6, WINDOW_MS = 3600_000;
+/** A cold start of the daemon takes 3-15 min on a saturated disk (08-11 11:07-11:27): never count failed checks, and never restart again, while the last restart is younger than this (a second restart kills the daemon that is still booting). */
+export const START_GRACE_MS = 8 * 60_000;
 
 /** Pure decision. state = {fails, restarts:[ms], backoffAt}. -> {action:'none'|'skip'|'restart'|'backoff', state, reason} */
 export function decide({ state = {}, ok, now, deliberateStop = false }) {
@@ -20,6 +22,8 @@ export function decide({ state = {}, ok, now, deliberateStop = false }) {
   const base = { restarts, backoffAt: state.backoffAt && state.backoffAt > now - WINDOW_MS ? state.backoffAt : 0 };
   if (deliberateStop) return { action: 'skip', reason: 'deliberate stop in force', state: { ...base, fails: 0 } };
   if (ok) return { action: 'none', state: { ...base, fails: 0 } };
+  const last = Math.max(0, ...restarts);
+  if (last && now - last < START_GRACE_MS) return { action: 'none', reason: `restarted ${Math.round((now - last) / 1000)} s ago, still booting`, state: { ...base, fails: 0 } };
   const fails = (state.fails ?? 0) + 1;
   if (fails < FAILS_TO_RESTART) return { action: 'none', reason: `health check failed ${fails}/${FAILS_TO_RESTART}`, state: { ...base, fails } };
   if (restarts.length >= MAX_RESTARTS) {

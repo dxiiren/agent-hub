@@ -6,7 +6,7 @@ import http from 'node:http';
 import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decide, tick, FAILS_TO_RESTART, MAX_RESTARTS, WINDOW_MS, runStart, killPlan, recover } from '../daemon-watchdog.mjs';
+import { decide, tick, START_GRACE_MS, FAILS_TO_RESTART, MAX_RESTARTS, WINDOW_MS, runStart, killPlan, recover } from '../daemon-watchdog.mjs';
 import { probeDaemon } from '../daemon-health.mjs';
 import { isDaemonProcess, stopDaemon } from '../daemon-ctl.mjs';
 
@@ -26,6 +26,13 @@ test('decide: restart exactly at the 3rd failure in a row, then the counter star
   assert.equal(r.action, 'restart'); assert.equal(r.state.fails, 0); assert.deepEqual(r.state.restarts, [T0 + 9]);
 });
 
+test('decide: no failed-check counting and no second restart while the last restart is younger than the start grace', () => {
+  let r = decide({ state: { fails: 2, restarts: [T0 - 60_000] }, ok: false, now: T0 });
+  assert.equal(r.action, 'none'); assert.equal(r.state.fails, 0); assert.match(r.reason, /still booting/);
+  r = decide({ state: { fails: 2, restarts: [T0 - START_GRACE_MS - 1000] }, ok: false, now: T0 });
+  assert.equal(r.action, 'restart', 'after the grace a still-dead daemon (fails already at 2) is restarted again');
+});
+
 test('decide: a success between failures breaks the streak', () => {
   let s = decide({ state: {}, ok: false, now: T0 }).state;
   s = decide({ state: s, ok: false, now: T0 + 1 }).state;
@@ -39,7 +46,7 @@ test('decide: deliberate stop never restarts and clears the streak', () => {
 });
 
 test('decide: after MAX_RESTARTS restarts in an hour it backs off, logs once, and resumes when the window passes', () => {
-  const restarts = Array.from({ length: MAX_RESTARTS }, (_, i) => T0 - (MAX_RESTARTS - i) * 1000);
+  const restarts = Array.from({ length: MAX_RESTARTS }, (_, i) => T0 - 20 * 60_000 - (MAX_RESTARTS - i) * 1000); // older than the start grace
   assert.equal(restarts.length, MAX_RESTARTS);
   let r = decide({ state: { fails: FAILS_TO_RESTART - 1, restarts }, ok: false, now: T0 });
   assert.equal(r.action, 'backoff'); assert.equal(r.state.restarts.length, MAX_RESTARTS); assert.equal(r.state.backoffAt, T0);
