@@ -4,7 +4,7 @@
 //   3 stuck-route watchdog (no agent progress for STUCK_S)                                  4 healthLine() for `agent-hub doctor`
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 export const WORKSPACE_CAP = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || 20;
 export const STUCK_S = Number(process.env.AGENT_HUB_STUCK_S) || 10 * 60;
@@ -35,7 +35,7 @@ export async function sweepIdleWorkspaces({ run, now = Date.now, idleS = SWEEP_I
     if (w.isolation !== "worktree") { why("not a worktree workspace"); continue; }
     if (busy.has(norm(cwd))) { why("agent running"); continue; }
     if (now() - mtimeMs(cwd) < idleS * 1000) { why("changed in the last " + idleS / 60 + " min"); continue; }
-    if (dirty(cwd)) { why("uncommitted changes"); continue; }
+    if (await dirty(cwd)) { why("uncommitted changes"); continue; }
     victims.push(w);
   }
   const archived = []; let failed = null;
@@ -53,9 +53,8 @@ function defaultMtime(dir) { // newest of the folder, the git admin HEAD/index (
   try { const g = readFileSync(join(dir, ".git"), "utf8").match(/gitdir:\s*(.+)/)?.[1]?.trim(); if (g) { t(join(g, "HEAD")); t(join(g, "index")); } } catch { /* plain repo */ }
   return m || Date.now();
 }
-function gitDirty(dir) { // unreadable = treated as dirty (never archive on doubt)
-  const r = spawnSync("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf8", timeout: 30_000, windowsHide: true });
-  return r.status !== 0 || String(r.stdout).trim() !== "";
+function gitDirty(dir) { // async (the sweep runs inside the daemon: a sync git call per workspace blocked its event loop for minutes); unreadable = treated as dirty (never archive on doubt)
+  return new Promise((res) => execFile("git", ["-C", dir, "status", "--porcelain"], { timeout: 30_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (e, out) => res(!!e || String(out).trim() !== "")));
 }
 
 // ---- 2. cleanup spool: the route frees its slot as soon as the agent answered; this runs afterwards
