@@ -63,19 +63,30 @@ test("issue 4: --status returns status, gate state and the answer", () => {
 
 import { checkFileInputs } from "../route.mjs";
 import { mkdirSync, symlinkSync } from "node:fs";
-test("--file: sensitive names, dotfiles, symlinks to them and ../ traversal are refused; a normal .tsv passes", () => {
-  const d = mkdtempSync(join(tmpdir(), "ff-")), sub = join(d, "sub"); mkdirSync(sub);
-  const mk = (n, c = "a\tb\n1\t2\n") => { const p = join(d, n); writeFileSync(p, c); return p; };
-  const none = { scan: () => false, home: join(d, "home") };
-  for (const n of ["credentials.json", "server.key", ".env", "id_rsa", "my-secret.txt"]) assert.match(checkFileInputs([mk(n)], none).error ?? "", /refused/, n);
-  assert.match(checkFileInputs([join(sub, "..", "credentials.json")], none).error ?? "", /refused/); // traversal resolves to the real file first
-  const link = join(sub, "harmless.txt");
-  try { symlinkSync(join(d, "credentials.json"), link); assert.match(checkFileInputs([link], none).error ?? "", /refused: sensitive/); } catch (e) { if (e.code !== "EPERM") throw e; } // no symlink right on this Windows: skip
-  assert.match(checkFileInputs([mk("data.tsv", "k\n")], { ...none, scan: () => true }).error ?? "", /credential/); // content scanner
-  assert.equal(checkFileInputs([mk("data.tsv")], none).error, undefined);
-  assert.match(checkFileInputs([join(d, "nope.tsv")], none).error, /does not resolve/);
+const ff = () => {
+  const d = mkdtempSync(join(tmpdir(), "ff-")), out = mkdtempSync(join(tmpdir(), "out-"));
+  const mk = (n, c = "a b 1 2", dir = d) => { const p = join(dir, n); writeFileSync(p, c); return p; };
+  return { d, out, mk, o: { roots: [d], scan: () => false, home: join(d, "home") } };
+};
+test("--file: sensitive names, dotfiles, ../ traversal and symlinks to them are refused", () => {
+  const { d, mk, o } = ff(); mkdirSync(join(d, "sub"));
+  for (const n of ["credentials.json", "server.key", ".env", "id_rsa", "my-secret.txt"]) assert.match(checkFileInputs([mk(n)], o).error ?? "", /refused/, n);
+  assert.match(checkFileInputs([join(d, "sub", "..", "credentials.json")], o).error ?? "", /refused/);
+  try { symlinkSync(join(d, "credentials.json"), join(d, "sub", "harmless.txt")); assert.match(checkFileInputs([join(d, "sub", "harmless.txt")], o).error ?? "", /refused/); } catch (e) { if (e.code !== "EPERM") throw e; }
 });
-test("--file: a file inside a protected folder (~/.claude) is refused", () => {
-  const home = mkdtempSync(join(tmpdir(), "hm-")); mkdirSync(join(home, ".claude")); const p = join(home, ".claude", "notes.tsv"); writeFileSync(p, "x");
-  assert.match(checkFileInputs([p], { scan: () => false, home }).error, /refused/);
+test("--file: a file under a dot-folder inside the allow root, and a file outside it, are refused", () => {
+  const { d, out, mk, o } = ff(); mkdirSync(join(d, ".ssh"));
+  assert.match(checkFileInputs([mk("id_x.tsv", "k", join(d, ".ssh"))], o).error ?? "", /refused: dotfile/);
+  assert.match(checkFileInputs([mk("data.tsv", "k", out)], o).error ?? "", /refused: outside/);
+});
+test("--file: UTF-16, NUL bytes and a scanner hit are refused; a plain UTF-8 .tsv inside the root passes", () => {
+  const { d, mk, o } = ff();
+  assert.match(checkFileInputs([mk("u16.txt", Buffer.from("﻿token ghp_" + "a".repeat(36), "utf16le"))], o).error ?? "", /not plain UTF-8/);
+  assert.match(checkFileInputs([mk("bin.dat", Buffer.from([65, 0, 66]))], o).error ?? "", /not plain UTF-8/);
+  assert.match(checkFileInputs([mk("hit.tsv")], { ...o, scan: () => true }).error ?? "", /credential/);
+  assert.equal(checkFileInputs([mk("data.tsv")], o).error, undefined);
+});
+test("--file: a file inside a protected folder is refused even when it is under the root", () => {
+  const home = mkdtempSync(join(tmpdir(), "hm-")); mkdirSync(join(home, ".claude")); const p = join(home, ".claude", "n.tsv"); writeFileSync(p, "x");
+  assert.match(checkFileInputs([p], { roots: [home], scan: () => false, home }).error, /refused/);
 });
