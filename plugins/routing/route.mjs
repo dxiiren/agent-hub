@@ -95,9 +95,33 @@ export function plainError(e) {
 export function withRetry(paseo, { tries = 6, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), jitter = () => Math.random() * 1000 } = {}) {
   return (args, opts) => {
     let j = paseo(args, opts);
+    if (opts?.noRetry) return j; // a create the daemon may still be running: a resend only queues a duplicate behind the first
     for (let i = 1; i < tries && transient(j) && args[0] !== "stop"; i++) { sleep(2000 * 2 ** (i - 1) + jitter()); j = paseo(args, opts); }
     return j;
   };
+}
+
+/** Where Paseo puts a worktree: <home>/worktrees/<project hash>/<name>; found on disk, so asking the daemon is not needed. */
+export const findWorktreeDir = (home, name) => { try { const r = join(home || join(os.homedir(), ".paseo"), "worktrees"); for (const h of readdirSync(r)) { const d = join(r, h, name); if (existsSync(join(d, ".git"))) return d.split(sep).join("/"); } } catch { /* none yet */ } return null; };
+/**
+ * `paseo worktree create` through a busy daemon (08-11: 80 active workspaces behind one git queue, a create took 4-15 min while the CLI gives up after 60 s). Never resent: the CLI's own 60 s timeout used to be retried 6 times
+ * with the same branch (daemon log: "branch already exists" x5), and every provider of the chain created again, so one stuck route filled the daemon with 30 creates. Now ONE create per branch (at most 2 at once across
+ * routes), progress on stderr, and after a client timeout the worktree folder is awaited on disk until `AGENT_HUB_CREATE_TIMEOUT_S` (240 s). Still absent: { daemonBusy } and the route stops (a provider cannot fix that).
+ */
+export function createWorktree(paseo, o, { sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), now = Date.now, log = (m) => console.error(m), find = findWorktreeDir, limitS = createTimeoutS() } = {}) {
+  const name = "route-" + randomBytes(5).toString("hex"), t0 = now();
+  let gate = null; if (o.ledgerDir) { try { gate = acquireEntry({ dir: join(o.ledgerDir, "wtcreate"), max: 2, waitMs: limitS * 1000, onWait: () => log("route: another worktree create is in progress: waiting for it (keeps the daemon's git queue short)") }); } catch { /* no gate */ } if (gate === null) return { daemonBusy: true, error: `WORKTREE_BUSY: waited ${limitS} s for a free create slot; other routes are creating worktrees: retry later` }; }
+  try {
+    log("route: creating the worktree (a busy daemon can take minutes; it is created once, not retried)");
+    const c = paseo(["worktree", "create", "--mode", "branch-off", "--new-branch", name, "--base", o.base, "--cwd", o.cwd], { noRetry: true });
+    if (c?.worktreePath && !c.error) return c;
+    if (!/timeout|no answer|DAEMON_REQUEST_TIMEOUT|unreachable/i.test(String(c?.error ?? ""))) return c;
+    for (;;) { // the CLI gave up but the daemon is still working on it
+      const d = find(o.home, name); if (d) return { name, branchName: name, worktreePath: d };
+      if ((now() - t0) / 1000 >= limitS) return { daemonBusy: true, error: `WORKTREE_CREATE_TIMEOUT: the daemon did not create the worktree within ${limitS} s (saturated daemon: too many active workspaces or other routes queued); nothing was retried. Run \`agent-hub reaper --once\`, check \`paseo workspace ls\`, retry.` };
+      sleep(3000);
+    }
+  } finally { gate?.release?.(); }
 }
 
 const base = (p) => p.split("/")[0];
@@ -516,7 +540,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       // The task's start commit and gate request must exist BEFORE the agent can act, and must not come from state the agent can write at turn end. So the route creates the worktree itself, from the pinned base commit, and registers the request under its path before `run`: the hook finds it by the agent's cwd. No request = the hook fails closed.
       if (!o.base) o.base = headSha(o.cwd);
       if (!o.base || o.base === EMPTY_TREE) { trace.push({ provider: prov, error: "worktree task needs a git repo with at least one commit (the base commit is pinned at creation)" }); continue; }
-      const c = paseo(["worktree", "create", "--mode", "branch-off", "--new-branch", "route-" + randomBytes(5).toString("hex"), "--base", o.base, "--cwd", o.cwd]);
+      const c = createWorktree(paseo, o);
+      if (c?.daemonBusy) { trace.push({ provider: prov, error: c.error }); break; } // the daemon, not this provider, is the bottleneck: the next provider would queue another create behind this one
       if (!c?.worktreePath || c.error) { trace.push({ provider: prov, error: "worktree create failed: " + String(c?.error ?? "no path returned").slice(0, 200) }); continue; }
       wt = { name: c.name, path: c.worktreePath }; track(null, wt);
       args[2] = wt.path;
