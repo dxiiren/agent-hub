@@ -29,7 +29,7 @@ export async function sweepIdleWorkspaces({ run, now = Date.now, idleS = SWEEP_I
   if (!Array.isArray(rows)) return { archived: [], skipped: [], failed: rows?.error ? String(rows.error).slice(0, 120) : null };
   const agents = await run(["ls"]);
   const busy = new Set((Array.isArray(agents) ? agents : []).filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => norm(String(a.cwd ?? "").replace(/^~(?=[\\/])/, process.env.USERPROFILE || process.env.HOME || ""))));
-  const victims = [], skipped = [];
+  const victims = [], skipped = [], cands = [];
   for (const w of rows) {
     const cwd = String(w.cwd ?? ""), why = (m) => skipped.push({ id: w.workspaceId, cwd, why: m });
     if (!cwd || !w.workspaceId) continue;
@@ -38,8 +38,11 @@ export async function sweepIdleWorkspaces({ run, now = Date.now, idleS = SWEEP_I
     if (w.isolation !== "worktree") { why("not a worktree workspace"); continue; }
     if (busy.has(norm(cwd))) { why("agent running"); continue; }
     if (now() - mtimeMs(cwd) < idleS * 1000) { why("changed in the last " + idleS / 60 + " min"); continue; }
-    if (await dirty(cwd)) { why("uncommitted changes"); continue; }
-    victims.push(w);
+    cands.push(w);
+  }
+  for (let i = 0; i < cands.length; i += 5) { // git status runs 5 at a time: 90 workspaces one by one took 3.5 min
+    const part = cands.slice(i, i + 5), d = await Promise.all(part.map((w) => dirty(String(w.cwd))));
+    part.forEach((w, k) => (d[k] ? skipped.push({ id: w.workspaceId, cwd: w.cwd, why: "uncommitted changes" }) : victims.push(w)));
   }
   const archived = []; let failed = null;
   for (const w of victims.slice(0, max)) {
