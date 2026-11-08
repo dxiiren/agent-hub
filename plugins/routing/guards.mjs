@@ -54,10 +54,14 @@ const paseoWorktreesRoot = () => norm(join(process.env.PASEO_HOME || join(homedi
  * (proven live 08-11: a dirty worktree with an untracked file survived), so uncommitted work there is safe; the lstat scan only decides "someone is still working here".
  */
 export async function sweepIdleWorkspaces({ run, runDir = null, now = Date.now, idleS = SWEEP_IDLE_S, max = 40, dry = false, exists = existsSync, touched = recentlyTouched, isHub = (cwd) => (runDir ? isHubWorktree(runDir, cwd) : false), paseoRoot = paseoWorktreesRoot(), log = () => {} }) {
-  let rows = await run(["workspace", "ls", "--json"]); if (!Array.isArray(rows)) rows = await run(["workspace", "ls", "--json"]); // one retry: a busy daemon drops the first call
+  const safe = async (a) => { try { return await run(a); } catch (e) { return { error: String(e?.message ?? e) }; } };
+  let rows = await safe(["workspace", "ls", "--json"]); if (!Array.isArray(rows)) rows = await safe(["workspace", "ls", "--json"]); // one retry: a busy daemon drops the first call
   if (!Array.isArray(rows)) return { archived: [], skipped: [], failed: rows?.error ? String(rows.error).slice(0, 120) : null };
-  const agents = await run(["ls"]);
-  const busy = new Set((Array.isArray(agents) ? agents : []).filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => norm(String(a.cwd ?? "").replace(/^~(?=[\/])/, process.env.USERPROFILE || process.env.HOME || ""))));
+  let agents = await safe(["ls"]); if (!Array.isArray(agents)) agents = await safe(["ls"]); // one retry
+  if (!Array.isArray(agents)) { log("sweep skipped: the agent list could not be read, so a busy workspace cannot be told from an idle one (nothing archived)"); return { archived: [], skipped: [], failed: "agent list unreadable: sweep skipped (fail closed)" }; }
+  const home = norm(process.env.USERPROFILE || process.env.HOME || "");
+  const cwdKey = (c) => norm(c).replace(/^~(?=\/)/, home); // separators first, then ~: a Windows "~\x" cwd must match too
+  const busy = new Set(agents.filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => cwdKey(a.cwd ?? "")));
   const victims = [], skipped = [];
   for (const w of rows) {
     const cwd = String(w.cwd ?? ""), why = (m) => skipped.push({ id: w.workspaceId, cwd, why: m });
@@ -65,7 +69,7 @@ export async function sweepIdleWorkspaces({ run, runDir = null, now = Date.now, 
     if (PERMANENT.test(norm(cwd))) { why("permanent folder"); continue; }
     if (!exists(cwd)) { if (exists(dirname(cwd))) victims.push(w); else why("parent missing (unmounted volume?)"); continue; }
     if (w.isolation !== "worktree") { why("not a worktree workspace"); continue; }
-    if (busy.has(norm(cwd))) { why("agent running"); continue; }
+    if (busy.has(cwdKey(cwd))) { why("agent running"); continue; }
     if (norm(cwd).startsWith(paseoRoot) && !isHub(cwd)) { why("Paseo-owned folder not created by this hub (archive would delete it)"); continue; }
     if (touched(cwd, now() - idleS * 1000)) { why("a file changed in the last " + idleS / 60 + " min (or the scan could not finish)"); continue; }
     victims.push(w);

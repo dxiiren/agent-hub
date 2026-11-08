@@ -17,7 +17,7 @@ export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 6
 export const REAP_AFTER_S = 20 * 60, REAP_EVERY_MS = 5 * 60_000;
 
 /** async paseo(args) -> parsed JSON or {error}. */
-export function asyncPaseo(home, env = process.env, timeout = 120_000) {
+export function asyncPaseo(home, env = process.env, timeout = 300_000) {
   const [cmd, ...pre] = paseoCommand(env);
   return (args) => new Promise((res) => {
     execFile(cmd, [...pre, ...cliArgs(args, home, true)], { env, timeout, killSignal: "SIGKILL", windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e, out) => {

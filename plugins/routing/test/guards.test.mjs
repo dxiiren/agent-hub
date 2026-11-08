@@ -136,3 +136,19 @@ test("(sec) inside Paseo's own worktree root only hub-created worktrees are arch
   const r = await sweepIdleWorkspaces({ run, runDir, touched: () => false, paseoRoot: fwd(root).toLowerCase() + "/" });
   assert.deepEqual(archived, ["mine"]); assert.ok(r.skipped.some((x) => x.id === "theirs" && /not created by this hub/.test(x.why)));
 });
+
+test("(sec) fail closed: an agent list that is null, an error object or throws archives NOTHING", async () => {
+  for (const bad of [() => null, () => ({ error: "busy" }), () => { throw new Error("daemon down"); }]) {
+    const archived = []; const run = async (a) => (a[1] === "ls" ? ws(5) : a[0] === "ls" ? bad() : (archived.push(a[2]), {}));
+    const r = await sweepIdleWorkspaces({ run, exists: () => true, touched: () => false, paseoRoot: "c:/nowhere/" });
+    assert.deepEqual(archived, []); assert.match(r.failed, /fail closed/);
+  }
+});
+
+test("(sec) a running agent whose cwd is written ~\... (Windows) or ~/... keeps its workspace", async () => {
+  const home = (process.env.USERPROFILE || process.env.HOME).split("\\").join("/");
+  const rows = [{ workspaceId: "w_back", cwd: `${home}/Desktop/code/worktree/a`, isolation: "worktree" }, { workspaceId: "w_fwd", cwd: `${home}/Desktop/code/worktree/b`, isolation: "worktree" }, { workspaceId: "w_idle", cwd: `${home}/Desktop/code/worktree/c`, isolation: "worktree" }];
+  const archived = []; const run = async (a) => (a[1] === "ls" ? rows : a[0] === "ls" ? [{ status: "running", cwd: "~\\Desktop\\code\\worktree\\a" }, { status: "running", cwd: "~/Desktop/code/worktree/b" }] : (archived.push(a[2]), {}));
+  await sweepIdleWorkspaces({ run, exists: () => true, touched: () => false, paseoRoot: "c:/nowhere/" });
+  assert.deepEqual(archived, ["w_idle"]);
+});
