@@ -60,3 +60,22 @@ test("issue 4: --status returns status, gate state and the answer", () => {
   assert.equal(runStatus("A1", (a) => (a[0] === "inspect" ? { Status: "running" } : {}), mkdtempSync(join(tmpdir(), "st-"))).status, "running");
   assert.match(runStatus("../x", p).error, /not an agent id/);
 });
+
+import { checkFileInputs } from "../route.mjs";
+import { mkdirSync, symlinkSync } from "node:fs";
+test("--file: sensitive names, dotfiles, symlinks to them and ../ traversal are refused; a normal .tsv passes", () => {
+  const d = mkdtempSync(join(tmpdir(), "ff-")), sub = join(d, "sub"); mkdirSync(sub);
+  const mk = (n, c = "a\tb\n1\t2\n") => { const p = join(d, n); writeFileSync(p, c); return p; };
+  const none = { scan: () => false, home: join(d, "home") };
+  for (const n of ["credentials.json", "server.key", ".env", "id_rsa", "my-secret.txt"]) assert.match(checkFileInputs([mk(n)], none).error ?? "", /refused/, n);
+  assert.match(checkFileInputs([join(sub, "..", "credentials.json")], none).error ?? "", /refused/); // traversal resolves to the real file first
+  const link = join(sub, "harmless.txt");
+  try { symlinkSync(join(d, "credentials.json"), link); assert.match(checkFileInputs([link], none).error ?? "", /refused: sensitive/); } catch (e) { if (e.code !== "EPERM") throw e; } // no symlink right on this Windows: skip
+  assert.match(checkFileInputs([mk("data.tsv", "k\n")], { ...none, scan: () => true }).error ?? "", /credential/); // content scanner
+  assert.equal(checkFileInputs([mk("data.tsv")], none).error, undefined);
+  assert.match(checkFileInputs([join(d, "nope.tsv")], none).error, /does not resolve/);
+});
+test("--file: a file inside a protected folder (~/.claude) is refused", () => {
+  const home = mkdtempSync(join(tmpdir(), "hm-")); mkdirSync(join(home, ".claude")); const p = join(home, ".claude", "notes.tsv"); writeFileSync(p, "x");
+  assert.match(checkFileInputs([p], { scan: () => false, home }).error, /refused/);
+});

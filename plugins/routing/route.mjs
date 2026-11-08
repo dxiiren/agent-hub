@@ -7,15 +7,15 @@ import { modelNotAllowed } from "./allow.mjs";
 import { outsideHours } from "./hours.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync, mkdtempSync, copyFileSync } from "node:fs";
-import path, { basename, dirname, join, resolve, sep } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync, mkdtempSync, copyFileSync, realpathSync } from "node:fs";
+import path, { basename, dirname, join, resolve, sep, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
 import { runGate, gateOpts, EMPTY_TREE, hasSecret } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
-import { batchAllowed } from "./readguard.mjs";
+import { batchAllowed, pathAllowed, deniedRoots } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
 import { endpointSkip } from "./endpoint.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
@@ -648,6 +648,20 @@ export function claimSlot(un, provider, slots) {
   } catch { return true; }
 }
 
+/** --file inputs go to an outside provider, so each one passes the same sensitive-read guard as an agent read (realpath: symlinks and ../ resolve first; sensitive name, dotfile, protected folder, hardlink) plus the secret scanner on its content. One refusal refuses the whole call. */
+export function checkFileInputs(files, { env = process.env, home = os.homedir(), scan = hasSecret } = {}) {
+  const ok = [];
+  for (const f of files) {
+    const abs = absPath(normCwd(f)); let real; try { real = realpathSync.native(abs); } catch { return { error: `--file ${f}: does not resolve` }; }
+    const g = pathAllowed(real, [dirname(real)], env, home); // the file's own folder is the root: only the per-file rules apply
+    if (!g.ok) return { error: `--file ${f} refused: ${g.why}` };
+    if (deniedRoots(env, home).some((d) => !relative(d, real).startsWith("..") && !isAbsolute(relative(d, real)))) return { error: `--file ${f} refused: protected folder` };
+    try { if (statSync(real).size > 2_000_000) return { error: `--file ${f} refused: larger than 2 MB` }; if (scan(readFileSync(real, "latin1"))) return { error: `--file ${f} refused: looks like it contains a credential, token or key` }; } catch (e) { return { error: `--file ${f} refused: ${e.message}` }; }
+    ok.push({ real, name: basename(real) });
+  }
+  return { ok };
+}
+
 /** `route --status <agentId>`: what a route that was cut off (caller timeout, Ctrl-C) would have returned: the agent's status, the plugin's gate state and its last answer. */
 export function runStatus(id, paseo, dir = gateDir()) {
   if (!AGENT_ID_RE.test(id ?? "")) return { error: "not an agent id: " + String(id).slice(0, 60) };
@@ -695,10 +709,9 @@ function main(argv) {
     if (!readOnlyType(type, loadRoutes())) { console.error("route: --file is for read-only task types (summarise, review)"); return 2; }
     if (rest.includes("--cwd")) { console.error("route: use either --cwd or --file, not both"); return 2; }
     const dir = mkdtempSync(join(os.tmpdir(), "hub-files-"));
-    for (const [i, f] of files.entries()) {
-      const src = absPath(normCwd(f));
-      try { if (!statSync(src).isFile()) throw new Error("not a file"); copyFileSync(src, join(dir, `${i}-${basename(src)}`)); } catch (e) { console.error(`route: --file ${f}: ${e.message}`); try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return 2; }
-    }
+    const chk = checkFileInputs(files);
+    if (chk.error) { console.error("route: " + chk.error); try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return 2; }
+    for (const [i, c] of chk.ok.entries()) { mkdirSync(join(dir, String(i))); copyFileSync(c.real, join(dir, String(i), c.name)); } // original basename kept
     process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } });
     cwd = dir.split(String.fromCharCode(92)).join("/");
   }
