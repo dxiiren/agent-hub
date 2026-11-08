@@ -29,7 +29,7 @@ test("(1)(5) sweep of 50 workspaces archives only idle, clean, non-permanent, no
 test("(1) a pass stops at the first failed archive (busy daemon) and a missing folder with a present parent is archived", async () => {
   let n = 0; const run = async (a) => a[1] === "ls" ? ws(5) : a[0] === "ls" ? [] : (++n === 2 ? { error: "timeout" } : { status: "archived" });
   const r = await sweepIdleWorkspaces({ run, exists: () => true, touched: () => false, paseoRoot: "c:/nowhere/" });
-  assert.equal(r.archived.length, 1); assert.match(r.failed, /timeout/);
+  assert.equal(r.archived.length, 2); assert.match(r.failed, /timeout/); // batch of 3: 1 ok, 1 failed, 1 ok, then the pass stops
   const g = await sweepIdleWorkspaces({ run: async (a) => (a[1] === "ls" ? ws(1) : a[0] === "ls" ? [] : { status: "archived" }), exists: (p) => !p.endsWith("w0") });
   assert.deepEqual(g.archived, ["wks_0"]);
 });

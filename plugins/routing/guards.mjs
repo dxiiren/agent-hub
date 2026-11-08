@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 export const WORKSPACE_CAP = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || 20;
 export const STUCK_S = Number(process.env.AGENT_HUB_STUCK_S) || 10 * 60;
 export const SWEEP_IDLE_S = 30 * 60;
+const ARCHIVE_PARALLEL = 3;
 const norm = (p) => String(p ?? "").split("\\").join("/").replace(/\/+$/, "").toLowerCase();
 const PERMANENT = /\/desktop\/code\/kollectapps-nextgen-(workspace|staging|sit)$/;
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
@@ -74,12 +75,14 @@ export async function sweepIdleWorkspaces({ run, runDir = null, now = Date.now, 
     if (touched(cwd, now() - idleS * 1000)) { why("a file changed in the last " + idleS / 60 + " min (or the scan could not finish)"); continue; }
     victims.push(w);
   }
-  const archived = []; let failed = null;
-  for (const w of victims.slice(0, max)) {
-    if (dry) { archived.push(w.workspaceId); continue; }
-    const r = await run(["workspace", "archive", w.workspaceId, "--json"]);
-    if (r?.error && !/not found|archived/i.test(JSON.stringify(r.error))) { failed = JSON.stringify(r.error).slice(0, 160); break; }
-    archived.push(w.workspaceId); if (runDir) forgetHubWorktree(runDir, w.cwd); log(`archived ${w.workspaceId} ${w.cwd}`);
+  const archived = []; let failed = null; const todo = victims.slice(0, max);
+  for (let i = 0; i < todo.length && !failed; i += ARCHIVE_PARALLEL) { // a few at a time: one archive takes 30-40 s on a loaded daemon (08-11), 40 in a row was 25 min
+    await Promise.all(todo.slice(i, i + ARCHIVE_PARALLEL).map(async (w) => {
+      if (dry) { archived.push(w.workspaceId); return; }
+      const r = await safe(["workspace", "archive", w.workspaceId, "--json"]);
+      if (r?.error && !/not found|archived/i.test(JSON.stringify(r.error))) { failed ??= JSON.stringify(r.error).slice(0, 160); return; }
+      archived.push(w.workspaceId); if (runDir) forgetHubWorktree(runDir, w.cwd); log(`archived ${w.workspaceId} ${w.cwd}`);
+    }));
   }
   return { archived, skipped, failed };
 }
