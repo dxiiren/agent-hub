@@ -12,6 +12,8 @@ $routes = Join-Path $Repo 'config/routes/routes.local.json'
 if (Test-Path $routes) { $env:AGENT_HUB_ROUTES = $routes }
 if (-not $env:AGENT_HUB_OTLP) { $env:AGENT_HUB_OTLP = 'http://127.0.0.1:4318/v1/metrics' }
 $env:AGENT_HUB_POLLER_DIR = Join-Path $Repo 'plugins/usage-otel/pollers'
+# libuv's threadpool is 4 threads: 4 file operations stuck behind a saturated disk (08-11: disk queue 76 from another job) stall every async fs call and the health check. 16 keeps the daemon answering while a few are slow.
+if (-not $env:UV_THREADPOOL_SIZE) { $env:UV_THREADPOOL_SIZE = '16' }
 # Gates and agents may run hooks through Git Bash: put it first so Windows does not pick System32's WSL bash.exe.
 $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
 # Only Git's bin goes FIRST (bash.exe). usr\bin goes LAST: its GNU tar would shadow the Windows one (GNU tar reads C:\x as host C, so Paseo's voice-model download failed with 'tar: Cannot connect to C: resolve failed').
