@@ -82,11 +82,11 @@ export async function reapFinished({ run, routes = {}, all = false, olderThan = 
   return { archived: victims, skipped: pool.size - victims.length };
 }
 
-export const GHOST_MAX_PER_PASS = 15, GHOST_ROUTE_IDLE_S = 30 * 60;
+export const GHOST_MAX_PER_PASS = 30, GHOST_ROUTE_IDLE_S = 30 * 60;
 /**
  * Workspaces that only cost the daemon git work. Paseo's reconciliation runs git rev-parse/status/config for every ACTIVE workspace every 5 min and at boot behind one git queue; on 08-11 the registry held 325
  * (84 with the folder gone, 63 more finished route-* worktrees) and the queue never drained: event-loop stalls of 40-250 s, then two hangs (upstream getpaseo/paseo #3426, #8244). Paseo itself never archives a workspace
- * whose project root is gone too, so route worktrees the route had removed stayed active forever. Archived here, a few per pass, one at a time (an archive is a daemon request):
+ * whose project root is gone too, so route worktrees the route had removed stayed active forever. Archived here, up to 30 per pass, one at a time (an archive is a daemon request):
  *   1. cwd missing while its parent folder exists (a missing parent = an unmounted volume, proves nothing: left alone),
  *   2. a route-* worktree under <paseo home>/worktrees with no unfinished agent in it, untouched for 30 min (a route between worktree create and agent create is younger).
  * Stops the pass at the first failed archive (a busy daemon): the next pass continues. Returns { archived: [workspaceId], failed }.
