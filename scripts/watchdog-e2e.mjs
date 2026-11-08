@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listenerPid } from './daemon-ctl.mjs';
+import { paseoCommand } from '../plugins/routing/route.mjs';
 
 if (process.platform !== 'win32') { console.log('SKIP: Windows only (Task Scheduler + NtSuspendProcess)'); process.exit(0); }
 const arg = (n, d) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : d; };
@@ -22,7 +23,7 @@ try {
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, 'config.json'), JSON.stringify({ version: 1, daemon: { listen: `127.0.0.1:${port}`, mcp: { enabled: false }, relay: { enabled: false } } }));
   console.log(`${stamp()} starting a real daemon on ${home} :${port}`);
-  spawnSync('paseo', ['daemon', 'start', '--home', home, '--timeout', '120'], { encoding: 'utf8', timeout: 150000, shell: true });
+  { const [pc, ...pa] = paseoCommand(); spawnSync(pc, [...pa, 'daemon', 'start', '--home', home, '--timeout', '120'], { encoding: 'utf8', timeout: 150000 }); } // the shim's node entry, never a shell
   if ((await health()) !== 200) throw new Error('test daemon did not come up');
   const worker = listenerPid(port); console.log(`${stamp()} worker pid ${worker}, health 200`);
   const inst = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', svc, 'watchdog-install'], { encoding: 'utf8', timeout: 60000, env }); console.log(`${stamp()} ${String(inst.stdout).trim()}`);
