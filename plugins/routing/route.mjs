@@ -7,7 +7,7 @@ import { modelNotAllowed } from "./allow.mjs";
 import { outsideHours } from "./hours.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync, mkdtempSync, copyFileSync } from "node:fs";
 import path, { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -268,7 +268,9 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   const cwdOf = () => agentCwd(paseo, agentId) ?? o.knownCwd; // ONE `paseo ls` (it lists every agent; two in a row doubled the load on a busy daemon), then the cwd the route started the agent in
   const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
-  let res = gate(cwd, gateOpts(routes, cwd, o.gate, o.base));
+  // a gate that saw no change at all is not a PASS for an edit task: the agent produced nothing (the fake gates of older callers carry no counts, so they are unaffected)
+  const judge = (r) => r.status === "PASS" && !r.noRepo && r.files === 0 && r.changed === 0 ? { ...r, status: "FAIL", reasons: ["no diff produced: the agent changed nothing in " + cwd] } : r;
+  let res = judge(gate(cwd, gateOpts(routes, cwd, o.gate, o.base, o.maxLines)));
   if (res.status === "PASS") return { status: "PASS", reasons: [], attempts: 0 };
   if (routes.gateRetry === false) return { status: "FAIL", reasons: res.reasons, attempts: 1 };
   const fail = (why) => ({ status: "FAIL", reasons: [...res.reasons, why], attempts: 1 });
@@ -279,7 +281,7 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   const st = paseo(["stop", agentId]);
   if (st?.error && !/AGENT_NOT_FOUND|No agent found/.test(String(st.error))) return fail("could not freeze the agent: " + String(st.error).slice(0, 120));
   // freeze: the second gate must judge the final tree, not one the agent is still editing
-  res = gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate, o.base));
+  res = judge(gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate, o.base, o.maxLines)));
   return { status: res.status, reasons: res.reasons, attempts: 1 };
 }
 
@@ -358,7 +360,7 @@ export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, di
   const q = mayAsk(rec.asks) ? parseAsk(r.answer) : null;
   if (q) { park({ ...rec, asks: rec.asks + 1 }, { dir, reaper, home: rec.home }); return { ...r, status: "asking", question: q, round: rec.asks + 1 }; }
   if (!rec.gate) { if (!rec.keep) retireParked(paseo, rec); return r; }
-  const g = callerGate({ gate: rec.gate, base: rec.base }, agentId, paseo, gate, routes);
+  const g = callerGate({ gate: rec.gate, base: rec.base, maxLines: rec.maxLines }, agentId, paseo, gate, routes);
   trace.push({ provider: rec.provider, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
   const out = withAnswer({ used: rec.provider, agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo, answerRetryMs);
   if (!rec.keep) retireParked(paseo, rec);
@@ -518,7 +520,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       if (!c?.worktreePath || c.error) { trace.push({ provider: prov, error: "worktree create failed: " + String(c?.error ?? "no path returned").slice(0, 200) }); continue; }
       wt = { name: c.name, path: c.worktreePath }; track(null, wt);
       args[2] = wt.path;
-      writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base);
+      writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines });
     }
     // an unsafe mode also runs in place when --cwd is a git work tree with nothing uncommitted (git can revert it); dirty or non-git stays on the provider default, with the reason
     // fail closed: full access in place only with the explicit --in-place flag AND a clean git work tree; .git and paths outside cwd are not protected then
@@ -530,13 +532,13 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
-    if (!o.worktree && (o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base);
+    if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines });
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
     let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: (left() + 30) * 1000 });
-    live.delete("run:" + rid); if (j?.agentId) track(j.agentId, wt); else { unnamed = true; ledger(); }
+    live.delete("run:" + rid); if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(left())], { timeoutMs: (left() + 30) * 1000 });
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
@@ -561,7 +563,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const q = parseAsk(a.answer);
       if (q && j.agentId) {
         live.delete(j.agentId); if (wt) live.delete("wt:" + wt.name); ledger(); // parked: its own reaper owns it now
-        park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
+        park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, maxLines: o.maxLines, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
         return { ...a, status: "asking", question: q, round: 1, hint: `answer with: agent-hub reply ${j.agentId} "<text>" (a parked agent is stopped after ${PARK_SECONDS / 60} min with no reply)` };
       }
     }
@@ -646,7 +648,23 @@ export function claimSlot(un, provider, slots) {
   } catch { return true; }
 }
 
+/** `route --status <agentId>`: what a route that was cut off (caller timeout, Ctrl-C) would have returned: the agent's status, the plugin's gate state and its last answer. */
+export function runStatus(id, paseo, dir = gateDir()) {
+  if (!AGENT_ID_RE.test(id ?? "")) return { error: "not an agent id: " + String(id).slice(0, 60) };
+  const i = paseo(["inspect", id]);
+  if (!i || i.error) return { agentId: id, error: String(i?.error ?? "no answer from the daemon").slice(0, 200) };
+  const st = String(i.Status ?? "").toLowerCase();
+  let gate = null; try { gate = loadState(dir)[id] ?? null; } catch { /* no gate state yet */ }
+  const done = st === "idle" || st === "closed";
+  return withAnswer({ agentId: id, status: done ? "completed" : st || "unknown", agentStatus: i.Status, archived: i.Archived === true, cwd: i.Cwd, gate: gate ? { status: gate.status ?? null, attempts: gate.attempts ?? 0 } : null, ...(done ? {} : { hint: "the agent is still working; ask again later" }) }, paseo);
+}
+
 function main(argv) {
+  if (argv[0] === "--status") {
+    const home = absPath(argv.includes("--home") ? argv[argv.indexOf("--home") + 1] : process.env.PASEO_HOME);
+    const res = runStatus(argv[1], withRetry(cliPaseo(home)));
+    console.log(JSON.stringify(res)); return res.error ? 1 : 0;
+  }
   if (argv[0] === "--resolve") { // print what an alias maps to right now
     try { console.log(resolveCached(argv[1], cliPaseo(process.env.PASEO_HOME))); return 0; } catch (e) { console.error(e.message); return 1; }
   }
@@ -667,9 +685,23 @@ function main(argv) {
   }
   const [type, prompt, ...rest] = argv;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
-  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep]'); return 2; }
+  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--max-lines N] [--file PATH ...]  |  route.mjs --status <agentId>'); return 2; }
   const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
-  const cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
+  let cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
+  const maxLines = opt("--max-lines") === undefined ? undefined : Number(opt("--max-lines"));
+  if (maxLines !== undefined && !(Number.isInteger(maxLines) && maxLines > 0)) { console.error("route: --max-lines needs a positive whole number"); return 2; }
+  const files = rest.flatMap((x, i) => (rest[i - 1] === "--file" ? [x] : []));
+  if (files.length) { // read-only inputs outside --cwd: copied into a private folder that becomes the task's cwd, so no hand-built snapshot dir and no "outside the task folder" refusal
+    if (!readOnlyType(type, loadRoutes())) { console.error("route: --file is for read-only task types (summarise, review)"); return 2; }
+    if (rest.includes("--cwd")) { console.error("route: use either --cwd or --file, not both"); return 2; }
+    const dir = mkdtempSync(join(os.tmpdir(), "hub-files-"));
+    for (const [i, f] of files.entries()) {
+      const src = absPath(normCwd(f));
+      try { if (!statSync(src).isFile()) throw new Error("not a file"); copyFileSync(src, join(dir, `${i}-${basename(src)}`)); } catch (e) { console.error(`route: --file ${f}: ${e.message}`); try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return 2; }
+    }
+    process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } });
+    cwd = dir.split(String.fromCharCode(92)).join("/");
+  }
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
   const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? sessionFromEnv(process.env), dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
   if (early) { console.error("route: " + early); return 2; }
@@ -689,7 +721,7 @@ function main(argv) {
   const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
   let res;
   try { res = runRoute({
-    providerState: pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
+    providerState: pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }

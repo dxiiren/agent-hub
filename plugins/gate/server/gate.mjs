@@ -172,9 +172,9 @@ function nestedGit(cwd, reasons) {
 }
 
 /** The one place the gate options are built, shared by the plugin hook and the route CLI so the two paths cannot drift. */
-export function gateOpts(routes, cwd, cmd, base = null) {
+export function gateOpts(routes, cwd, cmd, base = null, maxLines = null) {
   const row = repoGate(routes, cwd);
-  return { base, requireBase: true, cmd: cmd ?? row.cmd, maxLines: Number(row.maxLines ?? 400), forbid: row.forbid ?? null, allow: row.allow ?? null };
+  return { base, requireBase: true, cmd: cmd ?? row.cmd, maxLines: Number(maxLines ?? row.maxLines ?? 400), forbid: row.forbid ?? null, allow: row.allow ?? null };
 }
 
 /**
@@ -223,7 +223,7 @@ export function runGate(cwd, opts = {}) {
   try {
     if (hasSecret(added.map((l) => l.slice(1)).join(String.fromCharCode(10))) || hasSecret(histAdded.map((l) => l.slice(1)).join(String.fromCharCode(10)))) reasons.push("secret pattern in diff");
   } catch (e) { reasons.push(e.message); }
-  if (added.length + removed.length > maxLines) reasons.push(`diff larger than ${maxLines} lines`);
+  if (added.length + removed.length > maxLines) reasons.push(`diff larger than ${maxLines} lines (split the task into smaller ones, or pass --max-lines N to agent-hub route)`);
   // binary and UTF-16 files show no text in a diff: scan every changed file's bytes, and ignored files too (an agent can hide a file with .gitignore)
   if (inRepo) {
     for (const f of raw) scanFile(join(cwd, f), f, budget, reasons, deleted);
