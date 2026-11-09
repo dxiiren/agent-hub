@@ -87,6 +87,28 @@ export async function sweepIdleWorkspaces({ run, runDir = null, now = Date.now, 
   return { archived, skipped, failed };
 }
 
+/**
+ * Local (non-worktree) workspaces that own no agent at all, of any status: every `paseo run --cwd` makes a new one and nothing archived it (09-11: 10 copies of one cwd, HUB-HEALTH "workspaces 21 > 20").
+ * Archive only drops the record of a local workspace, the folder stays. Never: isolation=worktree, the permanent NextGen folders, a cwd any agent (even finished, unarchived) still names, an unreadable agent list (fail closed).
+ * `run(args)` -> parsed JSON, same shape as sweepIdleWorkspaces.
+ */
+export async function archiveIdleLocalWorkspaces({ run, dry = false, log = () => {} }) {
+  const safe = async (a) => { try { return await run(a); } catch (e) { return { error: String(e?.message ?? e) }; } };
+  let rows = await safe(["workspace", "ls", "--json"]); if (!Array.isArray(rows)) rows = await safe(["workspace", "ls", "--json"]);
+  let agents = await safe(["ls"]); if (!Array.isArray(agents)) agents = await safe(["ls"]);
+  if (!Array.isArray(rows) || !Array.isArray(agents)) return [];
+  const home = norm(process.env.USERPROFILE || process.env.HOME || "");
+  const cwdKey = (c) => norm(c).replace(/^~(?=\/)/, home);
+  const owned = new Set(agents.map((a) => cwdKey(a.cwd ?? "")));
+  const out = [];
+  for (const w of rows) {
+    if (!w.workspaceId || !w.cwd || w.isolation !== "local" || PERMANENT.test(norm(w.cwd)) || owned.has(cwdKey(w.cwd))) continue;
+    if (!dry) { const r = await safe(["workspace", "archive", w.workspaceId, "--json"]); if (r?.error && !/not found|archived/i.test(JSON.stringify(r.error))) continue; }
+    out.push(w.workspaceId); log(`archived local ${w.workspaceId} ${w.cwd}`);
+  }
+  return out;
+}
+
 // ---- 2. cleanup spool: the route frees its slot as soon as the agent answered; this runs afterwards
 export const spoolDir = (runDir) => join(runDir, "cleanup");
 export function spoolCleanup(runDir, job) {

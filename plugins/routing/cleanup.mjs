@@ -8,6 +8,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { cliPaseo, withRetry, loadRoutes } from "./route.mjs";
 import { asyncPaseo, reapFinished, reapDeadRoutes } from "./reaper.mjs";
+import { archiveIdleLocalWorkspaces } from "./guards.mjs";
 import { cleanModelId } from "./acp-proxy.mjs";
 
 export const DOCTOR_LABEL = "caller=agent-hub-doctor";
@@ -173,6 +174,7 @@ export async function main(argv, env = process.env) {
   try { const d = await reapDeadRoutes({ run, dry }); if (d.length) console.log(`${dry ? "would archive" : "archived"} ${d.length} agent(s) of dead route processes`); } catch { /* no run dir */ }
   const r = await reapFinished({ run, olderThan, all: argv.includes("--all"), routes: loadRoutes(env), dry });
   console.log(`${argv.includes("--dry-run") ? "would archive" : "archived"} ${r.archived.length} agent(s), ${r.skipped} left (running, too new or not finished)${r.archived.length ? ": " + r.archived.map((i) => i.slice(0, 8)).join(" ") : ""}`);
+  try { const l = await archiveIdleLocalWorkspaces({ run, dry }); if (l.length) console.log(`${dry ? "would archive" : "archived"} ${l.length} idle local workspace(s) that own no agent`); } catch { /* daemon busy: next time */ }
   try { const d = cleanDoctorLeftovers({ paseo: withRetry(cliPaseo(home, env)), dry: argv.includes("--dry-run") }); if (d.dirs || d.projects) console.log(`${argv.includes("--dry-run") ? "would remove" : "removed"} ${d.dirs} leftover hub-doctor temp folder(s) and ${d.projects} of their Paseo project(s)`); } catch { /* the daemon may be down: the folders go next time */ }
   if (guard) { const dry = argv.includes("--dry-run"); try { for (const x of guard.reapOrphans({ idleMs: Number(env.LAPTOP_IDLE_MIN || 15) * 60_000, dry })) console.log(`${dry ? "would stop" : "stopped"} an idle orphaned laptop llama-server (pid ${x.pid}, port ${x.port})`); } catch { /* best effort */ }
     try { const m = guard.migrateOldRunFiles({ dry }); if (m.length) console.log(`${dry ? "would remove" : "removed"} ${m.length} state file(s) of earlier hub code (dead owners): ${m.join(" ")}`); } catch { /* best effort */ } }

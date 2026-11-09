@@ -10,7 +10,7 @@ import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
-import { drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
+import { archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
 
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 60; // the env override is for the throwaway-hub proof
@@ -133,7 +133,7 @@ export function startReaper({ run, everyMs = REAP_EVERY_MS, log = (m) => console
   };
   const t = setInterval(tick, everyMs); t.unref?.();
   let sbusy = false; // workspace sweep every 10 min (guards.mjs): idle, clean worktree workspaces; the cap in route.mjs refuses routes over 20
-  const sweep = async () => { if (sbusy) return; sbusy = true; try { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), log }); if (r.archived.length) log(`agent-hub reaper: archived ${r.archived.length} idle workspace(s)`); } catch (e) { log("agent-hub reaper sweep: " + String(e?.message ?? e)); } finally { sbusy = false; } };
+  const sweep = async () => { if (sbusy) return; sbusy = true; try { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), log }); if (r.archived.length) log(`agent-hub reaper: archived ${r.archived.length} idle workspace(s)`); const l = await archiveIdleLocalWorkspaces({ run, log }); if (l.length) log(`agent-hub reaper: archived ${l.length} idle local workspace(s)`); } catch (e) { log("agent-hub reaper sweep: " + String(e?.message ?? e)); } finally { sbusy = false; } };
   const t2 = setInterval(sweep, 10 * 60_000); t2.unref?.();
   return () => { clearInterval(t); clearInterval(t2); };
 }

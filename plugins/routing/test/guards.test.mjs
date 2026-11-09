@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 import { runRoute } from "../route.mjs";
 import { acquireEntry } from "../entry-gate.mjs";
 
@@ -200,4 +200,17 @@ test("pruneArchivedOffline keeps active, pinned and the newest archived; backs u
   assert.deepEqual(r, { before: 6, after: 4 });
   assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).map((x) => x.workspaceId), ["a", "p", "z3", "z4"].sort((x, y) => recs.findIndex((q) => q.workspaceId === x) - recs.findIndex((q) => q.workspaceId === y)));
   assert.ok(readdirSync(d).some((f) => f.includes(".bak-prune-")));
+});
+
+test("archiveIdleLocalWorkspaces: archives local workspaces that own no agent; keeps worktrees, owned cwds, permanent folders; fails closed", async () => {
+  const rows = [
+    { workspaceId: "a", cwd: "C:/x/owned", isolation: "local" }, { workspaceId: "b", cwd: "C:/x/free", isolation: "local" },
+    { workspaceId: "c", cwd: "C:/x/free", isolation: "local" }, { workspaceId: "d", cwd: "C:/x/wt", isolation: "worktree" },
+    { workspaceId: "e", cwd: "C:/u/Desktop/code/KollectApps-NextGen-staging", isolation: "local" },
+  ];
+  const done = [];
+  const mk = (agents) => async (a) => (a[0] === "workspace" && a[1] === "ls" ? rows : a[0] === "ls" ? agents : (done.push(a[2]), { status: "archived" }));
+  assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/owned", status: "idle" }]) }), ["b", "c"]);
+  assert.deepEqual(done, ["b", "c"]);
+  assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk({ error: "x" }) }), []);
 });
