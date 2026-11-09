@@ -295,18 +295,22 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
   // a gate that saw no change at all is not a PASS for an edit task: the agent produced nothing (the fake gates of older callers carry no counts, so they are unaffected)
   const judge = (r) => r.status === "PASS" && !r.noRepo && r.files === 0 && r.changed === 0 ? { ...r, status: "FAIL", reasons: ["no diff produced: the agent changed nothing in " + cwd] } : r;
-  let res = judge(gate(cwd, gateOpts(routes, cwd, o.gate, o.base, o.maxLines)));
+  // the secret scan is bounded too (a 1,800-file folder held a slot for 3+ min per gate, twice): at least 120 s, at most until the attempt deadline
+  const gopts = () => ({ ...gateOpts(routes, cwd, o.gate, o.base, o.maxLines), ...(o.deadlineMs ? { deadlineMs: Math.max(o.deadlineMs, (o.now ?? Date.now)() + 120_000) } : {}) });
+  let res = judge(gate(cwd, gopts()));
   if (res.status === "PASS") return { status: "PASS", reasons: [], attempts: 0 };
   if (routes.gateRetry === false) return { status: "FAIL", reasons: res.reasons, attempts: 1 };
   const fail = (why) => ({ status: "FAIL", reasons: [...res.reasons, why], attempts: 1 });
   const s = paseo(["send", agentId, "--", "Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish."]);
   if (s?.error) return fail("re-prompt failed: " + String(s.error).slice(0, 120));
-  const w = paseo(["wait", agentId, "--timeout", "900"]);
+  // bounded by the attempt deadline (waitTimeout): this was a flat 900 s on top of the 10-15 min run, so a route lived 32-37 min holding its slot. At least 60 s so the retry gets a real chance.
+  const waitS = Math.min(900, Math.max(60, Math.ceil(((o.deadlineMs ?? Infinity) - (o.now ?? Date.now)()) / 1000)));
+  const w = paseo(["wait", agentId, "--timeout", String(waitS)], { timeoutMs: (waitS + 30) * 1000 });
   if (w?.error) return fail("wait for re-prompt failed: " + String(w.error).slice(0, 120));
   const st = paseo(["stop", agentId]);
   if (st?.error && !/AGENT_NOT_FOUND|No agent found/.test(String(st.error))) return fail("could not freeze the agent: " + String(st.error).slice(0, 120));
   // freeze: the second gate must judge the final tree, not one the agent is still editing
-  res = judge(gate(cwdOf() ?? cwd, gateOpts(routes, cwd, o.gate, o.base, o.maxLines)));
+  res = judge(gate(cwdOf() ?? cwd, gopts()));
   return { status: res.status, reasons: res.reasons, attempts: 1 };
 }
 
@@ -603,7 +607,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (j.status === "completed") {
       if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
-      const g = callerGate({ ...o, knownCwd: args[2] }, j.agentId, paseo, gate, routes);
+      const g = callerGate({ ...o, knownCwd: args[2], deadlineMs: t0 + lim * 1000 }, j.agentId, paseo, gate, routes);
       // the plugin hook may have re-prompted already (its attempts live in the plugin store, keyed by agent id)
       const pluginAttempts = (() => { try { return Number(loadState(o.gateDir ?? gateDir())[j.agentId]?.attempts) || 0; } catch { return 0; } })();
       g.attempts += pluginAttempts;

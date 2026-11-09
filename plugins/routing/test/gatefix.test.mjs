@@ -91,3 +91,26 @@ test("--file: a file inside a protected folder is refused even when it is under 
   const home = mkdtempSync(join(tmpdir(), "hm-")); mkdirSync(join(home, ".claude")); const p = join(home, ".claude", "n.tsv"); writeFileSync(p, "x");
   assert.match(checkFileInputs([p], { roots: [home], scan: () => false, home }).error, /refused/);
 });
+test("hung routes: the gate re-prompt wait is bounded by the attempt deadline, not a flat 900 s", () => {
+  const d = repo(), calls = [];
+  const p = (a, opts) => { calls.push([a, opts]); return a[0] === "ls" ? [{ id: "A1", cwd: d }] : {}; };
+  const fail = () => ({ status: "FAIL", reasons: ["x"], files: 1, changed: 1 });
+  callerGate({ gate: OK, knownCwd: d, now: () => 1000, deadlineMs: 1000 + 120_000 }, "A1", p, fail, {});
+  const w = calls.find(([a]) => a[0] === "wait");
+  assert.equal(w[0][3], "120"); assert.equal(w[1].timeoutMs, 150_000);
+  calls.length = 0; callerGate({ gate: OK, knownCwd: d, now: () => 5000, deadlineMs: 1000 }, "A1", p, fail, {});
+  assert.equal(calls.find(([a]) => a[0] === "wait")[0][3], "60");
+});
+test("hung routes: a folder of many files is scanned in batches, not one gitleaks launch per file", () => {
+  const d = mkdtempSync(join(tmpdir(), "many-")); // not a git repo: the gate secret-scans every file of the folder
+  for (let i = 0; i < 150; i++) writeFileSync(join(d, `f${i}.json`), JSON.stringify({ i, note: "plain text" }));
+  const t = Date.now(); const r = runGate(d, { cmd: OK });
+  assert.equal(r.status, "PASS"); assert.ok(Date.now() - t < 20_000, "150 files took " + (Date.now() - t) + " ms (was ~0.3-2 s per file)");
+  writeFileSync(join(d, "f7.json"), "aws_access_key_id = AKIAIOSFODNN7EXAMPLQ\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEYQ1\n");
+  assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern in f7\.json/);
+});
+test("hung routes: the gate stops scanning at its deadline and fails closed", () => {
+  const d = mkdtempSync(join(tmpdir(), "late-")); for (let i = 0; i < 5; i++) writeFileSync(join(d, `f${i}`), "x");
+  const r = runGate(d, { cmd: OK, deadlineMs: Date.now() - 1 });
+  assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /gate time limit/);
+});

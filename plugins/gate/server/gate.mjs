@@ -111,22 +111,36 @@ export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // the bas
 const MAX_FILE = 16 << 20, MAX_TOTAL = 128 << 20, MAX_DEPTH = 16;
 
 /** True when the bytes hold a secret as UTF-8/latin1 text (binary files too) or as UTF-16 text, little or big endian, at either byte alignment (odd-length buffers included). */
-export function bufHasSecret(buf) {
+const bufText = (buf) => {
   const parts = [buf.toString("latin1")];
   if (buf.includes(0)) for (const b of [buf, buf.subarray(1)]) {
     const even = b.subarray(0, b.length & ~1);
     parts.push(even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le"));
   }
-  return hasSecret(parts.join(String.fromCharCode(10)));
-}
+  return parts.join(String.fromCharCode(10));
+};
+export const bufHasSecret = (buf) => hasSecret(bufText(buf));
 
+// One gitleaks launch per file cost 0.1-2.2 s each: a plain 1,800-file folder took 3+ min per gate, 5,000 files over an hour (09-11-2026 hung routes). Files are scanned in batches of BATCH bytes; only a batch with a hit is re-scanned file by file to name the file.
+const BATCH = 4 << 20;
+function flushScan(budget, out) {
+  const items = budget.batch ?? []; budget.batch = []; budget.batchBytes = 0;
+  if (!items.length) return;
+  // a hit is narrowed by halving (k hits cost about k*log2(n) scans, not n); a hit that no single file shows (a secret wrapped across two files) still fails closed
+  const hit = (xs) => hasSecret(xs.map((i) => i.text).join(String.fromCharCode(10)));
+  const find = (xs) => { if (!hit(xs)) return 0; if (xs.length === 1) { out.push("secret pattern in " + xs[0].label); return 1; } const m = xs.length >> 1; return find(xs.slice(0, m)) + find(xs.slice(m)) || (out.push("secret pattern across files " + xs.map((i) => i.label).slice(0, 3).join(", ")), 1); };
+  try { find(items); } catch (e) { out.push(e.message); }
+}
 /** Scan one file into `out`; the budget is shared so a repo of many files cannot pass unscanned. */
 function scanFile(f, label, budget, out, deleted = new Set()) {
   try {
     const st = statSync(f);
     if (st.size > MAX_FILE || st.size > budget.left) { out.push("scan incomplete: " + label + " is too large to scan (" + st.size + " bytes)"); return; }
+    if (budget.deadline && Date.now() > budget.deadline) { if (!budget.timedOut) out.push("scan incomplete: the gate time limit was reached before every file was scanned"); budget.timedOut = true; return; }
     budget.left -= st.size;
-    if (bufHasSecret(readFileSync(f))) out.push("secret pattern in " + label);
+    const text = bufText(readFileSync(f));
+    (budget.batch ??= []).push({ label, text }); budget.batchBytes = (budget.batchBytes ?? 0) + text.length;
+    if (budget.batchBytes >= BATCH) flushScan(budget, out);
   } catch (e) {
     if (/secret scanner unavailable/.test(e?.message)) { out.push(e.message); return; } if (!(e?.code === "ENOENT" && deleted.has(label))) out.push("scan incomplete: cannot read " + label); /* only a file git lists as deleted has nothing to scan */ }
 }
@@ -144,6 +158,7 @@ export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = 
     }
     if (e.isFile()) scanFile(f, label, budget, out);
   }
+  flushScan(budget, out);
   return out;
 }
 
@@ -187,15 +202,15 @@ export function runGate(cwd, opts = {}) {
   const { cmd, maxLines = 400, forbid = null, allow = null, base = null, requireBase = false } = opts;
   const reasons = [];
   let diff = "", hist = "", files = [], raw = [], deleted = new Set();
+  const budget = { left: MAX_TOTAL, deadline: opts.deadlineMs ?? null };
   // not a git work tree: the diff rules cannot run, so fail closed unless a cmd gate exists and no path rules were asked for
   let inRepo = true;
   try { git(cwd, ["rev-parse", "--is-inside-work-tree"]); } catch { inRepo = false; }
   if (!inRepo) {
     if (forbid || allow) reasons.push("not a git work tree: diff-based rules cannot be evaluated");
     else if (!cmd) reasons.push("nothing to verify");
-    else reasons.push(...scanFolder(cwd)); // cmd-only PASS still gets a bounded secret scan of the folder
+    else reasons.push(...scanFolder(cwd, budget)); // cmd-only PASS still gets a bounded secret scan of the folder
   }
-  const budget = { left: MAX_TOTAL };
   if (inRepo) try {
     let ref = "HEAD";
     if (base) {
@@ -227,6 +242,7 @@ export function runGate(cwd, opts = {}) {
   // binary and UTF-16 files show no text in a diff: scan every changed file's bytes, and ignored files too (an agent can hide a file with .gitignore)
   if (inRepo) {
     for (const f of raw) scanFile(join(cwd, f), f, budget, reasons, deleted);
+    flushScan(budget, reasons);
     for (const d of nestedGit(cwd, reasons)) reasons.push(...scanFolder(join(cwd, d), budget, 0, d + "/"));
     try {
       for (const f of git(cwd, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]).split(String.fromCharCode(0)).filter(Boolean)) {
@@ -234,6 +250,7 @@ export function runGate(cwd, opts = {}) {
         const r = []; scanFile(join(cwd, f), f, budget, r);
         reasons.push(...r.map((x) => x.replace("secret pattern in ", "secret pattern in ignored file ")));
       }
+      { const r = []; flushScan(budget, r); reasons.push(...r.map((x) => x.replace("secret pattern in ", "secret pattern in ignored file "))); }
     } catch { reasons.push("scan incomplete: could not list ignored files"); }
   }
   if (files.includes(".gitignore")) reasons.push(".gitignore changed");

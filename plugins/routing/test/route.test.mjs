@@ -189,6 +189,7 @@ test("caller gate uses the same options as the hook: repo row maxLines, forbid, 
   const rt = { ...routes, gates: [{ match: "^/r$", cmd: "rowcmd", maxLines: 7, forbid: "^[.]github/", allow: "^src/" }] };
   runRoute({ ...o }, p, rt, () => ({ status: "PASS", reasons: [] })); // no caller gate: nothing to run
   runRoute({ ...o, gate: "mine" }, p, rt, (cwd, x) => { opts = x; return { status: "PASS", reasons: [] }; });
+  assert.ok(opts.deadlineMs > Date.now(), "the secret scan carries the attempt deadline"); delete opts.deadlineMs;
   assert.deepEqual(opts, { base: null, requireBase: true, cmd: "mine", maxLines: 7, forbid: "^[.]github/", allow: "^src/" });
 });
 test("forbidden-path edit FAILs through the CLI path with the real gate", async () => {

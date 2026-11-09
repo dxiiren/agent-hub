@@ -15,7 +15,9 @@ const proxy = key ? await startAuthProxy(upstream, key) : null;
 const base = proxy ? proxy.base : upstream;
 const authF = proxy ? (u, o) => fetch(u, { ...o, headers: { ...o?.headers, authorization: `Bearer ${proxy.secret}` } }) : fetch;
 // an endpoint that does not answer fails the launch with a plain line: Paseo shows it as the provider's error (Settings > Providers, Routing & slots) instead of "Ready"
-const down = await endpointDown(base, { f: authF });
+// right after a boot the LAN/VPN is not up yet and the daemon probes once (07:46 09-11: both office providers stuck in `error` until a manual refresh): retry for ~20 s before giving up
+let down = await endpointDown(base, { f: authF });
+for (let i = 0; down && i < 3; i++) { await new Promise((r) => setTimeout(r, 5000)); down = await endpointDown(base, { f: authF }); }
 if (down) { process.stderr.write(down + String.fromCharCode(10)); proxy?.close(); process.exitCode = 75; } else {
 const model = await servedModel(base, { fallback, f: authF });
 const spawnQwen = (readOnly) => spawnSafe(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, '--openai-api-key', proxy ? proxy.secret : 'none', '--model', model],
