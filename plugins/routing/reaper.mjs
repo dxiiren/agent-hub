@@ -52,6 +52,7 @@ export async function reapDeadRoutes({ run, dir = runDir(), dead = pidDead, dry 
     for (const rid of rec.runs ?? []) { const l = await run(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(l) ? l : []) ids.push(a.id); } // an attempt that was still creating/waiting when the route died
     if (!dry) {
       await pmap(ids, (id) => archiveAgent(run, id), concurrency);
+      for (const w of rec.workspaces ?? []) await run(["workspace", "archive", w, "--json"]); // after its agents were archived above
       for (const a of rec.agents ?? []) if (a.wt?.name && rec.cwd) await run(["worktree", "archive", a.wt.name, "--cwd", rec.cwd]);
       try { rmSync(join(dir, f), { force: true }); } catch { /* retried next time */ }
     }

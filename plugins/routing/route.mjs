@@ -470,16 +470,19 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   const ledger = () => { // survives a hard kill of this process (no handler can run then): the hub reaper archives these agents once this pid is dead
     if (!o.ledgerDir || o.keep) return;
     const f = join(o.ledgerDir, `agents-${process.pid}.json`);
-    if (!live.size) { try { rmSync(f, { force: true }); } catch { /* gone */ } return; }
-    tryWriteState(f, { pid: process.pid, home: o.home ?? null, cwd: o.cwd, agents: [...live.values()].filter((v) => !v.run).map((v) => ({ id: v.id ?? null, wt: v.wt ? { name: v.wt.name } : null })), runs: [...live.values()].some((v) => v.run) ? [rid] : [] }); // runs: a create call is in flight and its agent id is not known yet (found by the route/run label)
+    if (!live.size && !wsOpen.size) { try { rmSync(f, { force: true }); } catch { /* gone */ } return; }
+    tryWriteState(f, { pid: process.pid, home: o.home ?? null, cwd: o.cwd, agents: [...live.values()].filter((v) => !v.run).map((v) => ({ id: v.id ?? null, wt: v.wt ? { name: v.wt.name } : null })), workspaces: [...wsOpen], runs: [...live.values()].some((v) => v.run) ? [rid] : [] }); // runs: a create call is in flight and its agent id is not known yet (found by the route/run label)
   };
+  // A plain (non-worktree) run makes the daemon open a NEW local workspace per call even for a shared cwd, and nothing maps an agent back to it (paseo ls has no workspace id). So the route creates its workspace itself, runs in it with --workspace and archives exactly that id with its agent.
+  const wsOf = new Map(), wsOpen = new Set(); // agentId -> workspaceId; workspaces created and not yet archived (also in the ledger, for a route that dies)
+  const archiveWs = (w) => { if (!w) return; wsOpen.delete(w); const r = paseo(["workspace", "archive", w]); if (r?.error && !/not found|archived/i.test(String(r.error))) paseo(["workspace", "archive", w]); ledger(); };
   const track = (id, wt) => { if (o.keep || (!id && !wt)) return; live.set(id ?? "wt:" + wt.name, { id, wt }); ledger(); };
   const archive = (id) => { let r = paseo(["archive", id, "--force"]); if (r?.error && !/not found|archived/i.test(String(r.error))) r = paseo(["archive", id, "--force"]); if (r?.error && !/not found|archived/i.test(String(r.error))) { paseo(["stop", id]); paseo(["archive", id]); } };
   const retire = (id, wt, defer = false) => {
     if (o.keep) return;
     // finished route: free the slot first, archive later (guards.mjs spool; the slow daemon archive used to hold the slot 40-55 s per call). Failed attempts still retire in line.
-    if (defer && o.deferCleanup && o.ledgerDir && (id || wt)) { try { spoolCleanup(o.ledgerDir, { agentId: id ?? null, wt: wt ? { name: wt.name } : null, cwd: o.cwd, home: o.home ?? null }); live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name); ledger(); return; } catch { /* spool unwritable: archive in line */ } }
-    if (id) archive(id);
+    if (defer && o.deferCleanup && o.ledgerDir && (id || wt)) { try { spoolCleanup(o.ledgerDir, { agentId: id ?? null, workspaceId: wsOf.get(id) ?? null, wt: wt ? { name: wt.name } : null, cwd: o.cwd, home: o.home ?? null }); live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name); wsOpen.delete(wsOf.get(id)); ledger(); return; } catch { /* spool unwritable: archive in line */ } }
+    if (id) { archive(id); archiveWs(wsOf.get(id)); }
     if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
     live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name);
     dropProjects(wt); ledger();
@@ -569,9 +572,11 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     if (o.worktree) args.push("--no-wait");
     const guard = ro ? snapshot(o.cwd) : null;
+    let ws = null; if (!o.worktree && !o.keep) { const c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd]); if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } }
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
     let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: (left() + 30) * 1000 });
-    live.delete("run:" + rid); if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
+    live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
+    if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
     if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
       const w = paseo(["wait", j.agentId, "--timeout", String(left())], { timeoutMs: (left() + 30) * 1000 });
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
@@ -595,7 +600,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const a = withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs);
       const q = parseAsk(a.answer);
       if (q && j.agentId) {
-        live.delete(j.agentId); if (wt) live.delete("wt:" + wt.name); ledger(); // parked: its own reaper owns it now
+        live.delete(j.agentId); if (wt) live.delete("wt:" + wt.name); wsOpen.delete(wsOf.get(j.agentId)); ledger(); // parked: its own reaper owns it now
         park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, maxLines: o.maxLines, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
         return { ...a, status: "asking", question: q, round: 1, hint: `answer with: agent-hub reply ${j.agentId} "<text>" (a parked agent is stopped after ${PARK_SECONDS / 60} min with no reply)` };
       }

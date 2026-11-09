@@ -860,3 +860,20 @@ test('the per-attempt time limit covers the RAM wait: what is left of it is all 
   assert.equal(r.used, "qwen-code/m");
   assert.ok(t >= 9000 && Number(waits[0].replace("s", "")) <= 11, `waited ${t} ms for RAM, then the agent got ${waits[0]} of the 20 s`);
 });
+
+test("a plain run gets its own workspace (--workspace) and archives exactly that id after its agent", () => {
+  const calls = [];
+  const p = (args) => { calls.push(args); return args[0] === "workspace" && args[1] === "create" ? { workspaceId: "wks_mine" } : args[0] === "ls" ? [] : args[0] === "run" ? { status: "completed", agentId: "A9" } : {}; };
+  const r = runRoute({ ...o, provider: "qwen/z" }, p, routes);
+  assert.equal(r.used, "qwen/z");
+  const run = calls.find((c) => c[0] === "run");
+  assert.equal(run[run.indexOf("--workspace") + 1], "wks_mine");
+  const ia = calls.findIndex((c) => c[0] === "archive" && c[1] === "A9"), iw = calls.findIndex((c) => c[0] === "workspace" && c[1] === "archive");
+  assert.ok(ia >= 0 && iw > ia); assert.equal(calls[iw][2], "wks_mine");
+});
+test("a run that made no agent archives its workspace at once", () => {
+  const calls = [];
+  const p = (args) => { calls.push(args); return args[0] === "workspace" && args[1] === "create" ? { workspaceId: "wks_x" } : args[0] === "ls" ? [] : args[0] === "run" ? { status: "error", error: "boom" } : {}; };
+  runRoute({ ...o, provider: "qwen/z" }, p, routes);
+  assert.ok(calls.some((c) => c[0] === "workspace" && c[1] === "archive" && c[2] === "wks_x"));
+});

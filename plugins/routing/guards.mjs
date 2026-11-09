@@ -125,6 +125,7 @@ export async function drainSpool({ runDir, run, archiveAgent, concurrency = 2 })
       const f = join(d, files[i++]); let job; try { job = JSON.parse(readFileSync(f, "utf8")); } catch { rmSync(f, { force: true }); continue; }
       let ok = true;
       if (job.agentId) ok = await archiveAgent(run, job.agentId);
+      if (ok && job.workspaceId) { const r = await run(["workspace", "archive", job.workspaceId, "--json"]); if (r?.error && !/not found|archived/i.test(String(r.error))) ok = false; } // the route's own workspace, only after its agent is gone
       if (ok && job.wt?.name) { const r = await run(["worktree", "archive", job.wt.name, ...(job.cwd ? ["--cwd", job.cwd] : [])]); if (r?.error && !/not found|archived|no such/i.test(String(r.error))) ok = false; }
       if (ok) { rmSync(f, { force: true }); done.push(job.agentId ?? job.wt?.name); }
     }
