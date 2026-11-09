@@ -779,12 +779,14 @@ function main(argv) {
   const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow);
   { const bail = () => { for (const d of [...ACTIVE]) { try { d(); } catch { /* best effort */ } } }; process.on("exit", bail); for (const sg of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sg, () => process.exit(130)); } // Ctrl-C / kill: the exit handler archives what this route started
   const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
-  let res;
-  try { res = runRoute({
+  let res; const slotWaitUntil = Date.now() + (Number(process.env.AGENT_HUB_SLOT_WAIT_MIN) || 25) * 60_000;
+  // every provider skipped only because its slots are held by other routes: queue here and retry, never exit 1 with nothing started
+  const allFull = (r) => !r.used && Array.isArray(r.trace) && r.trace.length > 0 && r.trace.every((t) => /^(slots full|busy \d+\/)/.test(t.skip ?? ""));
+  try { for (;;) { res = runRoute({
     providerState: pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
-  }, withRetry(cliPaseo(home)), routes); } finally { unmark(); }
+  }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;
   if (bad) { console.error("route: " + bad); return 2; }
