@@ -419,9 +419,9 @@ export function inputError(o) {
 export const knownModes = (routes = {}) => new Set([routes.mode, ...Object.values(routes.modes ?? {}), ...Object.values(routes.readOnlyModes ?? {}), ...Object.values(READ_ONLY_MODES), ...Object.values(SAFE_MODES).flat(), ...(routes.knownModes ?? []),
   "default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto", "auto-edit", "auto-review", "yolo", "full-access", "read-only"].filter(Boolean));
 /** Why a task stopped on `permission`, from facts: no worktree for an edit type; else the secret gate reasons found in the agent's tree and the pending request (tool + paths) nobody granted. Never claims a flag is missing when it was passed. */
-export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate, routes = {} }) {
+export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate, routes = {}, denied }) {
   const m = mode ?? "provider default";
-  if (ro) return `read-only task ${o.type} (mode ${m}) asked for a permission it may not have (it can only read plain files inside the task folder; sensitive files, writes and shell are refused)`;
+  if (ro) return `read-only task ${o.type} (mode ${m}) asked for a permission it may not have (it can only read plain files inside the task folder; sensitive files, writes and shell are refused)` + (denied ? `; refused: ${denied}` : "");
   if (!o.worktree) return `edit task ${o.type} ran outside a worktree (mode ${m}) and asked for a permission the provider default mode does not grant: pass --new-workspace worktree, or --in-place on a clean git work tree (full-access is dropped otherwise, decision 21)`;
   const why = [];
   try { const g = gate(wt.path, gateOpts(routes, wt.path, undefined, o.base)); why.push(...(g?.reasons ?? []).filter((r) => /secret/i.test(r))); } catch { /* the gate result is only an explanation */ }
@@ -583,7 +583,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
     if (ro && j.status === "permission") j = grantReads(paseo, j, left(), { cwd: o.cwd, allow: routes.readAllow }, 8, left);
-    const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes }) } : {};
+    const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes, denied: j.denied }) } : {};
     const slow = (!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? ""));
     if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};

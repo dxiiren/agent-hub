@@ -640,7 +640,7 @@ test("the Qwen deny settings env var is set only for the read-only launcher", ()
   const reads = JSON.parse(rfsR5(new URL("claude-clean/readonly-settings.template.json", dir), "utf8")).permissions.deny.filter((d) => d.startsWith("Read("));
   const q = JSON.parse(rfsR5(new URL("qwen/system-settings-readonly.json", dir), "utf8")).permissions.deny;
   for (const r of reads) assert.ok(q.includes(r), r);
-  for (const t of ["Bash", "Shell", "run_shell_command", "Write", "Edit"]) assert.ok(q.includes(t), t);
+  for (const t of ["Write", "Edit", "Task"]) assert.ok(q.includes(t), t); const qa = JSON.parse(rfsR5(new URL("qwen/system-settings-readonly.json", dir), "utf8")).permissions; assert.ok(!qa.deny.includes("run_shell_command") && qa.ask.includes("run_shell_command")); // shell is asked, the hub judges it (readguard commandAllowed)
   assert.equal(JSON.parse(rfsR5(new URL("qwen/system-settings.json", dir), "utf8")).permissions, undefined); // edit tasks keep full tools
 });
 
@@ -876,4 +876,24 @@ test("a run that made no agent archives its workspace at once", () => {
   const p = (args) => { calls.push(args); return args[0] === "workspace" && args[1] === "create" ? { workspaceId: "wks_x" } : args[0] === "ls" ? [] : args[0] === "run" ? { status: "error", error: "boom" } : {}; };
   runRoute({ ...o, provider: "qwen/z" }, p, routes);
   assert.ok(calls.some((c) => c[0] === "workspace" && c[1] === "archive" && c[2] === "wks_x"));
+});
+test("readguard shell: grep/sed -n/head/tail/ls/find on in-cwd files pass; rm, redirects, curl, chaining, recursion, -exec/-delete and sensitive files are refused", () => {
+  const { cwd } = sandbox();
+  const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
+  for (const c of ["grep -n foo app.log", "grep -n foo app.log | head -20", "rg foo app.log", "sed -n 5,9p app.log", "head -n 5 app.log", "tail -20 app.log", "cat app.log", "wc -l app.log", "ls", "find . -name app.log"]) assert.equal(sh(c), true, c);
+  for (const c of ["rm app.log", "cat app.log > out", "curl http://x", "grep x app.log; rm app.log", "grep -rn x .", "rg x", "find . -delete", "find . -exec cat {} +", "sed -i s/a/b/ app.log", "grep x app.log | tee o", "cat " + CRED, "cat .env", "cat server.pem", "cat ../x", "cat $(echo app.log)", "grep x app.log && ls"]) assert.equal(sh(c), false, c);
+  assert.equal(batchAllowed([{ name: "execute", kind: "execute", paths: [] }], [cwd]).ok, false); // no command
+  assert.equal(normalise({ permissions: [{ agentId: "A", request: { id: "R", name: "execute", metadata: { rawRequest: { toolCall: { kind: "execute", rawInput: { command: "grep a b" } } } } } }] })[0].command, "grep a b");
+});
+test("readguard shell: quoted grep patterns pass, quoted tricks are refused", () => {
+  const { cwd } = sandbox();
+  const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
+  for (const c of ["grep -n \"create-action/editor\" app.log", "grep -n 'a.*b' app.log | head -5", "grep -E \"a|b\" app.log", "grep -n \"foo\" \"app.log\""]) assert.equal(sh(c), true, c);
+  for (const c of ["grep \"$(rm app.log)\" app.log", "grep \"`id`\" app.log", "grep \"a\" app.log \"; rm x\"", "cat \"" + CRED + "\"", "grep 'a' app.log | rm x", "grep \"a app.log", "grep a app.log ||"]) assert.equal(sh(c), false, c);
+});
+test("readguard shell: Windows findstr/type/dir on in-cwd files pass; /S, /F:, /G:, redirects and sensitive files are refused", () => {
+  const { cwd } = sandbox();
+  const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
+  for (const c of ["findstr /N \"foo\" app.log", "findstr /N /C:\"foo bar\" app.log", "type app.log", "dir"]) assert.equal(sh(c), true, c);
+  for (const c of ["findstr /S foo app.log", "findstr /F:list.txt foo app.log", "findstr foo " + CRED, "type " + CRED, "dir /S", "findstr foo app.log > x", "findstr foo app.log 2>nul"]) assert.equal(sh(c), false, c);
 });

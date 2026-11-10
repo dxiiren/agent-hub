@@ -67,7 +67,8 @@ test('the shipped routes template references only ids Paseo detects itself (code
   for (const e of Object.values(rt.routes).flat()) assert.match(e, /^(codex|claude)\//, e);
   for (const id of [...Object.keys(rt.slots), ...Object.keys(rt.modes)]) assert.equal(id, 'codex');
   const deny = JSON.parse(readFileSync(new URL('../../config/qwen/system-settings-readonly.json', import.meta.url), 'utf8')).permissions.deny;
-  for (const d of ['Edit', 'Write', 'Bash', 'Shell', 'run_shell_command', 'Read(.env)', 'Read(**/.env)', 'Read(**/credentials*)', 'Read(**/*.pem)']) assert.ok(deny.includes(d), d);
+  for (const d of ['Edit', 'Write', 'Task', 'Read(.env)', 'Read(**/.env)', 'Read(**/credentials*)', 'Read(**/*.pem)']) assert.ok(deny.includes(d), d);
+  assert.ok(!deny.includes('run_shell_command')); // shell is asked, the hub judges it (readguard commandAllowed)
 });
 
 test('Paseo own Remove (config.json only) leaves nothing behind: list/add forget the hub records, and the same name can be added again', async () => {

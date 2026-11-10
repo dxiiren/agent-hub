@@ -4,12 +4,9 @@
     "enableManagedAutoDream": false
   },
   "$version": 4,
-  "_comment": "System settings for the read-only Qwen twin providers (qwen-*-ro, launched with --read-only): auto-memory off plus a deny list (sensitive Read globs from the claude read-only template, shell/write/recursive-read tools). Plan mode lets Qwen read an in-cwd .env without a permission request, so the CLI itself must refuse it.",
+  "_comment": "System settings for the read-only Qwen twin providers (qwen-*-ro, launched with --read-only): auto-memory off plus a deny list (sensitive Read globs from the claude read-only template, shell/write/recursive-read tools). Plan mode lets Qwen read an in-cwd .env without a permission request, so the CLI itself must refuse it. Shell is not denied but ASKED on every call: the hub (readguard.mjs commandAllowed) approves only read commands (grep/rg, sed -n, head, tail, cat, ls, wc, find without -exec/-delete) whose file arguments pass the same path rules as Read; everything else is denied. Sub-agent tools are denied.",
   "permissions": {
     "deny": [
-      "Bash",
-      "Shell",
-      "run_shell_command",
       "Edit",
       "Write",
       "ReadManyFiles",
@@ -97,7 +94,14 @@
       "ReadFile(~/.aws/**)",
       "ReadFile(~/.paseo/agent-hub-secret)",
       "ReadFile(~/.paseo/config.json)",
-      "ReadFile(~/.paseo/hub/**)"
+      "ReadFile(~/.paseo/hub/**)",
+      "Task",
+      "Agent",
+      "agent",
+      "task"
+    ],
+    "ask": [
+      "run_shell_command"
     ]
   }
 }

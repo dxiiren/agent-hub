@@ -7,7 +7,7 @@ export function normalise(res) {
     const tc = p.request?.metadata?.rawRequest?.toolCall ?? {};
     const raw = tc.rawInput ?? {};
     const paths = [...(tc.locations ?? []).map((l) => l.path), raw.file_path, raw.path, raw.absolute_path, raw.dir_path, ...(Array.isArray(raw.paths) ? raw.paths : [])].filter((x) => typeof x === "string" && x);
-    return { agentId: p.agentId, id: p.request?.id, name: p.request?.name, kind: tc.kind ?? p.request?.detail?.type, paths: [...new Set(paths)], extras: ["pattern", "glob", "include", "recursive", "exclude"].some((k) => raw[k] != null) };
+    return { agentId: p.agentId, id: p.request?.id, name: p.request?.name, kind: tc.kind ?? p.request?.detail?.type, paths: [...new Set(paths)], ...(typeof raw.command === "string" ? { command: raw.command } : {}), extras: ["pattern", "glob", "include", "recursive", "exclude"].some((k) => raw[k] != null) };
   });
 }
 
