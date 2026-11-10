@@ -44,10 +44,31 @@ export function pathAllowed(path, roots, env = process.env, home = os.homedir())
 }
 
 const SHELL_TOOLS = /^(execute|run_?shell_?command|bash|shell)$/i;
-const READ_CMDS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "head", "tail", "cat", "ls", "wc", "find", "sort", "uniq", "cut", "nl", "findstr", "type", "dir"]);
-const STDIN_CMDS = new Set(["head", "tail", "wc", "sort", "uniq", "cut", "nl"]); // after a pipe: flags and numbers only, no file
+const READ_CMDS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "head", "tail", "cat", "ls", "wc", "find", "findstr", "type", "dir"]); // sort/uniq/cut/nl dropped: sort -o/--compress-program/-T and uniq write files
+const STDIN_CMDS = new Set(["head", "tail", "wc"]); // after a pipe: flags and numbers only, no file
+const GREP_CMDS = new Set(["grep", "egrep", "fgrep", "rg"]);
 const META = /[;&<>`$(){}*?\[\]~!\\\n\r"']/; // no chaining, redirects, substitution, globs, quotes (a pattern needing them is refused, never guessed)
-const BAD_FLAG = /^(-[A-Za-z]*[rR]|--recursive|--dereference-recursive|--include|--exclude|--include-dir|--exclude-dir|-exec|-execdir|-ok|-okdir|-delete|-fprint\w*|-fls|-i|--in-place|-f|--file|-e|--pre|--follow|-L|--files|--type-list|-z|--search-zip)(=|$)/;
+// Strict flag allowlist per command (a denylist was bypassed by `grep -d recurse`): short flags only, so any other letter, any --long flag and `--` are refused. bool = letters with no value, val = letters taking a number.
+const FLAGS = { grep: { bool: "nicEFwvhHsIq", val: "ABCm", num: true }, rg: { bool: "nicFwvsNlHh", val: "ABCm", num: true }, head: { bool: "", val: "n", num: true }, tail: { bool: "", val: "n", num: true }, wc: { bool: "lwc", val: "" }, ls: { bool: "l1hF", val: "" }, cat: { bool: "", val: "" }, type: { bool: "", val: "" }, dir: { bool: "", val: "" } };
+FLAGS.egrep = FLAGS.fgrep = FLAGS.grep;
+function parseFlags(c, args) {
+  const { bool, val, num } = FLAGS[c], rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith("-") || a === "-") { rest.push(a); continue; }
+    if (a.startsWith("--") || (num && /^-\d+$/.test(a))) { if (a.startsWith("--")) return { bad: a }; continue; }
+    const cl = a.slice(1);
+    for (let k = 0; k < cl.length; k++) {
+      const ch = cl[k];
+      if (bool.includes(ch)) continue;
+      if (val.includes(ch)) { const att = cl.slice(k + 1); if (att ? !/^\d+$/.test(att) : !/^\d+$/.test(args[++i] ?? "")) return { bad: a }; break; }
+      return { bad: a };
+    }
+  }
+  return { rest };
+}
+const FINDSTR_FLAG = /^\/(n|i|r|l|b|e|x|v|c:.*)$/i, WINF = /^\/[A-Za-z]+(:|$)/;
+const FIND_VAL = { "-name": /./, "-iname": /./, "-path": /./, "-type": /^[fdl]$/, "-maxdepth": /^\d+$/ };
 /** Split a command line into pipe segments of words. A word may be single- or double-quoted (a grep pattern usually is); inside quotes only $, backtick, backslash and newline are refused, outside quotes every META character is. null = refused. */
 function tokenize(cmd) {
   const segs = [[]]; let w = null, q = null;
@@ -63,25 +84,37 @@ function tokenize(cmd) {
   }
   if (q) return null; push(); return segs.every((x) => x.length) ? segs : null;
 }
-/** One read-only shell command line -> { ok, why }. Allowed: grep/rg PATTERN FILE..., sed -n 'Np' FILE (no quotes, so only the plain form), head/tail/cat/ls/wc/find on files, joined by | with stdin-only filters. Every file argument must pass pathAllowed (a regular file inside the task folder, nothing sensitive); no recursion, no -exec/-delete/-i, no network or other commands. */
-export function commandAllowed(cmd, roots, env, home) {
+/** One read-only shell command line -> { ok, why }. Allowed: grep/rg PATTERN FILE..., `sed -n Np FILE` (exact form), head/tail -n N, wc -l/-w/-c, cat/type, ls/dir, find with -name/-iname/-path/-type/-maxdepth, joined by | with stdin-only filters (grep, head, tail, wc). Only flags on the per-command allowlist pass. Every file argument must pass pathAllowed (a regular file inside the task folder, nothing sensitive); relative names resolve against `cwd` (the request's working directory, default roots[0]). */
+export function commandAllowed(cmd, roots, env, home, cwd) {
   if (typeof cmd !== "string" || !cmd.trim() || cmd.length > 600) return { ok: false, why: "empty or too long command" };
   const segs = tokenize(cmd); if (!segs) return { ok: false, why: "shell metacharacter in command: " + cmd.slice(0, 160) };
+  const base = cwd ?? roots[0] ?? "", abs = (p) => (isAbsolute(p) ? p : resolve(base, p));
   for (let i = 0; i < segs.length; i++) {
     const [c, ...args] = segs[i]; if (!c) return { ok: false, why: "empty pipe segment" };
     if (!READ_CMDS.has(c)) return { ok: false, why: `command ${c} is not a read command` };
-    if (c === "sed" && !(args[0] === "-n" && /^\d+(,\d+)?p$/.test(args[1] ?? ""))) return { ok: false, why: "sed only as: sed -n Np FILE" };
-    const WINF = /^\/[A-Za-z]+(:|$)/, isFlag = (a) => a.startsWith("-") || (["findstr", "dir"].includes(c) && WINF.test(a)); const flags = args.filter((a) => isFlag(a) && !/^-\d+$/.test(a)), bad = flags.find((a) => BAD_FLAG.test(a) || /^\/(s|f:|g:|d:|a:)/i.test(a)); if (bad) return { ok: false, why: `flag ${bad} is not allowed` };
-    let rest = args.filter((a) => !isFlag(a));
-    if (c === "sed") rest = rest.slice(1); // the Np script
-    else if (c === "grep" || c === "egrep" || c === "fgrep" || c === "rg") rest = rest.slice(1); // the pattern
-    else if (c === "findstr" && !args.some((x) => /^\/c:/i.test(x))) rest = rest.slice(1); // findstr PATTERN FILE (a /C:pattern flag is the pattern itself)
-    if ((c === "head" || c === "tail") && flags.some((f) => f === "-n" || f === "-c")) rest = rest.filter((a) => !/^\d+$/.test(a));
-    rest = rest.filter((a) => !(/^\d+$/.test(a) && (STDIN_CMDS.has(c) || c === "head" || c === "tail"))); // numeric option values
-    if (i > 0) { if (!STDIN_CMDS.has(c) && !(["grep", "egrep", "fgrep", "rg"].includes(c) && rest.length === 0)) return { ok: false, why: `${c} after a pipe` }; if (rest.length) return { ok: false, why: "file argument after a pipe" }; continue; }
-    if (c !== "ls" && c !== "find" && c !== "dir" && !rest.length) return { ok: false, why: `${c} has no file argument` };
-    if (c === "ls" || c === "find" || c === "dir") { if (c === "find") rest = segs[i].slice(1).filter((x, k, arr) => !arr.slice(0, k + 1).some((y) => y.startsWith("-"))); if (!rest.length) rest.push("."); for (const d of rest) { const r = pathAllowedDirOrFile(d, roots, env, home); if (!r.ok) return { ok: false, why: `${d}: ${r.why}` }; } continue; }
-    for (const p of rest) { const r = pathAllowed(p, roots, env, home); if (!r.ok) return { ok: false, why: `${p}: ${r.why}` }; }
+    if (i > 0 && !STDIN_CMDS.has(c) && !GREP_CMDS.has(c)) return { ok: false, why: `${c} after a pipe` };
+    let rest;
+    if (c === "sed") {
+      if (!(args.length === 3 && args[0] === "-n" && /^\d+(,\d+)?p$/.test(args[1]))) return { ok: false, why: "sed only as: sed -n Np FILE" };
+      rest = [args[2]];
+    } else if (c === "find") {
+      let k = 0; const paths = []; while (k < args.length && !args[k].startsWith("-")) paths.push(args[k++]);
+      for (; k < args.length; k += 2) { const re = FIND_VAL[args[k]]; if (!re || args[k + 1] === undefined || !re.test(args[k + 1])) return { ok: false, why: `find expression ${args[k]} is not allowed` }; }
+      for (const d of paths.length ? paths : ["."]) { const r = pathAllowedDirOrFile(abs(d), roots, env, home); if (!r.ok) return { ok: false, why: `${d}: ${r.why}` }; }
+      continue;
+    } else if (c === "findstr") {
+      const fl = args.filter((a) => WINF.test(a)), bad = fl.find((a) => !FINDSTR_FLAG.test(a)); if (bad) return { ok: false, why: `flag ${bad} is not allowed` };
+      if (args.some((a) => a.startsWith("-"))) return { ok: false, why: "findstr takes /flags only" };
+      rest = args.filter((a) => !WINF.test(a)); if (!fl.some((a) => /^\/c:/i.test(a))) rest = rest.slice(1); // PATTERN FILE (a /C:pattern flag is the pattern itself)
+    } else {
+      const p = parseFlags(c, args); if (p.bad) return { ok: false, why: `flag ${p.bad} is not allowed` };
+      rest = p.rest;
+      if (GREP_CMDS.has(c)) rest = rest.slice(1); // the pattern
+    }
+    if (i > 0) { if (rest.length) return { ok: false, why: "file argument after a pipe" }; continue; }
+    if (c === "ls" || c === "dir") { for (const d of rest.length ? rest : ["."]) { const r = pathAllowedDirOrFile(abs(d), roots, env, home); if (!r.ok) return { ok: false, why: `${d}: ${r.why}` }; } continue; }
+    if (!rest.length) return { ok: false, why: `${c} has no file argument` };
+    for (const p of rest) { const r = pathAllowed(abs(p), roots, env, home); if (!r.ok) return { ok: false, why: `${p}: ${r.why}` }; }
   }
   return { ok: true };
 }
@@ -97,7 +130,12 @@ function pathAllowedDirOrFile(path, roots, env, home) {
 
 /** One normalised pending request ({name, kind, paths, command}) -> { ok, why }. */
 export function requestAllowed(req, roots, env, home) {
-  if (SHELL_TOOLS.test(String(req?.name ?? "").trim()) || req?.kind === "execute") return req.command ? commandAllowed(req.command, roots, env, home) : { ok: false, why: "shell request carries no command" };
+  if (SHELL_TOOLS.test(String(req?.name ?? "").trim()) || req?.kind === "execute") {
+    if (!req.command) return { ok: false, why: "shell request carries no command" };
+    // a request that names its own working directory runs there, so it must be the task cwd or inside it; relative file arguments then resolve against it
+    if (req.cwd != null) { const d = typeof req.cwd === "string" && req.cwd ? pathAllowedDirOrFile(req.cwd, [roots[0]], env, home) : { ok: false, why: "bad directory" }; if (!d.ok) return { ok: false, why: "working directory " + req.cwd + ": " + d.why }; }
+    return commandAllowed(req.command, roots, env, home, req.cwd ?? undefined);
+  }
   if (!READ_TOOLS.test(String(req?.name ?? "").trim()) || (req.kind && req.kind !== "read" && req.kind !== "search")) return { ok: false, why: `tool ${req?.name} is not a plain read` };
   if (req.extras) return { ok: false, why: "request has a pattern/glob/include/recursive field" };
   if (!req.paths?.length) return { ok: false, why: "request carries no path" };

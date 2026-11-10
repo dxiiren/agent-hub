@@ -897,3 +897,49 @@ test("readguard shell: Windows findstr/type/dir on in-cwd files pass; /S, /F:, /
   for (const c of ["findstr /N \"foo\" app.log", "findstr /N /C:\"foo bar\" app.log", "type app.log", "dir"]) assert.equal(sh(c), true, c);
   for (const c of ["findstr /S foo app.log", "findstr /F:list.txt foo app.log", "findstr foo " + CRED, "type " + CRED, "dir /S", "findstr foo app.log > x", "findstr foo app.log 2>nul"]) assert.equal(sh(c), false, c);
 });
+
+// ---- readguard hardening (security review of a1a33c3): strict flag allowlist, no sort/uniq, exact sed, restricted find, request cwd ----
+test("readguard hardening: good read-only commands still pass", () => {
+  const { cwd } = sandbox(); md2(j2(cwd, "sub")); wf2(j2(cwd, "sub", "leaf.txt"), "x");
+  const sh = (command, c) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command, ...(c ? { cwd: c } : {}) }], [cwd]).ok;
+  for (const c of ["grep -n foo app.log", "grep -niE foo app.log", "grep -A 2 -B2 -m 5 foo app.log", "grep -C3 foo app.log | head -n 5", "rg -n foo app.log", "findstr /n foo app.log", "findstr /N /I foo app.log", "sed -n 10,20p app.log", "sed -n 7p app.log", "head -n 50 app.log", "head -5 app.log", "tail -n 20 app.log | wc -l", "wc -lw app.log", "cat app.log", "type app.log", "ls", "ls -l", "dir", "find . -name app.log", "find . -type f -maxdepth 2 -iname app.log", "find . -path ./sub/leaf.txt"]) assert.equal(sh(c), true, c);
+  assert.equal(sh("cat leaf.txt", j2(cwd, "sub")), true, "a relative file resolves against the request directory");
+  assert.equal(sh("cat app.log", cwd), true);
+});
+test("readguard hardening 1: grep/rg/findstr/head/tail/wc/ls/cat flags are an allowlist (-d recurse, --directories=, --dereference*, -R/-r clusters, -f/-e/-o files, ls -R)", () => {
+  const { cwd } = sandbox(); wf2(j2(cwd, "recurse"), "x");
+  const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
+  for (const c of ["grep -d recurse recurse app.log", "grep --directories=recurse foo app.log", "grep --directories recurse foo app.log", "grep --dereference-recursive foo app.log", "grep --dereference foo app.log", "grep -nr foo app.log", "grep -nR foo app.log", "grep -nd foo app.log", "grep -D read foo app.log", "grep -f app.log foo app.log", "grep -e foo app.log", "grep -z foo app.log", "grep --include=x foo app.log", "grep -- foo app.log", "rg -L foo app.log", "rg --follow foo app.log", "rg --files app.log", "rg -z foo app.log", "rg -r x foo app.log", "findstr /S foo app.log", "findstr /D:. foo app.log", "findstr /G:app.log foo app.log", "findstr -s foo app.log", "head -c 5 app.log", "head -f app.log", "tail -f app.log", "tail --follow app.log", "head -n 5x app.log", "wc -L app.log", "wc --files0-from=app.log", "ls -R", "ls -lR", "ls --recursive", "dir /S", "cat -n app.log", "cat --help", "type /S app.log"]) assert.equal(sh(c), false, c);
+});
+test("readguard hardening 2: sort and uniq are not read commands (-o/--output/--compress-program/--files0-from/-T write or run things)", () => {
+  const { cwd } = sandbox();
+  const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
+  for (const c of ["sort app.log", "sort -o app.log app.log", "sort --output=app.log app.log", "sort --compress-program=x app.log", "sort --files0-from=app.log", "sort -T . app.log", "uniq app.log", "uniq app.log out", "grep foo app.log | sort", "grep foo app.log | sort -o x", "grep foo app.log | uniq", "cat app.log | cut -f1", "cat app.log | nl"]) assert.equal(sh(c), false, c);
+});
+test("readguard hardening 3: sed only as `sed -n N[,M]p FILE`; any other flag, -i*, --in-place*, -E, extra file or script is refused", () => {
+  const { cwd } = sandbox();
+  const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
+  for (const c of ["sed -n 5p -E app.log", "sed -n 5p app.log app.log", "sed -n 5p -i app.log", "sed -n 5p -ibak app.log", "sed -n 5p --in-place app.log", "sed -n 5p --in-place=.b app.log", "sed -n 5p -s app.log", "sed -n 5p --debug app.log", "sed -i 5p app.log", "sed -ni 5p app.log", "sed -n 5w app.log", "sed -n 5p", "sed 5p app.log", "grep foo app.log | sed -n 5p"]) assert.equal(sh(c), false, c);
+});
+test("readguard hardening 4: find refuses -H -L -P -follow and every action but -name/-iname/-type/-maxdepth/-path; paths before the expression are checked", () => {
+  const { cwd, d } = sandbox();
+  const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
+  for (const c of ["find -H . -name app.log", "find -L . -name app.log", "find -P . -name app.log", "find . -follow -name app.log", "find . -name app.log -follow", "find . -ls", "find . -name app.log -print0", "find . -name app.log -fprint o", "find . -fprintf o x", "find . -type f -newer app.log", "find . -name app.log -delete", "find . -name app.log -exec cat x", "find . -type x", "find . -maxdepth x", "find . -name", "find ../outside -name data.txt", "find " + j2(d, "outside") + " -name data.txt", "find . /etc -name x", "find . -name app.log -o -name x"]) assert.equal(sh(c), false, c);
+});
+test("readguard hardening 5: a shell request's own working directory must be the task cwd or inside it; relative files resolve against it and are path-checked", () => {
+  const { cwd, d } = sandbox(); md2(j2(cwd, "sub")); wf2(j2(cwd, "sub", "leaf.txt"), "x"); wf2(j2(d, "outside", "app.log"), "x"); wf2(j2(d, "outside", "ok.txt"), "x");
+  const sh = (command, c) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command, cwd: c }], [cwd]).ok;
+  assert.equal(sh("cat app.log", j2(d, "outside")), false, "cwd outside the task folder");
+  assert.equal(sh("cat ok.txt", j2(d, "outside")), false);
+  assert.equal(sh("ls", j2(d, "outside")), false);
+  assert.equal(sh("find . -name app.log", j2(d, "outside")), false);
+  assert.equal(sh("cat app.log", ".."), false, "relative cwd that escapes");
+  assert.equal(sh("cat app.log", 5), false, "non-string cwd");
+  assert.equal(sh("cat .env", cwd), false, "sensitive file still refused with an explicit cwd");
+  assert.equal(sh("cat leaf.txt", j2(cwd, ".hidden")), false, "dot-folder cwd");
+  assert.equal(sh("cat app.log", j2(cwd, "sub")), false, "app.log is not in sub");
+  assert.equal(sh("cat leaf.txt", j2(cwd, "sub")), true);
+  const n = (rawInput) => normalise({ permissions: [{ agentId: "A", request: { id: "R", name: "execute", metadata: { rawRequest: { toolCall: { kind: "execute", rawInput } } } } }] })[0];
+  for (const k of ["directory", "dir_path", "cwd"]) assert.equal(n({ command: "cat a", [k]: "/w/x" }).cwd, "/w/x", k);
+  assert.equal(n({ command: "cat a" }).cwd, undefined);
+});
