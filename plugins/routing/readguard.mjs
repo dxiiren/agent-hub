@@ -44,7 +44,7 @@ export function pathAllowed(path, roots, env = process.env, home = os.homedir())
 }
 
 const SHELL_TOOLS = /^(execute|run_?shell_?command|bash|shell)$/i;
-const READ_CMDS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "head", "tail", "cat", "ls", "wc", "find", "findstr", "type", "dir"]); // sort/uniq/cut/nl dropped: sort -o/--compress-program/-T and uniq write files
+const READ_CMDS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "head", "tail", "cat", "ls", "wc", "find", "type", "dir"]); // sort/uniq/cut/nl dropped: sort -o/--compress-program/-T and uniq write files
 const STDIN_CMDS = new Set(["head", "tail", "wc"]); // after a pipe: flags and numbers only, no file
 const GREP_CMDS = new Set(["grep", "egrep", "fgrep", "rg"]);
 const META = /[;&<>`$(){}*?\[\]~!\\\n\r"']/; // no chaining, redirects, substitution, globs, quotes (a pattern needing them is refused, never guessed)
@@ -67,7 +67,6 @@ function parseFlags(c, args) {
   }
   return { rest };
 }
-const FINDSTR_FLAG = /^\/(n|i|r|l|b|e|x|v|c:.*)$/i, WINF = /^\/[A-Za-z]+(:|$)/;
 const FIND_VAL = { "-name": /./, "-iname": /./, "-path": /./, "-type": /^[fdl]$/, "-maxdepth": /^\d+$/ };
 /** Split a command line into pipe segments of words. A word may be single- or double-quoted (a grep pattern usually is); inside quotes only $, backtick, backslash and newline are refused, outside quotes every META character is. null = refused. */
 function tokenize(cmd) {
@@ -102,10 +101,6 @@ export function commandAllowed(cmd, roots, env, home, cwd) {
       for (; k < args.length; k += 2) { const re = FIND_VAL[args[k]]; if (!re || args[k + 1] === undefined || !re.test(args[k + 1])) return { ok: false, why: `find expression ${args[k]} is not allowed` }; }
       for (const d of paths.length ? paths : ["."]) { const r = pathAllowedDirOrFile(abs(d), roots, env, home); if (!r.ok) return { ok: false, why: `${d}: ${r.why}` }; }
       continue;
-    } else if (c === "findstr") {
-      const fl = args.filter((a) => WINF.test(a)), bad = fl.find((a) => !FINDSTR_FLAG.test(a)); if (bad) return { ok: false, why: `flag ${bad} is not allowed` };
-      if (args.some((a) => a.startsWith("-"))) return { ok: false, why: "findstr takes /flags only" };
-      rest = args.filter((a) => !WINF.test(a)); if (!fl.some((a) => /^\/c:/i.test(a))) rest = rest.slice(1); // PATTERN FILE (a /C:pattern flag is the pattern itself)
     } else {
       const p = parseFlags(c, args); if (p.bad) return { ok: false, why: `flag ${p.bad} is not allowed` };
       rest = p.rest;
@@ -132,9 +127,18 @@ function pathAllowedDirOrFile(path, roots, env, home) {
 export function requestAllowed(req, roots, env, home) {
   if (SHELL_TOOLS.test(String(req?.name ?? "").trim()) || req?.kind === "execute") {
     if (!req.command) return { ok: false, why: "shell request carries no command" };
-    // a request that names its own working directory runs there, so it must be the task cwd or inside it; relative file arguments then resolve against it
-    if (req.cwd != null) { const d = typeof req.cwd === "string" && req.cwd ? pathAllowedDirOrFile(req.cwd, [roots[0]], env, home) : { ok: false, why: "bad directory" }; if (!d.ok) return { ok: false, why: "working directory " + req.cwd + ": " + d.why }; }
-    return commandAllowed(req.command, roots, env, home, req.cwd ?? undefined);
+    // every directory field the request names (cwds; legacy single cwd) resolves to an absolute realpath against the task cwd; each must be the task cwd or inside it, and all must be the same place
+    const base = real(resolve(roots[0] ?? ""));
+    if (!base) return { ok: false, why: "task cwd does not resolve" };
+    const named = req.cwds ?? (req.cwd != null ? [req.cwd] : []), dirs = [];
+    for (const n of named) {
+      const d = typeof n === "string" && n ? real(resolve(base, n)) : null;
+      if (!d) return { ok: false, why: "bad working directory " + String(n) };
+      const v = pathAllowedDirOrFile(d, [base], env, home); if (!v.ok) return { ok: false, why: "working directory " + n + ": " + v.why };
+      dirs.push(d);
+    }
+    if (new Set(dirs.map(norm)).size > 1) return { ok: false, why: "request names different working directories" };
+    return commandAllowed(req.command, roots, env, home, dirs[0] ?? base);
   }
   if (!READ_TOOLS.test(String(req?.name ?? "").trim()) || (req.kind && req.kind !== "read" && req.kind !== "search")) return { ok: false, why: `tool ${req?.name} is not a plain read` };
   if (req.extras) return { ok: false, why: "request has a pattern/glob/include/recursive field" };
