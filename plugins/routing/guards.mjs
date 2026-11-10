@@ -19,7 +19,7 @@ const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export function workspaceCapError(paseo, cap = WORKSPACE_CAP) {
   const r = paseo(["workspace", "ls", "--json"]);
   if (!Array.isArray(r)) return null;
-  return r.length > cap ? `WORKSPACE_CAP: ${r.length} active Paseo workspaces (limit ${cap}); every daemon git operation slows down with each one, so no new route starts. Run \`agent-hub reaper --once\` (archives idle workspaces) and retry.` : null;
+  return r.length > cap ? `WORKSPACE_CAP: ${r.length} active Paseo workspaces (limit ${cap}); every daemon git operation slows down with each one, so no new route starts. Run \`node plugins/routing/reaper.mjs --sweep --idle 5m\` (archives idle workspaces; dry run with --dry-run) and retry.` : null;
 }
 
 // NO git anywhere in this file (security review 08-11, three rounds): git run against a folder an agent could write to executes that folder's fsmonitor, hooks, filter drivers and submodule config. Idleness is read with lstat only.
@@ -63,11 +63,14 @@ export async function sweepIdleWorkspaces({ run, runDir = null, now = Date.now, 
   const home = norm(process.env.USERPROFILE || process.env.HOME || "");
   const cwdKey = (c) => norm(c).replace(/^~(?=\/)/, home); // separators first, then ~: a Windows "~\x" cwd must match too
   const busy = new Set(agents.filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => cwdKey(a.cwd ?? "")));
-  const victims = [], skipped = [];
+  const victims = [], skipped = [], seenCwd = new Set();
   for (const w of rows) {
     const cwd = String(w.cwd ?? ""), why = (m) => skipped.push({ id: w.workspaceId, cwd, why: m });
     if (!cwd || !w.workspaceId) continue;
     if (PERMANENT.test(norm(cwd))) { why("permanent folder"); continue; }
+    // a second record for one folder outside Paseo's worktree root: archive drops only the record, the folder and its first record stay (09-11: 8 records of one r13 worktree)
+    const dupKey = cwdKey(cwd), dup = seenCwd.has(dupKey); seenCwd.add(dupKey);
+    if (dup && w.isolation === "worktree" && exists(cwd) && !norm(cwd).startsWith(paseoRoot) && !busy.has(dupKey)) { victims.push(w); continue; }
     if (!exists(cwd)) { if (exists(dirname(cwd))) victims.push(w); else why("parent missing (unmounted volume?)"); continue; }
     if (w.isolation !== "worktree") { why("not a worktree workspace"); continue; }
     if (busy.has(cwdKey(cwd))) { why("agent running"); continue; }
@@ -80,6 +83,7 @@ export async function sweepIdleWorkspaces({ run, runDir = null, now = Date.now, 
     await Promise.all(todo.slice(i, i + ARCHIVE_PARALLEL).map(async (w) => {
       if (dry) { archived.push(w.workspaceId); return; }
       const r = await safe(["workspace", "archive", w.workspaceId, "--json"]);
+      if (r?.error && /timeout/i.test(JSON.stringify(r.error))) { archived.push(w.workspaceId); return; } // a loaded daemon answers after the CLI's 60 s but still archives (09-11): never stop the sweep on it
       if (r?.error && !/not found|archived/i.test(JSON.stringify(r.error))) { failed ??= JSON.stringify(r.error).slice(0, 160); return; }
       archived.push(w.workspaceId); if (runDir) forgetHubWorktree(runDir, w.cwd); log(`archived ${w.workspaceId} ${w.cwd}`);
     }));
@@ -109,6 +113,13 @@ export async function archiveIdleLocalWorkspaces({ run, dry = false, log = () =>
   return out;
 }
 
+/** Archive every workspace record whose cwd is `path` (async `run`). `paseo run --cwd <worktree>` makes its own record next to the one `worktree create` made, and only the route's own id was ever archived: 09-11, 2 records per finished route. */
+export async function archiveWorkspacesAt(run, path) {
+  const rows = await run(["workspace", "ls", "--json"]).catch(() => null); let ok = true;
+  for (const w of Array.isArray(rows) ? rows : []) if (w.workspaceId && norm(w.cwd) === norm(path)) { const r = await run(["workspace", "archive", w.workspaceId, "--json"]); if (r?.error && !/not found|archived/i.test(String(r.error))) ok = false; }
+  return ok;
+}
+
 // ---- 2. cleanup spool: the route frees its slot as soon as the agent answered; this runs afterwards
 export const spoolDir = (runDir) => join(runDir, "cleanup");
 export function spoolCleanup(runDir, job) {
@@ -126,6 +137,7 @@ export async function drainSpool({ runDir, run, archiveAgent, concurrency = 2 })
       let ok = true;
       if (job.agentId) ok = await archiveAgent(run, job.agentId);
       if (ok && job.workspaceId) { const r = await run(["workspace", "archive", job.workspaceId, "--json"]); if (r?.error && !/not found|archived/i.test(String(r.error))) ok = false; } // the route's own workspace, only after its agent is gone
+      if (ok && job.wt?.path) ok = await archiveWorkspacesAt(run, job.wt.path); // every record of the route's worktree, before the worktree itself
       if (ok && job.wt?.name) { const r = await run(["worktree", "archive", job.wt.name, ...(job.cwd ? ["--cwd", job.cwd] : [])]); if (r?.error && !/not found|archived|no such/i.test(String(r.error))) ok = false; }
       if (ok) { rmSync(f, { force: true }); done.push(job.agentId ?? job.wt?.name); }
     }

@@ -119,7 +119,7 @@ export function createWorktree(paseo, o, { sleep = (ms) => Atomics.wait(new Int3
     if (!/timeout|no answer|DAEMON_REQUEST_TIMEOUT|unreachable/i.test(String(c?.error ?? ""))) return c;
     for (;;) { // the CLI gave up but the daemon is still working on it
       const d = find(o.home, name); if (d) return { name, branchName: name, worktreePath: d };
-      if ((now() - t0) / 1000 >= limitS) return { daemonBusy: true, error: `WORKTREE_CREATE_TIMEOUT: the daemon did not create the worktree within ${limitS} s (saturated daemon: too many active workspaces or other routes queued); nothing was retried. Run \`agent-hub reaper --once\`, check \`paseo workspace ls\`, retry.` };
+      if ((now() - t0) / 1000 >= limitS) return { daemonBusy: true, error: `WORKTREE_CREATE_TIMEOUT: the daemon did not create the worktree within ${limitS} s (saturated daemon: too many active workspaces or other routes queued); nothing was retried. Run \`node plugins/routing/reaper.mjs --sweep --idle 5m\`, check \`paseo workspace ls\`, retry.` };
       sleep(3000);
     }
   } finally { gate?.release?.(); }
@@ -481,9 +481,9 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   const retire = (id, wt, defer = false) => {
     if (o.keep) return;
     // finished route: free the slot first, archive later (guards.mjs spool; the slow daemon archive used to hold the slot 40-55 s per call). Failed attempts still retire in line.
-    if (defer && o.deferCleanup && o.ledgerDir && (id || wt)) { try { spoolCleanup(o.ledgerDir, { agentId: id ?? null, workspaceId: wsOf.get(id) ?? null, wt: wt ? { name: wt.name } : null, cwd: o.cwd, home: o.home ?? null }); live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name); wsOpen.delete(wsOf.get(id)); ledger(); return; } catch { /* spool unwritable: archive in line */ } }
+    if (defer && o.deferCleanup && o.ledgerDir && (id || wt)) { try { spoolCleanup(o.ledgerDir, { agentId: id ?? null, workspaceId: wsOf.get(id) ?? null, wt: wt ? { name: wt.name, path: wt.path } : null, cwd: o.cwd, home: o.home ?? null }); live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name); wsOpen.delete(wsOf.get(id)); ledger(); return; } catch { /* spool unwritable: archive in line */ } }
     if (id) { archive(id); archiveWs(wsOf.get(id)); }
-    if (wt) paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]);
+    if (wt) { const rows = paseo(["workspace", "ls", "--json"]); for (const w of Array.isArray(rows) ? rows : []) if (w.workspaceId && String(w.cwd ?? "").split("\\").join("/").toLowerCase() === wt.path.split("\\").join("/").toLowerCase()) paseo(["workspace", "archive", w.workspaceId]); paseo(["worktree", "archive", wt.name, "--cwd", o.cwd]); }
     live.delete(id ?? "wt:" + wt?.name); if (id && wt) live.delete("wt:" + wt.name);
     dropProjects(wt); ledger();
   };

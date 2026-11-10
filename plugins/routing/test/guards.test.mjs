@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 import { runRoute } from "../route.mjs";
 import { acquireEntry } from "../entry-gate.mjs";
 
@@ -28,9 +28,9 @@ test("(1)(5) sweep of 50 workspaces archives only idle, clean, non-permanent, no
 });
 
 test("(1) a pass stops at the first failed archive (busy daemon) and a missing folder with a present parent is archived", async () => {
-  let n = 0; const run = async (a) => a[1] === "ls" ? ws(5) : a[0] === "ls" ? [] : (++n === 2 ? { error: "timeout" } : { status: "archived" });
+  let n = 0; const run = async (a) => a[1] === "ls" ? ws(5) : a[0] === "ls" ? [] : (++n === 2 ? { error: "daemon refused" } : { status: "archived" });
   const r = await sweepIdleWorkspaces({ run, exists: () => true, touched: () => false, paseoRoot: "c:/nowhere/" });
-  assert.equal(r.archived.length, 2); assert.match(r.failed, /timeout/); // batch of 3: 1 ok, 1 failed, 1 ok, then the pass stops
+  assert.equal(r.archived.length, 2); assert.match(r.failed, /refused/); // batch of 3: 1 ok, 1 failed, 1 ok, then the pass stops
   const g = await sweepIdleWorkspaces({ run: async (a) => (a[1] === "ls" ? ws(1) : a[0] === "ls" ? [] : { status: "archived" }), exists: (p) => !p.endsWith("w0") });
   assert.deepEqual(g.archived, ["wks_0"]);
 });
@@ -213,4 +213,19 @@ test("archiveIdleLocalWorkspaces: archives local workspaces that own no agent; k
   assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/owned", status: "idle" }]) }), ["b", "c"]);
   assert.deepEqual(done, ["b", "c"]);
   assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk({ error: "x" }) }), []);
+});
+
+test("(2) a route worktree leaves every workspace record at its path archived, not just one", async () => {
+  const calls = []; const rows = [{ workspaceId: "wks_a", cwd: "C:/P/Route-X" }, { workspaceId: "wks_b", cwd: "c:/p/route-x" }, { workspaceId: "wks_c", cwd: "c:/p/route-y" }];
+  const run = async (a) => (calls.push(a.slice(0, 3).join(" ")), a[1] === "ls" ? rows : {});
+  assert.equal(await archiveWorkspacesAt(run, "C:/p/route-x"), true);
+  assert.deepEqual(calls, ["workspace ls --json", "workspace archive wks_a", "workspace archive wks_b"]);
+});
+
+test("(1) sweep: duplicate records of one folder outside Paseo's root are archived (one stays); a CLI timeout does not stop the sweep", async () => {
+  const rows = [0, 1, 2].map((i) => ({ workspaceId: "wks_d" + i, cwd: "C:/Users/u/Desktop/code/worktree/same", isolation: "worktree" }));
+  const done = [];
+  const run = async (a) => a[1] === "ls" ? rows : a[0] === "ls" ? [] : (done.push(a[2]), a[2] === "wks_d1" ? { error: "Error: Timeout waiting for message (60000ms)" } : {});
+  const r = await sweepIdleWorkspaces({ run, exists: () => true, touched: () => true, paseoRoot: "c:/nowhere/" }); // touched = true: only the duplicate rule can archive
+  assert.deepEqual(done, ["wks_d1", "wks_d2"]); assert.equal(r.failed, null); assert.equal(r.archived.length, 2);
 });

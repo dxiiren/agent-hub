@@ -155,7 +155,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const home = opt("--home") ?? process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"); const r = await sweepRegistryOffline({ file: join(home, "projects", "workspaces.json"), runDir: runDir(), dry, log: console.log });
     console.log(JSON.stringify({ archived: r.archived.length, skipped: r.skipped.map((x) => `${x.cwd}: ${x.why}`), failed: r.failed })); process.exit(0);
   }
-  if (a.includes("--sweep")) { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), dry, log: console.log }); console.log(JSON.stringify({ archived: r.archived, skipped: r.skipped.length, failed: r.failed })); process.exit(0); }
+  if (a.includes("--sweep")) { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), dry, idleS: opt("--idle") ? parseAge(opt("--idle")) : undefined, log: console.log }); console.log(JSON.stringify({ archived: r.archived, skipped: r.skipped.length, failed: r.failed })); process.exit(0); }
   if (a.includes("--once") || dry) { const r = await reapOnce({ run, olderThan, dry }); console.log(JSON.stringify(r)); process.exit(0); }
   startReaper({ run, olderThan, everyMs: (opt("--every") ? parseAge(opt("--every")) : REAP_EVERY_MS / 1000) * 1000, log: console.log }); // the interval is unref'd, so hold the process open
   setInterval(() => {}, 1 << 30);
