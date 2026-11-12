@@ -210,7 +210,8 @@ test("archiveIdleLocalWorkspaces: archives local workspaces that own no agent; k
   ];
   const done = [];
   const mk = (agents) => async (a) => (a[0] === "workspace" && a[1] === "ls" ? rows : a[0] === "ls" ? agents : (done.push(a[2]), { status: "archived" }));
-  assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/owned", status: "idle" }]) }), ["b", "c"]);
+  assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/owned", status: "idle", created: "1 minute ago" }]) }), ["b", "c"]);
+  assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/owned", status: "error", created: "2 hours ago" }]), dry: true }), ["a", "b", "c"]); // a long-finished agent no longer owns its workspace
   assert.deepEqual(done, ["b", "c"]);
   assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk({ error: "x" }) }), []);
 });

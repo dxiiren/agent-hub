@@ -5,6 +5,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { ageSeconds } from "./cleanup.mjs";
 
 export const WORKSPACE_CAP = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || 20;
 export const STUCK_S = Number(process.env.AGENT_HUB_STUCK_S) || 25 * 60; // soak 08-11: a route queued behind the laptop budget waits 9-11 min before it has an agent, so 10 min reaped a healthy route
@@ -103,7 +104,8 @@ export async function archiveIdleLocalWorkspaces({ run, dry = false, log = () =>
   if (!Array.isArray(rows) || !Array.isArray(agents)) return [];
   const home = norm(process.env.USERPROFILE || process.env.HOME || "");
   const cwdKey = (c) => norm(c).replace(/^~(?=\/)/, home);
-  const owned = new Set(agents.map((a) => cwdKey(a.cwd ?? "")));
+  // a finished agent (idle/error/closed) older than 10 min no longer owns its workspace: 09:06 12-11, 102 local workspaces were all kept by finished agents and the 20-workspace cap refused every route
+  const owned = new Set(agents.filter((a) => !FINISHED.test(String(a.status ?? "")) || ageSeconds(a.created) < 10 * 60).map((a) => cwdKey(a.cwd ?? "")));
   const out = [];
   for (const w of rows) {
     if (!w.workspaceId || !w.cwd || w.isolation !== "local" || PERMANENT.test(norm(w.cwd)) || owned.has(cwdKey(w.cwd))) continue;
