@@ -11,7 +11,7 @@ import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSy
 import path, { basename, dirname, join, resolve, sep, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
-import { gateDir, loadState, writeRequest } from "../gate/server/store.mjs";
+import { gateDir, loadState, writeRequest, peekRequest } from "../gate/server/store.mjs";
 import { runGate, gateOpts, EMPTY_TREE, hasSecret } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
@@ -286,6 +286,9 @@ export function agentCwd(paseo, agentId) {
   return c?.replace(/^~(?=[\\/])/, os.homedir());
 }
 
+/** A gate that saw no change at all is not a PASS for an edit task. */
+const judgeNoDiff = (r, cwd) => r.status === "PASS" && !r.noRepo && r.files === 0 && r.changed === 0 ? { ...r, status: "FAIL", reasons: ["no diff produced: the agent changed nothing in " + cwd] } : r;
+
 /** Run the gate in the agent's cwd with the same options the plugin hook uses (gateOpts). First failure: re-prompt once (decision 47) and block until the agent is idle; freeze it; second gate. */
 export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   // `paseo ls` abbreviates the home folder as "~"
@@ -294,7 +297,7 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
   // a gate that saw no change at all is not a PASS for an edit task: the agent produced nothing (the fake gates of older callers carry no counts, so they are unaffected)
-  const judge = (r) => r.status === "PASS" && !r.noRepo && r.files === 0 && r.changed === 0 ? { ...r, status: "FAIL", reasons: ["no diff produced: the agent changed nothing in " + cwd] } : r;
+  const judge = (r) => judgeNoDiff(r, cwd);
   // the secret scan is bounded too (a 1,800-file folder held a slot for 3+ min per gate, twice): at least 120 s, at most until the attempt deadline
   const gopts = () => ({ ...gateOpts(routes, cwd, o.gate, o.base, o.maxLines), ...(o.deadlineMs ? { deadlineMs: Math.max(o.deadlineMs, (o.now ?? Date.now)() + 120_000) } : {}) });
   let res = judge(gate(cwd, gopts()));
@@ -708,21 +711,29 @@ export function checkFileInputs(files, { roots = [process.cwd()], env = process.
 }
 
 /** `route --status <agentId>`: what a route that was cut off (caller timeout, Ctrl-C) would have returned: the agent's status, the plugin's gate state and its last answer. */
-export function runStatus(id, paseo, dir = gateDir()) {
+export function runStatus(id, paseo, dir = gateDir(), gate = runGate, routes = {}) {
   if (!AGENT_ID_RE.test(id ?? "")) return { error: "not an agent id: " + String(id).slice(0, 60) };
   const i = paseo(["inspect", id]);
   if (!i || i.error) return { agentId: id, error: String(i?.error ?? "no answer from the daemon").slice(0, 200) };
   const st = String(i.Status ?? "").toLowerCase();
-  let gate = null; try { gate = loadState(dir)[id] ?? null; } catch { /* no gate state yet */ }
+  let g = null; try { g = loadState(dir)[id] ?? null; } catch { /* no gate state yet */ }
   const done = st === "idle" || st === "closed";
-  return withAnswer({ agentId: id, status: done ? "completed" : st || "unknown", agentStatus: i.Status, archived: i.Archived === true, cwd: i.Cwd, gate: gate ? { status: gate.status ?? null, attempts: gate.attempts ?? 0 } : null, ...(done ? {} : { hint: "the agent is still working; ask again later" }) }, paseo);
+  let out = { agentId: id, status: done ? "completed" : st || "unknown", agentStatus: i.Status, archived: i.Archived === true, cwd: i.Cwd, gate: g ? { status: g.status ?? null, attempts: g.attempts ?? 0 } : null, ...(done ? {} : { hint: "the agent is still working; ask again later" }) };
+  // A route cut off before its caller-side gate ran leaves the request unclaimed and no gate state: "completed, gate null" would accept a no-op edit. Run the requested gate now.
+  const cwd = i.Cwd ? (agentCwd(paseo, id) ?? i.Cwd) : null;
+  const req = !g && done && cwd ? peekRequest(dir, cwd) : null;
+  if (req && req.cmd) {
+    const r = judgeNoDiff(gate(cwd, gateOpts(routes, cwd, req.cmd, req.base, req.maxLines)), cwd);
+    out = { ...out, status: r.status === "PASS" ? "completed" : "gate-failed", gate: { status: r.status, reasons: r.reasons ?? [], attempts: 0, ranBy: "status" } };
+  }
+  return withAnswer(out, paseo);
 }
 
 function main(argv) {
   if (argv[0] === "--status") {
     const home = absPath(argv.includes("--home") ? argv[argv.indexOf("--home") + 1] : process.env.PASEO_HOME);
-    const res = runStatus(argv[1], withRetry(cliPaseo(home)));
-    console.log(JSON.stringify(res)); return res.error ? 1 : 0;
+    const res = runStatus(argv[1], withRetry(cliPaseo(home)), undefined, runGate, loadRoutes());
+    console.log(JSON.stringify(res)); return res.error || res.status === "gate-failed" ? 1 : 0;
   }
   if (argv[0] === "--resolve") { // print what an alias maps to right now
     try { console.log(resolveCached(argv[1], cliPaseo(process.env.PASEO_HOME))); return 0; } catch (e) { console.error(e.message); return 1; }
