@@ -41,7 +41,8 @@ export const readState = (file) => { try { return JSON.parse(readFileSync(file, 
 export const writeState = (file, s) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file + '.tmp', JSON.stringify(s)); renameSync(file + '.tmp', file); };
 
 /** Providers that are Enabled but report status "error" (08-11 22:30: HTTP 200 while qoder and both Qwens were in error and every route hung). Pure. */
-export const providerErrors = (list) => (Array.isArray(list) ? list : []).filter((x) => /^enabled$/i.test(String(x.enabled)) && x.status === 'error').map((x) => x.provider);
+// 13-11: a provider on another host (name ends in its IP, e.g. qwen-code-192-168-1-122) in error means THAT host is off; a local restart cannot fix it and killed every running task each 12 min for 3 h.
+export const providerErrors = (list) => (Array.isArray(list) ? list : []).filter((x) => /^enabled$/i.test(String(x.enabled)) && x.status === 'error' && !/-\d+-\d+-\d+-\d+$/.test(String(x.provider))).map((x) => x.provider);
 
 /** HTTP health, then the daemon must answer `paseo ls`, and no enabled provider may be in error. -> {state:'up'|'sick'|'hung'|'down', detail} */
 export async function deepProbe(port, home, { http = (p) => probeDaemon(p, { attempts: 1, timeoutMs: Number(process.env.AGENT_HUB_WATCHDOG_TIMEOUT_MS || 10000) }), run = null } = {}) {
