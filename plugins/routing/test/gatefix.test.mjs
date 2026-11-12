@@ -114,3 +114,15 @@ test("hung routes: the gate stops scanning at its deadline and fails closed", ()
   const r = runGate(d, { cmd: OK, deadlineMs: Date.now() - 1 });
   assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /gate time limit/);
 });
+test("issue 5: --status of a cut-off route runs the requested gate (a no-op edit is not 'completed, gate null')", () => {
+  const d = repo(), b = head(d), st = mkdtempSync(join(tmpdir(), "st-"));
+  writeRequest(st, d, 'node -e "process.exit(0)"', b, {});
+  const p = (a) => (a[0] === "inspect" ? { Status: "idle", Cwd: d } : a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "logs" ? { text: "x\nok\n" } : {});
+  const r = runStatus("A1", p, st, runGate, { gateRetry: false });
+  assert.equal(r.status, "gate-failed"); assert.equal(r.gate.status, "FAIL"); assert.match(r.gate.reasons.join(), /no diff produced/);
+  writeFileSync(join(d, "a.txt"), "y\n"); // a real edit with a failing gate command must fail too
+  writeRequest(st, d, 'node -e "process.exit(1)"', b, {});
+  assert.equal(runStatus("A1", p, st, runGate, {}).status, "gate-failed");
+  writeRequest(st, d, 'node -e "process.exit(0)"', b, {});
+  { const r3 = runStatus("A1", p, st, runGate, {}); assert.equal(r3.status, "completed", JSON.stringify(r3.gate)); }
+});

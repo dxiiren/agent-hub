@@ -25,6 +25,11 @@ export function claimRequest(dir, cwd) {
   try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } finally { try { unlinkSync(f); } catch { /* gone */ } }
 }
 
+/** Read the pending request for cwd without taking it (route --status: a cut-off route never ran its caller-side gate). */
+export function peekRequest(dir, cwd) {
+  try { return JSON.parse(readFileSync(reqFile(dir, cwd), "utf8")); } catch { return null; }
+}
+
 const stateFile = (dir) => join(dir, "state.json");
 
 export function loadState(dir) {
