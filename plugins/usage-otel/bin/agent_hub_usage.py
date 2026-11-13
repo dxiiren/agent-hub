@@ -38,7 +38,7 @@ def summarize(path):
 
 def backfilled(d, sid=None):
     """Sidecar usage-backfill-*.jsonl (usage.jsonl is never rewritten). Two line kinds:
-    tag   {agent, ts, session}: an existing no-session record of usage.jsonl counts under `session`;
+    tag   {agent, ts, session}: an existing record of usage.jsonl (no session, or another session's) counts under `session`;
     synth {provider, session, in/out/cost_usd ..., backfill:true}: a run that was never recorded (claude -p, codex exec).
     sid given: the tagged records plus the synth lines of that session; sid None (--all): synth lines only (tagged ones are already in usage.jsonl)."""
     import glob, json
@@ -63,7 +63,7 @@ def backfilled(d, sid=None):
                     r = json.loads(line)
                 except ValueError:
                     continue
-                if not r.get("session") and (r.get("agent"), r.get("ts")) in tag:
+                if (r.get("agent"), r.get("ts")) in tag:
                     out.append(r)
     return out
 

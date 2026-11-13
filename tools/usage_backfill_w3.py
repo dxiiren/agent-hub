@@ -46,6 +46,37 @@ def sonnet_costs(logs):
     return c
 
 
+QMODEL = {"df": "dfmodel", "ef": "efficient", "qf": "qfmodel", "q4": "qmodel_latest"}
+
+
+def load_usage(path):
+    out = []
+    for ln in open(path, encoding="utf-8"):
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            continue
+        if r.get("agent") and r.get("ts"):
+            r["_t"] = dt.datetime.strptime(r["ts"][:19], "%Y-%m-%dT%H:%M:%S")
+            out.append(r)
+    return out
+
+
+def match_row(rows, used, p, slack=120):
+    """Nearest unused record of the pass's provider (and model, for qoder) whose ts lies in [t_end - secs - slack, t_end + slack]."""
+    prov, _ = FAM[p["fam"]]
+    lo, hi = p["t_end"] - dt.timedelta(seconds=p["secs"] + slack), p["t_end"] + dt.timedelta(seconds=slack)
+    best = None
+    for r in rows:
+        if id(r) in used or r.get("provider") != prov or not lo <= r["_t"] <= hi:
+            continue
+        if p["fam"] in QMODEL and r.get("model") != QMODEL[p["fam"]]:
+            continue
+        if best is None or abs(r["_t"] - p["t_end"]) < abs(best["_t"] - p["t_end"]):
+            best = r
+    return best
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--logs", required=True); ap.add_argument("--label", default="w3-api-docs"); ap.add_argument("--out", required=True)
@@ -72,34 +103,29 @@ def main():
         lines.append({"ts": p["t_end"].strftime("%Y-%m-%dT%H:%M:%S.000Z"), "agent": "bf-%s-%s-%s" % (p["spec"], p["batch"], p["t_end"].strftime("%H%M%S")), "session": a.label,
                       "provider": prov, "model": model, "dev": "backfill", "client": "reviewdrive", "task": "api-docs-" + p["kind"], "in": 0, "out": 0, "cached": 0,
                       "cost_usd": round(cost, 6), "credits": 0.0, "backfill": True, "estimated": estimated or p["fam"] == "cx", "ok": p["ok"], "secs": p["secs"]})
-    # 2. tag existing no-session usage.jsonl records that fall inside a hub-family pass window
-    win = collections.defaultdict(list)
-    for p in passes:
-        if p["fam"] in ("sn", "cx") or p["secs"] is None:
-            continue
-        win[FAM[p["fam"]][0]].append((p["t_end"] - dt.timedelta(seconds=p["secs"] + 60), p["t_end"] + dt.timedelta(seconds=60)))
-    tagged, scanned, nosess = 0, 0, 0
-    for ln in open(a.usage, encoding="utf-8"):
-        try:
-            r = json.loads(ln)
-        except ValueError:
-            continue
-        scanned += 1
-        if r.get("session"):
-            continue
-        nosess += 1
-        ws = win.get(r.get("provider"))
-        if not ws:
-            continue
-        t = dt.datetime.strptime(r["ts"][:19], "%Y-%m-%dT%H:%M:%S")
-        if any(lo <= t <= hi for lo, hi in ws):
-            lines.append({"agent": r["agent"], "ts": r["ts"], "session": a.label}); tagged += 1
+    # 2. one-to-one: each hub pass takes the nearest unused usage.jsonl record (same provider, and model for qoder) inside its window and tags it
+    #    (tag works for no-session records and for records another session already owns); a pass with no record becomes a synth line. So view count == pass count.
+    rows = load_usage(a.usage)
+    scanned = len(rows)
+    tagged, matched, synth_hub = 0, set(), 0
+    for p in sorted((p for p in passes if p["fam"] not in ("sn", "cx")), key=lambda x: x["t_end"]):
+        prov, model = FAM[p["fam"]]
+        r = match_row(rows, matched, p) if p["secs"] is not None else None
+        if r is not None:
+            matched.add(id(r)); tagged += 1
+            lines.append({"agent": r["agent"], "ts": r["ts"], "session": a.label})
+        else:
+            synth_hub += 1
+            lines.append({"ts": p["t_end"].strftime("%Y-%m-%dT%H:%M:%S.000Z"), "agent": "bf-%s-%s-%s-%s" % (p["spec"], p["batch"], p["fam"], p["t_end"].strftime("%H%M%S")), "session": a.label,
+                          "provider": prov, "model": model, "dev": "backfill", "client": "reviewdrive", "task": "api-docs-" + p["kind"], "in": 0, "out": 0, "cached": 0, "cost_usd": 0.0,
+                          "credits": 0.0, "backfill": True, "estimated": True, "ok": p["ok"], "secs": p["secs"]})
+    nosess = sum(1 for r in rows if not r.get("session"))
     agg = collections.defaultdict(lambda: [0, 0, 0])
     for p in passes:
         g = agg[p["fam"]]; g[0] += 1; g[1] += p["ok"]; g[2] += p["secs"] or 0
     rep = {"passes": {k: {"passes": v[0], "ok": v[1], "ok_pct": round(100 * v[1] / v[0], 1), "hours": round(v[2] / 3600, 1)} for k, v in sorted(agg.items())},
            "sonnet_cost_known_n": len(known), "sonnet_cost_mean": round(mean, 4), "sonnet_estimated_passes": est, "synth_records": sum(1 for l in lines if l.get("backfill")),
-           "tagged_existing": tagged, "usage_records": scanned, "usage_no_session": nosess}
+           "tagged_existing": tagged, "synth_hub": synth_hub, "usage_records": scanned, "usage_no_session": nosess}
     if not a.dry:
         with open(a.out, "w", encoding="utf-8") as f:
             for l in lines:
