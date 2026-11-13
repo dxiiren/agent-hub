@@ -165,13 +165,19 @@ class ParseTest(unittest.TestCase):
             exe = os.path.join(t, "paseo" + (".cmd" if os.name == "nt" else ""))
             with redirect_stdout(io.StringIO()):
                 os.environ["AGENT_HUB_DIRECT_PASEO"] = exe
+                os.environ["AGENT_HUB_GATE_DIR"] = os.path.join(t, "gate")
                 try:
-                    dr.main(["paseo", "--session", "s-lab", "--", "run", "--provider", "codex", "hi"])
+                    dr.main(["paseo", "--session", "s-lab", "--", "run", "--cwd", t, "--provider", "codex", "hi"])
                 finally:
-                    del os.environ["AGENT_HUB_DIRECT_PASEO"]
+                    del os.environ["AGENT_HUB_DIRECT_PASEO"]; del os.environ["AGENT_HUB_GATE_DIR"]
             args = open(os.path.join(t, "paseo.args")).read()
             self.assertIn("session=s-lab", args)
             self.assertIn("run --label", args)
+            # the gate plugin's store holds the direct marker for that cwd (the plugin never trusts the label): sha1 of lower-cased, slash-normalised cwd
+            import hashlib
+            key = hashlib.sha1(os.path.abspath(t).replace(chr(92), "/").rstrip("/").lower().encode()).hexdigest()
+            m = json.load(open(os.path.join(t, "gate", "requests", key + ".json")))
+            self.assertIs(m["direct"], True); self.assertIsNone(m["cmd"]); self.assertGreater(m["ts"], 1_700_000_000_000)
 
 
 if __name__ == "__main__":

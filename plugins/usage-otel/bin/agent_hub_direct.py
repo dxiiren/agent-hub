@@ -193,6 +193,20 @@ def usage_recorded(rec):
     return bool(rec.get("in") or rec.get("out") or (str(rec.get("provider", "")).startswith("qoder") and float(rec.get("credits") or 0) > 0))
 
 
+def gate_dir():
+    return os.environ.get("AGENT_HUB_GATE_DIR") or os.path.join(os.environ.get("PASEO_HOME") or os.path.join(os.path.expanduser("~"), ".paseo"), "gate")
+
+
+def write_direct_marker(cwd):
+    """Tell the gate plugin (plugins/gate/server/store.mjs, same key: sha1 of the lower-cased, slash-normalised cwd) that the next agent created in cwd is a direct run,
+    which is never gated or re-prompted. Written BEFORE the agent exists, in the plugin's store, so no agent label can fake it."""
+    import hashlib
+    key = hashlib.sha1(cwd.replace("\\", "/").rstrip("/").lower().encode("utf8")).hexdigest()
+    d = os.path.join(gate_dir(), "requests"); os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, key + ".json"), "w") as f:
+        json.dump({"cmd": None, "base": None, "direct": True, "ts": int(time.time() * 1000)}, f)
+
+
 def main(argv):
     if argv and argv[0] == "direct":
         argv = argv[1:]
@@ -236,6 +250,11 @@ def main(argv):
         mk = mark_active("paseo-direct")
         hb = heartbeat(mk)
         try:
+            run_cwd = opt_arg(args, "--cwd") or os.getcwd()
+            try:
+                write_direct_marker(os.path.abspath(run_cwd))
+            except OSError as e:
+                sys.stderr.write("agent-hub direct: could not write the gate marker (%s); the run may be gated\n" % e)
             return subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
         finally:
             unmark(mk, hb)
