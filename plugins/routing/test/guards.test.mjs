@@ -310,13 +310,15 @@ test("archivePermanentDuplicates keeps the oldest record, archives the rest, nev
   const cwd = "C:/Users/u/Desktop/code/Keep-Me";
   const rows = ["a", "b", "c"].map((id) => ({ workspaceId: "wks_" + id, cwd }));
   const reg = [{ workspaceId: "wks_a", createdAt: "2026-11-12", isPaseoOwnedWorktree: false }, { workspaceId: "wks_b", createdAt: "2026-11-10", isPaseoOwnedWorktree: false }, { workspaceId: "wks_c", createdAt: "2026-11-13", isPaseoOwnedWorktree: false }];
-  const calls = []; const run = async (a) => { calls.push(a.join(" ")); return a[1] === "ls" ? rows : {}; };
+  const calls = []; const run = async (a) => { calls.push(a.join(" ")); return a[0] === "ls" ? [] : a[1] === "ls" ? rows : {}; };
   const r = await archivePermanentDuplicates({ run, exists: () => true, readRegistry: () => reg });
   assert.deepEqual(r.archived.sort(), ["wks_a", "wks_c"]); assert.equal(Object.values(r.kept)[0], "wks_b");
-  let gone = false; const r2 = await archivePermanentDuplicates({ run: async (a) => { if (a[1] === "archive") gone = true; return a[1] === "ls" ? rows : {}; }, exists: () => !gone, readRegistry: () => reg });
+  let gone = false; const r2 = await archivePermanentDuplicates({ run: async (a) => { if (a[1] === "archive") gone = true; return a[0] === "ls" ? [] : a[1] === "ls" ? rows : {}; }, exists: () => !gone, readRegistry: () => reg });
   assert.equal(r2.archived.length, 1); assert.match(r2.failed, /FOLDER GONE/);
   const r3 = await archivePermanentDuplicates({ run, exists: () => true, readRegistry: () => [] }); // no proof the folder is user-owned: nothing archived
   assert.equal(r3.archived.length, 0);
+  const r4 = await archivePermanentDuplicates({ run: async (a) => (a[0] === "ls" ? [{ id: "x", status: "running", cwd }] : a[1] === "ls" ? rows : {}), exists: () => true, readRegistry: () => reg }); // a running agent in that folder: group untouched
+  assert.equal(r4.archived.length, 0);
 });
 
 test("reprobeErrorProviders runs the diagnostic only for enabled providers in error, at most max", async () => {

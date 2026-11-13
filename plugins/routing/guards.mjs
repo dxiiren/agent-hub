@@ -140,10 +140,12 @@ export async function archivePermanentDuplicates({ run, home = process.env.PASEO
   const out = { archived: [], kept: {}, skipped: [], failed: null };
   const rows = await run(["workspace", "ls", "--json"]).catch(() => null); if (!Array.isArray(rows)) { out.failed = "workspace list unreadable"; return out; }
   let reg = {}; try { const r = readRegistry(); const it = Array.isArray(r) ? r : Object.values(r.workspaces ?? r); for (const w of it) if (w?.workspaceId) reg[w.workspaceId] = w; } catch { /* no registry: nothing is proven owned by the user, so nothing is archived */ }
+  const agents = await run(["ls"]).catch(() => null); const busy = new Set((Array.isArray(agents) ? agents : []).filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => norm(a.cwd ?? "")));
   const groups = new Map();
   for (const w of rows) if (w.workspaceId && w.cwd && PERMANENT.test(norm(w.cwd))) { const k = norm(w.cwd); (groups.get(k) ?? groups.set(k, []).get(k)).push(w); }
   for (const [k, list] of groups) {
     if (list.length < 2) continue;
+    if (!Array.isArray(agents) || busy.has(norm(list[0].cwd))) { out.skipped.push(`${k}: agent running or agent list unreadable`); continue; } // an agent may be bound to any record: leave the group alone
     list.sort((a, b) => String(reg[a.workspaceId]?.createdAt ?? "9").localeCompare(String(reg[b.workspaceId]?.createdAt ?? "9")));
     out.kept[k] = list[0].workspaceId;
     for (const w of list.slice(1)) {
