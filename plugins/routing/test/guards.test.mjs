@@ -4,7 +4,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
-import { runRoute } from "../route.mjs";
+process.env.AGENT_HUB_PERMANENT_WS = "/desktop/code/keep-me"; // the permanent-folder list is configuration, never tracked code
+import { runRoute as runRouteReal } from "../route.mjs";
+const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test and needs gitleaks on PATH; a route test must not depend on the machine
 import { acquireEntry } from "../entry-gate.mjs";
 
 const ws = (n, extra = {}) => Array.from({ length: n }, (_, i) => ({ workspaceId: "wks_" + i, cwd: `C:/Users/u/Desktop/code/worktree/w${i}`, isolation: "worktree", ...extra }));
@@ -17,7 +19,7 @@ test("(1)(5) 50 workspaces: new routes are refused with the count; 20 or fewer p
 });
 
 test("(1)(5) sweep of 50 workspaces archives only idle, clean, non-permanent, non-running ones and never deletes anything itself", async () => {
-  const rows = [...ws(50), { workspaceId: "wks_perm", cwd: "C:/Users/u/Desktop/code/KollectApps-NextGen-staging", isolation: "worktree" }, { workspaceId: "wks_local", cwd: "C:/Users/u/Desktop/code/repo", isolation: "local" }];
+  const rows = [...ws(50), { workspaceId: "wks_perm", cwd: "C:/Users/u/Desktop/code/Keep-Me", isolation: "worktree" }, { workspaceId: "wks_local", cwd: "C:/Users/u/Desktop/code/repo", isolation: "local" }];
   const archived = [];
   const run = async (a) => a[0] === "workspace" && a[1] === "ls" ? rows : a[0] === "ls" ? [{ status: "running", cwd: "C:\\Users\\u\\Desktop\\code\\worktree\\w3" }, { status: "idle", cwd: "C:/Users/u/Desktop/code/worktree/w4" }] : (archived.push(a[2]), { status: "archived" });
   const now = Date.now();
@@ -206,7 +208,7 @@ test("archiveIdleLocalWorkspaces: archives local workspaces that own no agent; k
   const rows = [
     { workspaceId: "a", cwd: "C:/x/owned", isolation: "local" }, { workspaceId: "b", cwd: "C:/x/free", isolation: "local" },
     { workspaceId: "c", cwd: "C:/x/free", isolation: "local" }, { workspaceId: "d", cwd: "C:/x/wt", isolation: "worktree" },
-    { workspaceId: "e", cwd: "C:/u/Desktop/code/KollectApps-NextGen-staging", isolation: "local" },
+    { workspaceId: "e", cwd: "C:/u/Desktop/code/Keep-Me", isolation: "local" },
   ];
   const done = [];
   const mk = (agents) => async (a) => (a[0] === "workspace" && a[1] === "ls" ? rows : a[0] === "ls" ? agents : (done.push(a[2]), { status: "archived" }));

@@ -68,6 +68,7 @@ test("unsafe mode is dropped outside a worktree and kept (with --new-workspace w
 
 import { cmpVer, newest, parseCodex, parseClaude, resolveEntry, stalePins } from "../resolve.mjs";
 import { writeFileSync, mkdtempSync } from "node:fs";
+const privDir = () => mkdtempSync(join(tmpdir(), "rt-")); // a private empty cwd: the read-only snapshot walks the cwd, and a shared %TEMP% full of other tools files made these tests slow and order-dependent
 import { join } from "node:path";
 const cacheFile = join(mkdtempSync(join(tmpdir(), "rs-")), "models.json");
 const slugs = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6.2-astra"];
@@ -143,7 +144,7 @@ test("doctor version comparison", () => {
 
 test("DAEMON_UNREACHABLE on start is retried up to 3 times with backoff, then succeeds", () => {
   let n = 0; const waits = [];
-  const raw = (args) => (args[0] === "ls" ? [] : ["logs", "stop", "archive", "project", "provider"].includes(args[0]) ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
+  const raw = (args) => (args[0] === "ls" ? [] : ["logs", "stop", "archive", "project", "provider", "workspace"].includes(args[0]) ? {} : ++n < 3 ? { error: "DAEMON_UNREACHABLE: status probe" } : { status: "completed", agentId: "R1" });
   const r = runRoute(o, withRetry(raw, { sleep: (ms) => waits.push(ms), jitter: () => 0 }), routes);
   assert.equal(r.used, "codex/a"); assert.equal(n, 3); assert.deepEqual(waits, [2000, 4000]);
 });
@@ -796,17 +797,17 @@ test("read-only route: an empty or refusing answer falls through to the next ent
   for (const bad of ["", "I cannot complete this task. I am Qwen Code."]) {
     const texts = { A1: bad, A2: "epsilon" }; let n = 0;
     const p = (a) => a[0] === "ls" ? [] : a[0] === "run" ? { status: "completed", agentId: "A" + ++n } : a[0] === "logs" ? { text: (a.includes("--filter") ? "" : "[User] q\n") + texts[a[1]] + "\n" } : {};
-    const r = runRoute({ ...o, type: "summarise", cwd: tmpdir() }, p, r2);
+    const r = runRoute({ ...o, type: "summarise", cwd: privDir() }, p, r2);
     assert.equal(r.used, "qwen/b"); assert.equal(r.answer, "epsilon");
     assert.match(r.trace.find((t) => t.error).error, /next provider tried/);
   }
   let n = 0; const p = (a) => a[0] === "ls" ? [] : a[0] === "run" ? { status: "completed", agentId: "E" + ++n } : a[0] === "logs" ? { text: "" } : {};
-  assert.equal(runRoute({ ...o, type: "edit", cwd: tmpdir(), noAsk: true }, p, r2).used, "qwen/a", "an edit with no answer text is still a result");
+  assert.equal(runRoute({ ...o, type: "edit", cwd: privDir(), noAsk: true }, p, r2).used, "qwen/a", "an edit with no answer text is still a result");
 });
 test("read-only task on a Qwen-style provider gets the open-the-file reminder; an edit task and a Claude provider get the prompt unchanged", () => {
   const r2 = { readOnlyEnforced: ALL, readOnlyModes: { qwen: "read-only" }, slots: {}, routes: { summarise: ["qwen/a"] } };
   const p = fake({ run: () => ({ status: "completed", agentId: "A" }), logs: "" });
-  runRoute({ ...o, type: "summarise", prompt: "read x", cwd: tmpdir(), provider: "qwen-code" }, p, r2);
+  runRoute({ ...o, type: "summarise", prompt: "read x", cwd: privDir(), provider: "qwen-code" }, p, r2);
   const run = p.calls.find((c) => c[0] === "run"); assert.equal(run.at(-1), "read x" + READ_FIRST);
   const q = fake({ run: () => ({ status: "completed", agentId: "A" }) });
   runRoute({ ...o, prompt: "edit y" }, q, routes);
@@ -822,14 +823,14 @@ test("timeouts: review and summarise get an 8 min attempt limit by default, rout
 test("a read-only attempt that gets no answer in its limit fails with a plain reason and the chain moves on; the run call is bounded", () => {
   let clock = 0; const calls = []; const runs = [];
   const paseo = (a, opts) => { calls.push([a, opts]); if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); clock += runs.length === 1 ? 481_000 : 5_000; return runs.length === 1 ? { agentId: "H1", status: "running" } : { agentId: "H2", status: "completed" }; } if (a[0] === "logs") return { text: "answer text" }; if (a[0] === "provider") return [{ provider: "qwen-code" }, { provider: "claude-clean" }]; return a[0] === "ls" ? [] : {}; };
-  const r = runRoute({ type: "review", prompt: "p", cwd: tmpdir(), session: "s", now: () => clock, providerState: new Map([["qwen-code", true], ["claude-clean", true]]) }, paseo, { readOnlyModes: {}, routes: { review: ["qwen-code", "claude-clean"] } });
+  const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", now: () => clock, providerState: new Map([["qwen-code", true], ["claude-clean", true]]) }, paseo, { readOnlyModes: {}, routes: { review: ["qwen-code", "claude-clean"] } });
   assert.match(r.trace[0].error, /^no answer in 8 min/); assert.equal(runs.length, 2); assert.equal(r.used, "claude-clean");
   const run1 = calls.find(([a]) => a[0] === "run"); assert.equal(run1[0][run1[0].indexOf("--wait-timeout") + 1], "480s"); assert.equal(run1[1].timeoutMs, 510_000);
 });
 test("a laptop-hosted model that is refused for low RAM is skipped at once, not waited for", () => {
   let slept = 0; const runs = [];
   const paseo = (a) => { if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); return { agentId: "A", status: "completed" }; } return a[0] === "logs" ? { text: "ok" } : a[0] === "ls" ? [] : {}; };
-  const r = runRoute({ type: "review", prompt: "p", cwd: tmpdir(), session: "s", freeMem: () => 1, laptop: () => ({ freeGb: 8, cpuPct: 0 }), sleep: () => { slept++; }, providerState: new Map([["qwen-laptop", true], ["claude-clean", true]]) }, paseo, { slots: { "qwen-laptop": 1, "claude-clean": 2 }, minFreeRamGbByProvider: { "claude-clean": 0.5 }, routes: { review: ["qwen-laptop", "claude-clean"] } });
+  const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", freeMem: () => 1, laptop: () => ({ freeGb: 8, cpuPct: 0 }), sleep: () => { slept++; }, providerState: new Map([["qwen-laptop", true], ["claude-clean", true]]) }, paseo, { slots: { "qwen-laptop": 1, "claude-clean": 2 }, minFreeRamGbByProvider: { "claude-clean": 0.5 }, routes: { review: ["qwen-laptop", "claude-clean"] } });
   assert.equal(slept, 0); assert.match(r.trace[0].skip, /^low RAM.*skipped at once/); assert.deepEqual(runs, ["claude-clean"]);
 });
 

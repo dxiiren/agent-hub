@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSyncSafe } from '../plugins/routing/spawn-safe.mjs';
 import { context, isAlive, isDaemonProcess, listenerPid, readDaemonPid } from './daemon-ctl.mjs';
 import { probeDaemon } from './daemon-health.mjs';
 import { homedir } from 'node:os';
@@ -47,7 +48,7 @@ export const providerErrors = (list) => (Array.isArray(list) ? list : []).filter
 /** HTTP health, then the daemon must answer `paseo ls`, and no enabled provider may be in error. -> {state:'up'|'sick'|'hung'|'down', detail} */
 export async function deepProbe(port, home, { http = (p) => probeDaemon(p, { attempts: 1, timeoutMs: Number(process.env.AGENT_HUB_WATCHDOG_TIMEOUT_MS || 10000) }), run = null } = {}) {
   const h = await http(port); if (h.state !== 'up') return h;
-  const paseo = run ?? ((args, ms) => spawnSync(process.platform === 'win32' ? 'paseo.cmd' : 'paseo', ['--home', home, ...args], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', windowsHide: true, shell: process.platform === 'win32' }));
+  const paseo = run ?? ((args, ms) => spawnSyncSafe(process.platform === 'win32' ? 'paseo.cmd' : 'paseo', ['--home', home, ...args], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', windowsHide: true }));
   const ls = paseo(['ls', '--json'], Number(process.env.AGENT_HUB_WATCHDOG_LS_MS || 60000)); // 30 s flapped 3x on 13-11 while workspace churn made the daemon answer slowly
   if (ls.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo ls` does not' };
   const pr = paseo(['provider', 'ls', '--json'], 90000);
@@ -56,8 +57,10 @@ export async function deepProbe(port, home, { http = (p) => probeDaemon(p, { att
   return bad.length ? { state: 'sick', detail: `provider status error: ${bad.join(', ')}` } : { state: 'up' };
 }
 
-export const alertFile0 = () => process.env.AGENT_HUB_ALERT_FILE || 'C:/Users/kollectsystems/Desktop/code/worktree/_junk/hubkeeper/HUB-ALERT.txt';
-export const incidentLog0 = () => process.env.AGENT_HUB_INCIDENT_LOG || 'C:/Users/kollectsystems/Desktop/code/worktree/_junk/ci-speed/pool-feedback.md';
+// Where the alert and incident notes go: env, else "alertFile" / "incidentLog" in the git-ignored config/hub.local.json, else under ~/.paseo (no owner paths in tracked code).
+const localCfg = (k) => { try { return JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'config', 'hub.local.json'), 'utf8'))[k]; } catch { return undefined; } };
+export const alertFile0 = () => process.env.AGENT_HUB_ALERT_FILE || localCfg('alertFile') || join(homedir(), '.paseo', 'HUB-ALERT.txt');
+export const incidentLog0 = () => process.env.AGENT_HUB_INCIDENT_LOG || localCfg('incidentLog') || join(homedir(), '.paseo', 'incidents.md');
 /** HUB-ALERT.txt exists exactly while the hub is unhealthy; each incident is one line in pool-feedback.md at its start and one at its end. */
 export function syncAlert({ ok, detail, now = Date.now(), alertFile = alertFile0(), incidentLog = incidentLog0() }) {
   const t = new Date(now).toISOString().slice(11, 16);

@@ -5,6 +5,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { ageSeconds } from "./cleanup.mjs";
 
 export const WORKSPACE_CAP = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || 20;
@@ -12,7 +13,15 @@ export const STUCK_S = Number(process.env.AGENT_HUB_STUCK_S) || 25 * 60; // soak
 export const SWEEP_IDLE_S = 30 * 60;
 const ARCHIVE_PARALLEL = 3;
 const norm = (p) => String(p ?? "").split("\\").join("/").replace(/\/+$/, "").toLowerCase();
-const PERMANENT = /\/desktop\/code\/kollectapps-nextgen-(workspace|staging|sit)$/;
+// Folders the sweeps never archive: path suffixes from AGENT_HUB_PERMANENT_WS (comma list) or "permanentWorkspaces" in the git-ignored config/hub.local.json.
+// Never listed in tracked code: this repo is public and the owner's folder names are internal. Nothing configured = nothing is protected by name.
+let permCfg = null;
+const permList = () => {
+  const e = process.env.AGENT_HUB_PERMANENT_WS; if (e !== undefined) return e.split(",").map(norm).filter(Boolean);
+  if (!permCfg) { try { permCfg = (JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "hub.local.json"), "utf8")).permanentWorkspaces ?? []).map(norm); } catch { permCfg = []; } }
+  return permCfg;
+};
+const PERMANENT = { test: (cwd) => permList().some((suffix) => norm(cwd).endsWith(suffix)) };
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 
 // ---- 1. workspace cap
