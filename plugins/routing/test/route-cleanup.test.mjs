@@ -117,3 +117,9 @@ test("hard kill while `paseo run` still waits (agent id unknown): the ledger nam
   assert.deepEqual(await reapDeadRoutes({ run, dir, dead: () => true }), ["GHOST"]);
   assert.ok(log.some((c) => c[0] === "archive" && c[1] === "GHOST"));
 });
+
+test("reaper stops a driver's direct agent (route=direct) running past 3 h, not a younger one or a --keep one", async () => {
+  const rows = { "route=direct": [{ id: "stuck-direct", status: "running", created: "4 hours ago" }, { id: "working-direct", status: "running", created: "40 minutes ago" }, { id: "kept", status: "running", created: "5 hours ago" }], "route/keep=1": [{ id: "kept" }] };
+  const r = await reapFinished({ run: asyncRun(rows), routes });
+  assert.deepEqual(r.archived, ["stuck-direct"]);
+});

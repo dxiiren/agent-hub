@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { reprobeErrorProviders, archivePermanentDuplicates, archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 process.env.AGENT_HUB_PERMANENT_WS = "/desktop/code/keep-me"; // the permanent-folder list is configuration, never tracked code
 import { runRoute as runRouteReal } from "../route.mjs";
 const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test and needs gitleaks on PATH; a route test must not depend on the machine
@@ -304,4 +304,24 @@ test("(security) a junction under the worktrees root that points outside it: the
   symlinkSync(outer, join(root, "hj"), "junction");
   assert.equal(gitWorktreeRemove(join(root, "hj", "route-ee55"), true, [], root), false); assert.ok(ex(join(outer, "route-ee55")));
   rmSync(base, { recursive: true, force: true });
+});
+
+test("archivePermanentDuplicates keeps the oldest record, archives the rest, never touches the folder, stops if it vanishes", async () => {
+  const cwd = "C:/Users/u/Desktop/code/Keep-Me";
+  const rows = ["a", "b", "c"].map((id) => ({ workspaceId: "wks_" + id, cwd }));
+  const reg = [{ workspaceId: "wks_a", createdAt: "2026-11-12", isPaseoOwnedWorktree: false }, { workspaceId: "wks_b", createdAt: "2026-11-10", isPaseoOwnedWorktree: false }, { workspaceId: "wks_c", createdAt: "2026-11-13", isPaseoOwnedWorktree: false }];
+  const calls = []; const run = async (a) => { calls.push(a.join(" ")); return a[1] === "ls" ? rows : {}; };
+  const r = await archivePermanentDuplicates({ run, exists: () => true, readRegistry: () => reg });
+  assert.deepEqual(r.archived.sort(), ["wks_a", "wks_c"]); assert.equal(Object.values(r.kept)[0], "wks_b");
+  let gone = false; const r2 = await archivePermanentDuplicates({ run: async (a) => { if (a[1] === "archive") gone = true; return a[1] === "ls" ? rows : {}; }, exists: () => !gone, readRegistry: () => reg });
+  assert.equal(r2.archived.length, 1); assert.match(r2.failed, /FOLDER GONE/);
+  const r3 = await archivePermanentDuplicates({ run, exists: () => true, readRegistry: () => [] }); // no proof the folder is user-owned: nothing archived
+  assert.equal(r3.archived.length, 0);
+});
+
+test("reprobeErrorProviders runs the diagnostic only for enabled providers in error, at most max", async () => {
+  const calls = []; const run = async (a) => { calls.push(a.join(" ")); return a[1] === "ls" ? [{ provider: "q1", status: "error", enabled: "Enabled" }, { provider: "off", status: "error", enabled: "Disabled" }, { provider: "ok", status: "available", enabled: "Enabled" }, { provider: "q2", status: "error", enabled: "Enabled" }] : {}; };
+  assert.deepEqual(await reprobeErrorProviders({ run, max: 1 }), ["q1"]);
+  assert.deepEqual(calls, ["provider ls", "provider diagnostic q1"]);
+  assert.deepEqual(await reprobeErrorProviders({ run: async () => ({ error: "x" }) }), []);
 });
