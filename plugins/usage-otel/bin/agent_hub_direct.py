@@ -251,7 +251,8 @@ def main(argv):
         args = args[:ix] + ["--json"] + args[ix:]
     os.makedirs(run_dir(), exist_ok=True)
     reg = os.path.join(run_dir(), "%d.json" % os.getpid())
-    # runtime backstop marker: claude-fleet-cap lets a headless claude run only when this pair is set and the wrapper pid is an ancestor
+    # runtime backstop marker: claude-fleet-cap lets a headless claude run only when this pair is set, the wrapper pid is an ancestor AND the run is
+    # the child recorded below in the registry file (`child`); a bare launch made by that child itself (nested) inherits the env but is refused
     cenv = dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))
     mk = mark_active(PROVIDER[tool])
     hb = heartbeat(mk)

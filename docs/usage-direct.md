@@ -37,6 +37,9 @@ If a script cannot be changed, put the line `agent-hub-direct-ok` in the script,
 
 `~/.claude/hooks-local/direct-launch-guard/guard.py` (PreToolUse, Bash|PowerShell) refuses a bare `claude -p`, `codex exec` or `paseo run`, in the command text and in the python/node/ps1 script the command runs.
 Allowed: `agent-hub direct|route`, `agent_hub_direct`, the two opt-out markers above. Switch (owner only): `DIRECT_LAUNCH_GUARD=off`. Blocks are logged to `~/.claude/logs/fleet-cap.jsonl` as kind `unlogged-direct`; the fleet-cap guard also logs (never blocks) a headless claude with no agent-hub ancestor. Self-test: `python guard.py --selftest`.
+Read-only and text tools (`grep`, `rg`, `echo`, `printf`, `cat`, `git log|grep|diff|show`, `sed -n`, `find` without `-exec`) carry launch words as data, so `grep claude -p x` and `git log --grep claude -p` pass; a `find -exec` target, a `$(...)` substitution, text piped into a shell (`echo claude -p | sh`) or written to a script file, `rg --pre`, `sed e` and `git -c` are still checked. `python -c` is checked only when its code spawns a process (subprocess, os.system, popen, exec, getattr/__import__ ...), so printing `codex exec x` passes.
+
+**Nested launches (runtime backstop):** `agent_hub_direct.py` exports `AGENT_HUB_DIRECT_SESSION` + `AGENT_HUB_DIRECT_PID` (the wrapper pid) and records the spawned child in `~/.paseo/run/direct/<wrapper pid>.json` (`child`). The `claude-fleet-cap` hook accepts the marker only when the headless claude IS that child (or its parent is, for a cmd/node shim), so a bare launch that the child itself starts (Bash tool, script) is refused and logged as `unlogged-direct` with `layer: runtime-backstop`, `nested: true`. Without a readable registry, nothing like claude/codex/a shell/an interpreter may sit between the run and the wrapper. The same "nothing in between" rule applies to the hub-ancestor and daemon rules.
 
 ## 3. Workspace cap auto-archive and error agents
 
