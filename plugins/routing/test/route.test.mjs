@@ -822,10 +822,37 @@ test("timeouts: review and summarise get an 8 min attempt limit by default, rout
 });
 test("a read-only attempt that gets no answer in its limit fails with a plain reason and the chain moves on; the run call is bounded", () => {
   let clock = 0; const calls = []; const runs = [];
-  const paseo = (a, opts) => { calls.push([a, opts]); if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); clock += runs.length === 1 ? 481_000 : 5_000; return runs.length === 1 ? { agentId: "H1", status: "running" } : { agentId: "H2", status: "completed" }; } if (a[0] === "logs") return { text: "answer text" }; if (a[0] === "provider") return [{ provider: "qwen-code" }, { provider: "claude-clean" }]; return a[0] === "ls" ? [] : {}; };
+  const paseo = (a, opts) => { calls.push([a, opts]); if (a[0] === "run") { runs.push(a[a.indexOf("--provider") + 1]); clock += runs.length === 1 ? 481_000 : 5_000; return runs.length === 1 ? { agentId: "H1", status: "running" } : { agentId: "H2", status: "completed" }; } if (a[0] === "wait") return { status: "timeout" }; if (a[0] === "logs") return { text: "answer text" }; if (a[0] === "provider") return [{ provider: "qwen-code" }, { provider: "claude-clean" }]; return a[0] === "ls" ? [] : {}; };
   const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", now: () => clock, providerState: new Map([["qwen-code", true], ["claude-clean", true]]) }, paseo, { readOnlyModes: {}, routes: { review: ["qwen-code", "claude-clean"] } });
   assert.match(r.trace[0].error, /^no answer in 8 min/); assert.equal(runs.length, 2); assert.equal(r.used, "claude-clean");
-  const run1 = calls.find(([a]) => a[0] === "run"); assert.equal(run1[0][run1[0].indexOf("--wait-timeout") + 1], "480s"); assert.equal(run1[1].timeoutMs, 510_000);
+  const run1 = calls.find(([a]) => a[0] === "run"); assert.equal(run1[0][run1[0].indexOf("--wait-timeout") + 1], "480s"); assert.equal(run1[1].timeoutMs, 90_000, "the create call is bounded by the start limit (90 s), not by the 8 min attempt limit");
+});
+test("a provider that hangs while STARTING is dropped after the start limit, its slot is released, and the next provider answers", async () => {
+  const { startLimitS } = await import("../route.mjs");
+  assert.equal(startLimitS({}), 90); assert.equal(startLimitS({ startTimeout: "20s" }), 20); assert.equal(startLimitS({ startTimeout: "20s" }, { AGENT_HUB_START_TIMEOUT: "5s" }), 5);
+  const runs = []; const marks = [];
+  const paseo = (a, opts) => { if (a[0] === "run") { runs.push([a[a.indexOf("--provider") + 1], opts?.timeoutMs]); return runs.length === 1 ? { error: "no answer in 20 s: the call was stopped" } : { agentId: "H2", status: "completed" }; } if (a[0] === "logs") return { text: "answer text" }; if (a[0] === "provider") return [{ provider: "qwen-code" }, { provider: "claude-clean" }]; return a[0] === "ls" ? [] : {}; };
+  const mdir = mkdtempSync(join(tmpdir(), "mk-")); const marker = { file: join(mdir, "t-" + process.pid + "-1.json"), dir: mdir }; const before = Date.now();
+  const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", marker, providerState: new Map([["qwen-code", true], ["claude-clean", true]]) }, paseo, { startTimeout: "20s", readOnlyModes: {}, routes: { review: ["qwen-code", "claude-clean"] } });
+  assert.equal(r.used, "claude-clean"); assert.equal(runs[0][1], 20_000, "start-bound call"); assert.match(r.trace[0].error, /no answer in/); assert.ok(Date.now() - before < 5000);
+});
+test("a provider paseo reports as disabled, unavailable or error is skipped in under 2 s, never claims a slot and never starts a CLI", () => {
+  const rows = [{ provider: "qwen-code", status: "unavailable", enabled: "Disabled" }, { provider: "qwen-code-2", status: "unavailable", enabled: "Enabled" }, { provider: "qwen-code-3", status: "error", enabled: "Enabled" }, { provider: "claude-clean", status: "available", enabled: "Enabled" }];
+  const calls = []; const paseo = (a) => { calls.push(a); if (a[0] === "run") return { agentId: "H2", status: "completed" }; if (a[0] === "logs") return { text: "answer text" }; if (a[0] === "provider") return rows; return a[0] === "ls" ? [] : {}; };
+  const mdir = mkdtempSync(join(tmpdir(), "mk-")); const marker = { file: join(mdir, "t-" + process.pid + "-1.json"), dir: mdir }; const t = Date.now();
+  // the config file says every one of them is enabled: the daemon's report still wins
+  const state = providerState(paseo, { agents: { providers: { "qwen-code": { enabled: true }, "qwen-code-2": { enabled: true }, "qwen-code-3": { enabled: true } } } });
+  const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", marker, providerState: state }, paseo, { slots: { "qwen-code": 1, "qwen-code-2": 1, "qwen-code-3": 1, "claude-clean": 1 }, readOnlyModes: {}, routes: { review: ["qwen-code", "qwen-code-2", "qwen-code-3", "claude-clean"] } });
+  assert.ok(Date.now() - t < 2000); assert.equal(r.used, "claude-clean", JSON.stringify(r.trace));
+  assert.deepEqual(r.trace.slice(0, 3).map((x) => /disabled or unavailable/.test(x.skip)), [true, true, true]);
+  assert.deepEqual(calls.filter((c) => c[0] === "run").map((c) => c[c.indexOf("--provider") + 1]), ["claude-clean"], "only the healthy provider was ever started");
+});
+test("providerState cache: one `provider ls` per 60 s across processes, a failed read is never cached", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "pc-")), "c.json"); let n = 0; let t = 1000; const ls = () => { n++; return [{ provider: "a", status: "available", enabled: "Enabled" }]; };
+  providerState(ls, {}, { file, now: () => t }); providerState(ls, {}, { file, now: () => t + 59_000 }); assert.equal(n, 1);
+  providerState(ls, {}, { file, now: () => t + 61_000 }); assert.equal(n, 2);
+  const f2 = join(mkdtempSync(join(tmpdir(), "pc-")), "c.json"); let m = 0; const bad = () => { m++; return { error: "daemon down" }; };
+  assert.equal(providerState(bad, {}, { file: f2 }), null); providerState(bad, {}, { file: f2 }); assert.equal(m, 2);
 });
 test("a laptop-hosted model that is refused for low RAM is skipped at once, not waited for", () => {
   let slept = 0; const runs = [];
@@ -847,10 +874,10 @@ test('a known-down endpoint is skipped at once with a one-line reason, and a fai
   const calls = []; const r = runRoute({ type: 'summarise', prompt: 'p', cwd: '/r', session: 's', endpointDown: (id) => (id === 'dead' ? 'endpoint not answering: x' : null), providerState: new Map([['dead', true], ['live', true]]) },
     (a) => { calls.push(a[0]); if (a[0] === 'run') return { status: 'completed', agentId: 'A1' }; return a[0] === 'ls' ? [] : a[0] === 'logs' ? 'answer text here' : {}; }, { slots: { dead: 1, live: 1 }, routes: { summarise: ['dead/m', 'live/m'] }, readOnlyEnforced: ['dead', 'live'], readOnlyModes: { dead: 'read-only', live: 'read-only' } });
   assert.match(r.trace[0].skip, /endpoint not answering/); assert.equal(r.trace[0].provider, 'dead/m');
-  // the config file's explicit switch beats a daemon that has not reloaded
-  const ls = () => [{ provider: 'a', enabled: 'Enabled', status: 'available' }, { provider: 'b', enabled: 'Enabled', status: 'available' }, { provider: 'c', enabled: 'Disabled', status: 'unavailable' }];
-  assert.deepEqual([...providerState(ls, { agents: { providers: { a: { enabled: false }, c: { enabled: true } } } })], [['a', false], ['b', true], ['c', true]]);
-  assert.deepEqual([...providerState(ls)], [['a', true], ['b', true], ['c', false]]);
+  // the config file's switch can only turn a provider OFF; what the daemon reports (disabled, unavailable, error) is never overridden by it (13-11: laptop Qwen, config enabled, paseo unavailable, held a route 8 min)
+  const ls = () => [{ provider: 'a', enabled: 'Enabled', status: 'available' }, { provider: 'b', enabled: 'Enabled', status: 'available' }, { provider: 'c', enabled: 'Disabled', status: 'unavailable' }, { provider: 'd', enabled: 'Enabled', status: 'unavailable' }, { provider: 'e', enabled: 'Enabled', status: 'error' }];
+  assert.deepEqual([...providerState(ls, { agents: { providers: { a: { enabled: false }, c: { enabled: true } } } })], [['a', false], ['b', true], ['c', false], ['d', false], ['e', false]]);
+  assert.deepEqual([...providerState(ls)], [['a', true], ['b', true], ['c', false], ['d', false], ['e', false]]);
 });
 
 test('the per-attempt time limit covers the RAM wait: what is left of it is all the agent gets', () => {

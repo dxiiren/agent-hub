@@ -573,15 +573,15 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
     if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines });
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
-    if (o.worktree) args.push("--no-wait");
+    args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
     const guard = ro ? snapshot(o.cwd) : null;
     let ws = null; if (!o.worktree && !o.keep) { let g = null; try { g = o.ledgerDir ? acquireEntry({ dir: join(o.ledgerDir, "wtcreate"), max: 2, waitMs: createTimeoutS() * 1000 }) : { release() {} }; } catch { g = { release() {} }; } // same 2-at-once gate as worktree creates; never resent (a retry only queues a duplicate behind the stuck one: 16:37-16:47 09-11, 60 in flight)
       let c = null; if (g) { try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } }
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
-    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: (left() + 30) * 1000 });
+    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
     live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
     if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
-    if (o.worktree && j.agentId && !j.error && j.status !== "completed") {
+    if (j.agentId && !j.error && !["completed", "permission", "error", "timeout"].includes(String(j.status))) { // the create call returned the agent id; its answer is awaited here (a terminal status from the create call itself needs no wait)
       const w = paseo(["wait", j.agentId, "--timeout", String(left())], { timeoutMs: (left() + 30) * 1000 });
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
     }
@@ -626,6 +626,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // a read-only agent stopped on a refused read may still have written an answer: keep it (the refusal stays in the trace) in case no entry completes
     if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
     if (j.agentId || wt) retire(j.agentId, wt); // a timed-out agent must not keep running while the next entry works
+    setMarker(o.marker, null); // a failed attempt gives its slot back at once: the next entry, a parallel route, or the end of this one never sees it held
   }
   } finally { drain(); ACTIVE.delete(drain); }
   if (!partial && trace.length && trace.every((t) => /^provider not configured/.test(t.skip ?? ""))) trace.push({ error: `no provider configured for ${o.type}: add one in Settings > Providers` });
@@ -635,18 +636,28 @@ export function runRoute(o, paseo, routes, gate = runGate) {
 /** The Paseo config file (switches live there at once); {} when unreadable. */
 export const readConfig = (home) => { try { return JSON.parse(readFileSync(join(home || paseoHome(), "config.json"), "utf8").replace(/^﻿/, "")); } catch { return {}; } };
 /** Provider id -> enabled, from `paseo provider ls` (one call). Disabled (the Settings toggle) or unavailable (no CLI) = false. null when the list cannot be read. */
-export function providerState(paseo, cfg) {
+export function providerState(paseo, cfg, cache) {
   try {
-    const r = paseo(["provider", "ls"]); const m = new Map();
+    const r = cache ? cachedProviderLs(paseo, cache) : paseo(["provider", "ls"]); const m = new Map();
     for (const x of Array.isArray(r) ? r : r?.providers ?? []) {
       const id = x?.provider ?? x?.id ?? x?.name; if (!id) continue;
-      const gone = /unavail/i.test(String(x.status ?? "")) && !/^disabled$/i.test(String(x.enabled ?? "")) && x.enabled !== false; // missing CLI, not switched off
-      const flag = own(cfg?.agents?.providers, id)?.enabled; // the config file holds every switch at once; a daemon that has not reloaded still reports the old one
-      m.set(id, !gone && (typeof flag === "boolean" ? flag : !(/^disabled$/i.test(String(x.enabled ?? "")) || x.enabled === false || /disabled/i.test(String(x.status ?? "")))));
+      // what the daemon reports is the truth: disabled, unavailable (no CLI, no GPU) or error means the provider cannot start, whatever the config file says (13-11: a laptop Qwen the config listed as enabled held a route 8 min while paseo said unavailable). The config switch can only turn a provider OFF at once.
+      const bad = /unavail|^error$/i.test(String(x.status ?? "")) || /^disabled$/i.test(String(x.enabled ?? "")) || x.enabled === false || /disabled/i.test(String(x.status ?? ""));
+      m.set(id, own(cfg?.agents?.providers, id)?.enabled !== false && !bad);
     }
     return m.size ? m : null;
   } catch { return null; }
 }
+/** The provider list, cached in a file for ttlMs (default 60 s) so every route process shares one daemon call a minute. cache = { file, ttlMs?, now? }. A failed or empty read is never cached. */
+export function cachedProviderLs(paseo, { file, ttlMs = 60_000, now = Date.now }) {
+  try { const c = JSON.parse(readFileSync(file, "utf8")); if (Array.isArray(c.rows) && c.rows.length && now() - c.at < ttlMs) return c.rows; } catch { /* no cache yet */ }
+  const r = paseo(["provider", "ls"]); const rows = Array.isArray(r) ? r : r?.providers;
+  if (Array.isArray(rows) && rows.length) { try { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify({ at: now(), rows })); } catch { /* best effort */ } }
+  return r;
+}
+export const providerCacheFile = (home) => join(home || paseoHome(), "provider-ls-cache.json");
+/** Seconds a provider may take to START an agent (the create call returns the agent id) before the route drops it and tries the next one; routes.startTimeout overrides (default 90 s). The answer itself still gets the full attempt limit. */
+export const startLimitS = (routes, env = process.env) => toSeconds(env.AGENT_HUB_START_TIMEOUT ?? routes?.startTimeout ?? "90s");
 /** Slots per provider with enabled flag, and the total the hub may use now (budget.mjs: configured slots of enabled providers, a disabled one's slots moved under the others' caps, limited by what the laptop can hold). `lap` = { freeGb, cpuPct }; `busy` = routes holding a slot. */
 export function slotInfo(routes, state, lap = {}, busy = 0) {
   const b = budgetFor(routes, state, lap, busy); const providers = {};
@@ -792,14 +803,15 @@ function main(argv) {
   const routes = loadRoutes();
   { const me = modeError(opt("--mode"), routes); if (me) { console.error("route: " + me); return 2; } }
   const cfgNow = readConfig(process.env.PASEO_HOME);
-  const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow);
+  const pcache = { file: providerCacheFile(process.env.PASEO_HOME) };
+  const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache);
   { const bail = () => { for (const d of [...ACTIVE]) { try { d(); } catch { /* best effort */ } } }; process.on("exit", bail); for (const sg of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sg, () => process.exit(130)); } // Ctrl-C / kill: the exit handler archives what this route started
   const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
   let res; const slotWaitUntil = Date.now() + (Number(process.env.AGENT_HUB_SLOT_WAIT_MIN) || 25) * 60_000;
   // every provider skipped only because its slots are held by other routes: queue here and retry, never exit 1 with nothing started
   const allFull = (r) => !r.used && Array.isArray(r.trace) && r.trace.length > 0 && r.trace.every((t) => /^(slots full|busy \d+\/)/.test(t.skip ?? ""));
   try { for (;;) { res = runRoute({
-    providerState: pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
+    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }
