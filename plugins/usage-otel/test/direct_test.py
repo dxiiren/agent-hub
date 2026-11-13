@@ -110,5 +110,69 @@ class Direct(unittest.TestCase):
             self.assertEqual(open(os.path.join(t, "usage.jsonl")).read(), json.dumps(rec) + "\n")  # never rewritten
 
 
+# Captured from live runs 13-11-2026 (claude 2.x, haiku, "say ok"); trimmed to the fields the parser reads.
+LIVE_JSON = {"type": "result", "subtype": "success", "is_error": False, "result": "ok", "session_id": "6e4490c0-4492-4919-9306-92b355c28413",
+             "total_cost_usd": 0.014839200000000002,
+             "usage": {"input_tokens": 2, "cache_creation_input_tokens": 74185, "cache_read_input_tokens": 0, "output_tokens": 4},
+             "modelUsage": {"claude-haiku-5-5": {"inputTokens": 2, "outputTokens": 4, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 74185, "costUSD": 0.0148392}}}
+LIVE_STREAM = [{"type": "system", "subtype": "init", "session_id": "x"}, {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
+               dict(LIVE_JSON, usage={"input_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 74185, "output_tokens": 4})]
+
+
+class ParseTest(unittest.TestCase):
+    def test_claude_json_records_in_out_cached_cost(self):
+        p = dr.parse_claude(json.dumps(LIVE_JSON))
+        self.assertEqual((p[2], p[3], p[4], p[5]), (74187, 4, 0, 0.014839200000000002))
+        self.assertEqual(p[1], "claude-haiku-5-5")
+
+    def test_claude_stream_json_uses_result_event(self):
+        p = dr.parse_claude(chr(10).join(json.dumps(e) for e in LIVE_STREAM))
+        self.assertEqual((p[2], p[3], p[4]), (2, 4, 74185))
+
+    def test_claude_no_result_event_is_none(self):
+        self.assertIsNone(dr.parse_claude(json.dumps(LIVE_STREAM[0])))
+
+    def test_marker_heartbeat_moves_mtime_and_is_removed_on_exit(self):
+        import threading, time
+        with tempfile.TemporaryDirectory() as t:
+            body = os.path.join(t, "slow.py")
+            open(body, "w").write("import time;time.sleep(2.5);print(1)")
+            exe = os.path.join(t, "slow.cmd" if os.name == "nt" else "slow")
+            open(exe, "w").write(('@"%s" "%s" %%*' + chr(10) if os.name == "nt" else '#!/bin/sh' + chr(10) + 'exec "%s" "%s" "$@"' + chr(10)) % (sys.executable, body))
+            os.chmod(exe, 0o755)
+            os.environ.update(AGENT_HUB_DIRECT_CODEX=exe, AGENT_HUB_HEARTBEAT_S="0.3", PASEO_HOME=t)
+            marker = os.path.join(t, "usage", "active", "t-%d" % os.getpid())
+            seen = []
+            def watch():
+                time.sleep(0.5)
+                for _ in range(6):
+                    try: seen.append(os.path.getmtime(marker))
+                    except OSError: pass
+                    time.sleep(0.3)
+            th = threading.Thread(target=watch); th.start()
+            try:
+                with redirect_stdout(io.StringIO()):
+                    dr.main(["codex", "--session", "s-hb", "--", "exec", "x"])
+            finally:
+                th.join()
+                for k in ("AGENT_HUB_DIRECT_CODEX", "AGENT_HUB_HEARTBEAT_S", "PASEO_HOME"): os.environ.pop(k, None)
+            self.assertGreater(len(set(seen)), 1, seen)
+            self.assertFalse(os.path.exists(marker))
+
+    def test_paseo_run_gets_session_labels(self):
+        with tempfile.TemporaryDirectory() as t:
+            fake(t, "paseo", ["ok"])
+            exe = os.path.join(t, "paseo" + (".cmd" if os.name == "nt" else ""))
+            with redirect_stdout(io.StringIO()):
+                os.environ["AGENT_HUB_DIRECT_PASEO"] = exe
+                try:
+                    dr.main(["paseo", "--session", "s-lab", "--", "run", "--provider", "codex", "hi"])
+                finally:
+                    del os.environ["AGENT_HUB_DIRECT_PASEO"]
+            args = open(os.path.join(t, "paseo.args")).read()
+            self.assertIn("session=s-lab", args)
+            self.assertIn("run --label", args)
+
+
 if __name__ == "__main__":
     unittest.main()
