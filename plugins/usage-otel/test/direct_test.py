@@ -67,6 +67,35 @@ class Direct(unittest.TestCase):
             self.assertEqual(sm["total"]["n"], 2)
             self.assertEqual(sm["providers"]["claude-headless"]["cost_usd"], 0.5)
 
+    def test_parent_session_view_and_slot_marker_and_env_marker(self):
+        """status line: the launching Claude session sees the row (per-session view only), a t-<pid> marker lives during the run, the child carries the backstop marker"""
+        with tempfile.TemporaryDirectory() as t:
+            ud = os.path.join(t, "usage")
+            body = os.path.join(t, "probe.py")
+            with open(body, "w") as f:
+                f.write("import os,sys,json\nd=os.path.join(%r,'active')\n"
+                        "open(%r,'w').write(json.dumps({'active':sorted(os.listdir(d)) if os.path.isdir(d) else [],"
+                        "'sid':os.environ.get('AGENT_HUB_DIRECT_SESSION'),'wpid':os.environ.get('AGENT_HUB_DIRECT_PID')}))\n"
+                        "print(%r)\n" % (ud, os.path.join(t, "probe.out"), json.dumps(CLAUDE_JSON)))
+            if os.name == "nt":
+                exe = os.path.join(t, "probe.cmd"); open(exe, "w").write('@"%s" "%s" %%*\n' % (sys.executable, body))
+            else:
+                exe = os.path.join(t, "probe"); open(exe, "w").write('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, body)); os.chmod(exe, 0o755)
+            env = {"AGENT_HUB_USAGE_DIR": ud, "AGENT_HUB_DIRECT_CLAUDE": exe, "CLAUDE_CODE_SESSION_ID": "parent-claude-sess"}
+            rc, _ = self.run_direct(["claude", "--session", "w3-xyz", "--", "-p", "hi"], env)
+            seen = json.load(open(os.path.join(t, "probe.out")))
+            self.assertIn("t-%d" % os.getpid(), seen["active"])  # slot marker present while the child ran
+            self.assertEqual((seen["sid"], seen["wpid"]), ("w3-xyz", str(os.getpid())))
+            self.assertEqual(os.listdir(os.path.join(ud, "active")), [])  # and gone after
+            self.assertEqual(len(open(os.path.join(ud, "usage.jsonl")).read().splitlines()), 1)  # global log single-counted
+            for sid in ("w3-xyz", "parent-claude-sess"):
+                sm = json.load(open(os.path.join(ud, "sessions", sid + ".sum.json")))
+                self.assertEqual(sm["providers"]["claude-headless"]["n"], 1)
+                self.assertEqual(ahu.summarize(os.path.join(ud, "sessions", sid + ".jsonl"))["total"]["n"], 1)
+            # same id (no --session): counted once, not twice
+            rc, _ = self.run_direct(["claude", "--", "-p", "hi"], dict(env, CLAUDE_CODE_SESSION_ID="same", AGENT_HUB_SESSION="same"))
+            self.assertEqual(json.load(open(os.path.join(ud, "sessions", "same.sum.json")))["total"]["n"], 1)
+
     def test_session_required_and_backfill_sidecar(self):
         rc, _ = self.run_direct(["claude", "--", "-p", "x"], {"AGENT_HUB_SESSION": "", "CLAUDE_CODE_SESSION_ID": ""})
         self.assertEqual(rc, 2)

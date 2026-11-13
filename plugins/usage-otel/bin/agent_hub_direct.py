@@ -49,8 +49,10 @@ def _locked_sum(base, rec, sid):
             pass
 
 
-def append_usage(d, rec):
-    """Same files as usage.mjs appendUsage: global log, per-session log, per-session summary."""
+def append_usage(d, rec, also=None):
+    """Same files as usage.mjs appendUsage: global log, per-session log, per-session summary.
+    also = the launching Claude session id (CLAUDE_CODE_SESSION_ID) when it differs from rec.session: its per-session view
+    (jsonl + sum.json, what the status line reads) gets the row too, but usage.jsonl is written ONCE so `usage --all` stays single-counted."""
     os.makedirs(os.path.join(d, "sessions"), exist_ok=True)
     line = json.dumps(rec, separators=(",", ":")) + "\n"
     with open(os.path.join(d, "usage.jsonl"), "a", encoding="utf-8") as f:
@@ -61,6 +63,11 @@ def append_usage(d, rec):
         with open(base + ".jsonl", "a", encoding="utf-8") as f:
             f.write(line)
         _locked_sum(base, rec, sid)
+    if also and also != sid:
+        base = os.path.join(d, "sessions", safe(also))
+        with open(base + ".jsonl", "a", encoding="utf-8") as f:
+            f.write(line)
+        _locked_sum(base, rec, also)
 
 
 def parse_claude(out):
@@ -138,6 +145,27 @@ def own_entries():
     return out
 
 
+def mark_active(provider):
+    """Status-line slot marker ~/.paseo/usage/active/t-<wrapper pid> (same shape route.mjs writes); removed on exit. Best effort."""
+    try:
+        d = os.path.join(usage_dir(), "active")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "t-%d" % os.getpid())
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"provider": provider, "direct": True, "ts": int(time.time() * 1000)}, f)
+        return p
+    except OSError:
+        return None
+
+
+def unmark(p):
+    if p:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 def stop_pid(pid):
     if os.name == "nt":
         subprocess.run(["powershell", "-NoProfile", "-Command", "Stop-Process -Id %d -Force" % pid], capture_output=True)
@@ -185,7 +213,11 @@ def main(argv):
             sys.stderr.write("agent-hub direct paseo: only `run` is labelled; pass: -- run --provider ... \n")
             return 2
         lab = ["--label", "session=" + sid, "--label", "dev=" + dev, "--label", "caller=" + client, "--label", "route/type=direct"]
-        return subprocess.run(argv2 + [args[0]] + lab + args[1:]).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
+        mk = mark_active("paseo-direct")
+        try:
+            return subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
+        finally:
+            unmark(mk)
     env_bin = os.environ.get("AGENT_HUB_DIRECT_" + tool.upper())
     exe = env_bin or shutil.which(tool)
     if not exe:
@@ -203,11 +235,15 @@ def main(argv):
         args = args[:ix] + ["--json"] + args[ix:]
     os.makedirs(run_dir(), exist_ok=True)
     reg = os.path.join(run_dir(), "%d.json" % os.getpid())
-    proc = subprocess.Popen([exe] + args, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    # runtime backstop marker: claude-fleet-cap lets a headless claude run only when this pair is set and the wrapper pid is an ancestor
+    cenv = dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))
+    mk = mark_active(PROVIDER[tool])
+    proc = subprocess.Popen([exe] + args, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=cenv)
     with open(reg, "w", encoding="utf-8") as f:
         json.dump({"wrapper": os.getpid(), "child": proc.pid, "tool": tool, "session": sid, "ts": time.strftime("%FT%TZ", time.gmtime())}, f)
     out = proc.communicate()[0] or ""
     r = proc
+    unmark(mk)
     try: os.remove(reg)
     except OSError: pass
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()), "agent": "", "session": sid, "provider": PROVIDER[tool], "model": "",
@@ -226,7 +262,7 @@ def main(argv):
                 rec.update(model=p[3], **{"in": p[0], "out": p[1], "cached": p[2]})
         if rec["in"] or rec["out"] or rec["cost_usd"]:  # a failed call with no usage (auth, 403) is not a billed turn
             rec["agent"] = rec["agent"] or "direct-" + uuid.uuid4().hex[:12]
-            append_usage(usage_dir(), rec)
+            append_usage(usage_dir(), rec, also=os.environ.get("CLAUDE_CODE_SESSION_ID") or None)
     except Exception as e:  # recording must never break the caller's run
         sys.stderr.write("agent-hub direct: usage record failed: %s\n" % e)
     if hasattr(sys.stdout, "buffer"):
