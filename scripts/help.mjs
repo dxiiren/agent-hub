@@ -54,7 +54,7 @@ usage: agent-hub direct claude|codex|paseo --session <id> [--dev D] [--client C]
 claude forces --output-format json; the usage record is written to usage.jsonl and sessions/<id>.jsonl. paseo mode is for run only (adds --label session=,dev=,caller=,route=direct).
 env: AGENT_HUB_SESSION, AGENT_HUB_DEV, AGENT_HUB_CLIENT, AGENT_HUB_USAGE_DIR. Bare claude -p / codex exec / paseo run are refused by the direct-launch-guard hook.`,
   usage: `usage: show tokens, credits and estimated cost.
-usage: agent-hub usage --session <id> [--json] [--dir D] | agent-hub usage --all
+usage: agent-hub usage --session <id> [--json] [--by model] [--dir D] | agent-hub usage --all
 example: agent-hub usage --all`,
   doctor: `doctor: PASS/FAIL per check (daemon, allow-listed environment, usage stack, MCP, each provider, gitleaks).
 usage: agent-hub doctor [--deep]     --deep runs one tiny task on every provider (uses tokens)

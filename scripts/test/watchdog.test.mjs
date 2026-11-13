@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import http from 'node:http';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deepProbe, providerErrors, syncAlert, decide, tick, START_GRACE_MS, FAILS_TO_RESTART, MAX_RESTARTS, WINDOW_MS, runStart, killPlan, recover } from '../daemon-watchdog.mjs';
@@ -202,4 +202,17 @@ test('syncAlert: file exists exactly while unhealthy, one incident line per inci
   syncAlert({ ok: true, alertFile, incidentLog });
   assert.ok(!existsSync(alertFile));
   const lines = readFileSync(incidentLog, 'utf8').trim().split(/\r?\n/); assert.equal(lines.length, 2); assert.match(lines[0], /incident/); assert.match(lines[1], /recovered/);
+});
+
+test('deepProbe UN-INJECTED on Windows: the real spawn path resolves `paseo.cmd` from PATH (39a1b60: it was exit 127 for ever)', { skip: process.platform !== 'win32' && 'Windows shim resolution only' }, async () => {
+  const d = mkdtempSync(join(tmpdir(), 'wd-paseo-')); mkdirSync(join(d, 'node_modules', 'p'), { recursive: true });
+  writeFileSync(join(d, 'node_modules', 'p', 'cli.js'), 'process.stdout.write("[]")'); // `paseo ls --json` and `paseo provider ls --json` both answer []
+  const BS = String.fromCharCode(92);
+  writeFileSync(join(d, 'paseo.cmd'), ['@ECHO off', 'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" --no-warnings "%dp0%' + BS + 'node_modules' + BS + 'p' + BS + 'cli.js" %*'].join(String.fromCharCode(13, 10)));
+  const old = { PATH: process.env.PATH, Path: process.env.Path };
+  const withPath = d + ';' + (old.Path ?? old.PATH ?? ''); process.env.PATH = withPath; process.env.Path = withPath;
+  try {
+    const r = await deepProbe(1, 'h', { http: async () => ({ state: 'up' }) }); // no `run`: the default spawnSyncSafe('paseo.cmd', ...) path
+    assert.equal(r.state, 'up', r.detail);
+  } finally { if (old.PATH === undefined) delete process.env.PATH; else process.env.PATH = old.PATH; if (old.Path === undefined) delete process.env.Path; else process.env.Path = old.Path; }
 });

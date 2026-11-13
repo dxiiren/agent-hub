@@ -60,5 +60,24 @@ class ProcTree(unittest.TestCase):
         self.assertNotIn(gpid, proctree.descendants() + [p for v in proctree._children_map().values() for p in v])
 
 
+class ByModel(unittest.TestCase):
+    def test_by_model_splits_a_provider_and_merges_qoder_spellings(self):
+        import tempfile, json, io, contextlib
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "sessions"))
+        rows = [{"provider": "qoder", "model": "dfmodel", "credits": 1.0}] * 3 + [{"provider": "qoder", "model": "efficient"}] * 2 + [{"provider": "codex-direct", "model": "codex", "in": 5, "out": 1}]
+        with open(os.path.join(d, "sessions", "s1.jsonl"), "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(r) + chr(10) for r in rows)
+        with open(os.path.join(d, "usage-backfill-x.jsonl"), "w", encoding="utf-8") as f:  # a backfill line spells the model qoder-dfmodel: same family
+            f.write(json.dumps({"provider": "qoder", "model": "qoder-dfmodel", "session": "s1", "credits": 1.0}) + chr(10))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ahu.main(["usage", "--session", "s1", "--by", "model", "--dir", d])
+        out = buf.getvalue()
+        self.assertRegex(out, r"df 4 runs 0tok 4.00cr")
+        self.assertRegex(out, r"ef 2 runs")
+        self.assertRegex(out, r"codex 1 runs 6tok")
+
+
 if __name__ == "__main__":
     unittest.main()

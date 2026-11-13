@@ -2,7 +2,7 @@
 // Each suite gets a hermetic environment (scripts/test-env.mjs).
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { hermeticEnv, NEEDS_GITLEAKS, violationsFile } from "./test-env.mjs";
+import { hermeticEnv, NEEDS_GITLEAKS, strictRun, violationsFile } from "./test-env.mjs";
 import { checkScanner } from "../plugins/gate/server/gate.mjs";
 
 const py = process.env.AGENT_HUB_PYTHON ?? "python";
@@ -26,10 +26,10 @@ if (touched) { console.log(`
 TESTS TOUCHED THE REAL LOCAL CONFIG (they must use the hermetic env):
 ${touched}`); failed.push("hermetic guard"); }
 // A clone without gitleaks skips the gate/secret suites. The exit code stays 0 (a fresh clone must be able to run `npm test`)
-// unless AGENT_HUB_REQUIRE_FULL=1 (CI), but the end of the output says so loudly: a skip is never read as a full pass.
+// unless strictRun() (AGENT_HUB_REQUIRE_FULL=1, or CI set and not =0), but the end of the output says so loudly: a skip is never read as a full pass.
 let skipped = "";
 try { checkScanner(); } catch { skipped = `${NEEDS_GITLEAKS.size} suites skipped: gitleaks not found`; }
-const strict = process.env.AGENT_HUB_REQUIRE_FULL === "1";
+const strict = strictRun();
 const NL = "\n";
 if (skipped && !failed.length) {
   const bar = "!".repeat(78);

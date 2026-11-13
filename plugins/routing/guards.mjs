@@ -21,7 +21,7 @@ const permList = () => {
   if (!permCfg) { try { permCfg = (JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "hub.local.json"), "utf8")).permanentWorkspaces ?? []).map(norm); } catch { permCfg = []; } }
   return permCfg;
 };
-const PERMANENT = { test: (cwd) => permList().some((suffix) => norm(cwd).endsWith(suffix)) };
+export const PERMANENT = { test: (cwd) => permList().some((suffix) => norm(cwd).endsWith(suffix)) };
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 
 // ---- 1. workspace cap

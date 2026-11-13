@@ -4,13 +4,14 @@
 //   2. agent-hub-created agents (route/type=* or doctor label) that are idle/error/closed for longer than `olderThan` (20 min); running, permission and parked agents and `--keep` routes are never touched.
 // `archive --force` ends the CLI process tree. Calls are async (it runs inside the daemon as a plugin, and as `agent-hub reaper`), `concurrency` at a time: the CLI takes seconds per call.
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
-import { healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
+import { spawnSyncSafe } from "./spawn-safe.mjs";
+import { PERMANENT, healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
 
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 60; // the env override is for the throwaway-hub proof
@@ -114,6 +115,45 @@ export async function reapGhostWorkspaces({ run, home, exists = existsSync, mtim
   return { archived, failed };
 }
 
+/** `git worktree remove` for one worktree folder, run from its main repo (read from the folder's .git file). Plain first; --force only when `force` (a finished, long-idle route worktree holds nothing worth keeping). */
+export function gitWorktreeRemove(path, force = false) {
+  try {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(join(path, ".git"), "utf8")); if (!m) return false;
+    const repo = m[1].split("\\").join("/").replace(/\/\.git\/worktrees\/[^/]+$/, ""); if (!existsSync(repo)) return false;
+    const r = spawnSyncSafe("git", ["-C", repo, "worktree", "remove", ...(force ? ["--force"] : []), path], { encoding: "utf8", timeout: 120_000, windowsHide: true });
+    return r.status === 0 && !existsSync(path);
+  } catch { return false; }
+}
+
+export const FOLDER_IDLE_S = 10 * 60, FOLDER_FORCE_S = 60 * 60;
+/**
+ * Disk, not daemon records: finished route worktrees left in <paseo home>/worktrees (13-11: 382 folders, 44 GB). A folder <home>/worktrees/<hash>/route-* is removed with `git worktree remove` when no unfinished agent
+ * and no active workspace names it, it is not a permanent folder, and nothing touched it for 10 min (--force after 1 h, plain remove only before). Emptied <hash> parents (and empty ones) are rmdir'd, which refuses a non-empty folder.
+ * Returns { removed: [paths], kept: [{path, why}], bytes }; `size(path)` is injectable for the proof.
+ */
+export async function reapWorktreeFolders({ run, home, dry = false, list = (d) => { try { return readdirSync(d); } catch { return []; } }, mtimeMs = (f) => { try { return statSync(f).mtimeMs; } catch { return Date.now(); } }, now = Date.now, remove = gitWorktreeRemove, size = () => 0, rmEmpty = (d) => { try { rmdirSync(d); return true; } catch { return false; } }, max = 400 }) {
+  const root = join(home || join(os.homedir(), ".paseo"), "worktrees");
+  const norm = (p) => String(p).split("\\").join("/").replace(/^~(?=[\/])/, os.homedir()).toLowerCase();
+  const agents = await run(["ls"]); const wss = await run(["workspace", "ls", "--json"]);
+  if (!Array.isArray(agents) || !Array.isArray(wss)) return { removed: [], kept: [], bytes: 0, failed: "daemon list unreadable" }; // fail closed
+  const busy = [...agents.filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => a.cwd), ...wss.map((w) => w.cwd)].map(norm);
+  const removed = [], kept = []; let bytes = 0;
+  for (const h of list(root)) {
+    const hd = join(root, h);
+    for (const r of list(hd)) {
+      if (removed.length >= max) break;
+      const p = join(hd, r), n = norm(p);
+      const why = !/^route-[0-9a-f]+/.test(r) ? "not a route worktree" : PERMANENT.test(n) ? "permanent folder" : busy.some((b) => b === n || b.startsWith(n + "/")) ? "agent or workspace uses it" : null;
+      const idle = (now() - mtimeMs(p)) / 1000;
+      if (why || idle < FOLDER_IDLE_S) { kept.push({ path: p, why: why ?? "touched in the last 10 min" }); continue; }
+      const sz = size(p);
+      if (dry || remove(p, idle >= FOLDER_FORCE_S)) { removed.push(p); bytes += sz; } else kept.push({ path: p, why: "git worktree remove refused" });
+    }
+    if (!dry) rmEmpty(hd);
+  }
+  return { removed, kept, bytes };
+}
+
 /** One reaper pass: dead routes' agents, then old finished agents. */
 export async function reapOnce({ run, env = process.env, home = env.PASEO_HOME, ...opts }) {
   const parkDir = join(home || join(env.USERPROFILE || env.HOME || "", ".paseo"), "usage", "parked");
@@ -121,9 +161,10 @@ export async function reapOnce({ run, env = process.env, home = env.PASEO_HOME, 
   let dead = []; try { dead = await reapDeadRoutes({ run, dry: opts.dry, concurrency: opts.concurrency }); } catch { /* no run dir yet */ }
   const fin = await reapFinished({ run, routes: opts.routes ?? loadRoutes(env), parked, ...opts });
   let ghosts = { archived: [] }; if (opts.ghosts !== false) { try { ghosts = await reapGhostWorkspaces({ run, home, dry: opts.dry }); } catch { /* next pass */ } }
+  let folders = { removed: [] }; if (opts.ghosts !== false) { try { folders = await reapWorktreeFolders({ run, home, dry: opts.dry }); } catch { /* next pass */ } }
   let spooled = [], stuck = []; // guards.mjs: off-slot cleanup of finished routes, and slots held by routes whose agents went silent
   if (!opts.dry) { try { spooled = await drainSpool({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } try { stuck = await reapStuckRoutes({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } }
-  return { dead, ...fin, ghosts: ghosts.archived, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}), spooled, stuck };
+  return { dead, ...fin, ghosts: ghosts.archived, folders: folders.removed, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}), spooled, stuck };
 }
 
 /** Start the periodic reaper; returns stop(). One pass at a time; the timer never keeps the process alive. */

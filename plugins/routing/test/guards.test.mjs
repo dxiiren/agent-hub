@@ -232,3 +232,30 @@ test("(1) sweep: duplicate records of one folder outside Paseo's root are archiv
   const r = await sweepIdleWorkspaces({ run, exists: () => true, touched: () => true, paseoRoot: "c:/nowhere/" }); // touched = true: only the duplicate rule can archive
   assert.deepEqual(done, ["wks_d1", "wks_d2"]); assert.equal(r.failed, null); assert.equal(r.archived.length, 2);
 });
+
+test("(feedback 1) reapWorktreeFolders removes finished route worktrees, keeps live, permanent, fresh and non-route folders, rmdirs emptied parents", async () => {
+  const { reapWorktreeFolders } = await import("../reaper.mjs");
+  const home = "C:/h/.paseo", now = Date.now(), old = now - 3 * 3600_000;
+  const tree = { "C:/h/.paseo/worktrees": ["a", "b", "c"], "C:/h/.paseo/worktrees/a": ["route-aa11"], "C:/h/.paseo/worktrees/b": ["route-bb22", "route-1ee1", "route-fe51", "keep-me", "notes"], "C:/h/.paseo/worktrees/c": [] };
+  const list = (d) => tree[String(d).split("\\").join("/")] ?? [];
+  const mtimeMs = (f) => (/fe51/.test(f) ? now - 60_000 : old);
+  const rm = [], forced = [], rmd = [];
+  const run = async (a) => a[0] === "ls" ? [{ status: "running", cwd: "C:/h/.paseo/worktrees/b/route-1ee1" }, { status: "idle", cwd: "C:/h/.paseo/worktrees/a/route-aa11" }] : [];
+  const r = await reapWorktreeFolders({ run, home, now: () => now, list, mtimeMs, remove: (p, f) => (rm.push(p.split("\\").join("/")), forced.push(f), true), size: () => 100, rmEmpty: (d) => (rmd.push(d.split("\\").join("/")), true) });
+  assert.deepEqual(rm.sort(), ["C:/h/.paseo/worktrees/a/route-aa11", "C:/h/.paseo/worktrees/b/route-bb22"]);
+  assert.ok(forced.every(Boolean)); assert.equal(r.bytes, 200);
+  assert.ok(r.kept.some((k) => /1ee1/.test(k.path) && /uses it/.test(k.why)));
+  assert.ok(r.kept.some((k) => /fe51/.test(k.path)) && r.kept.some((k) => /keep-me/.test(k.path)) && r.kept.some((k) => /notes/.test(k.path)));
+  assert.equal(rmd.length, 3); // parents tried (rmdir itself refuses a non-empty one)
+  // daemon list unreadable = fail closed
+  const bad = await reapWorktreeFolders({ run: async () => ({ error: "down" }), home, list, remove: () => { throw new Error("must not remove"); } });
+  assert.equal(bad.removed.length, 0);
+});
+
+test("(feedback 1) reapWorktreeFolders never removes a permanent folder", async () => {
+  const { reapWorktreeFolders } = await import("../reaper.mjs");
+  const home = "C:/h/.paseo", list = (d) => ({ "C:/h/.paseo/worktrees": ["a"], "C:/h/.paseo/worktrees/a": ["route-aa11"] })[String(d).split("\\").join("/")] ?? [];
+  const prev = process.env.AGENT_HUB_PERMANENT_WS; process.env.AGENT_HUB_PERMANENT_WS = "/a/route-aa11";
+  try { const r = await reapWorktreeFolders({ run: async () => [], home, list, mtimeMs: () => 0, remove: () => { throw new Error("must not remove"); }, rmEmpty: () => true }); assert.equal(r.removed.length, 0); assert.match(r.kept[0].why, /permanent/); }
+  finally { process.env.AGENT_HUB_PERMANENT_WS = prev; }
+});

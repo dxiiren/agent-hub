@@ -3,11 +3,11 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { hermeticEnv, NEEDS_GITLEAKS } from "./test-env.mjs";
+import { hermeticEnv, NEEDS_GITLEAKS, strictRun } from "./test-env.mjs";
 import { checkScanner } from "../plugins/gate/server/gate.mjs";
 
 const dirs = ["plugins/gate/test", "plugins/routing/test", "plugins/usage-otel/test", "scripts/test"];
 let scanner = true;
-try { checkScanner(); } catch (e) { scanner = false; console.log(`SKIP: ${[...NEEDS_GITLEAKS].join(", ")} need gitleaks 8.30.1 (${e.message}). Install it: see README, Prerequisites (set AGENT_HUB_GITLEAKS, or unzip into tools/gitleaks/, or put it on PATH).`); }
+try { checkScanner(); } catch (e) { scanner = false; console.log(`SKIP: ${[...NEEDS_GITLEAKS].join(", ")} need gitleaks 8.30.1 (${e.message}). Install it: see README, Prerequisites (set AGENT_HUB_GITLEAKS, or unzip into tools/gitleaks/, or put it on PATH).`); if (strictRun()) { console.log("FAIL: strict run (AGENT_HUB_REQUIRE_FULL=1 or CI): a missing gitleaks must not skip suites"); process.exit(1); } }
 const files = dirs.flatMap((d) => readdirSync(d).filter((f) => f.endsWith(".test.mjs") && (scanner || !NEEDS_GITLEAKS.has(f))).map((f) => join(d, f)));
 process.exit(spawnSync(process.execPath, ["--test", ...files], { stdio: "inherit", env: hermeticEnv() }).status ?? 1);

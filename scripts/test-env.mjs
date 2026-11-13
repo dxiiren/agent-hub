@@ -24,3 +24,5 @@ export function violationsFile(base = process.env) {
 }
 // Test files that need the gitleaks binary; `npm test` skips them (loudly) when none is found.
 export const NEEDS_GITLEAKS = new Set(["gate.test.mjs", "gatefix.test.mjs", "secrets-table.test.mjs", "secrets-table-0.test.mjs", "secrets-table-1.test.mjs", "secrets-table-2.test.mjs", "argv.test.mjs", "talkback.test.mjs", "routes.test.mjs"]);
+/** A missing gitleaks must fail a CI run, not skip 9 suites: strict when AGENT_HUB_REQUIRE_FULL=1, or when CI is set (any CI box) unless AGENT_HUB_REQUIRE_FULL=0. */
+export const strictRun = (env = process.env) => env.AGENT_HUB_REQUIRE_FULL === "1" || (!!env.CI && env.AGENT_HUB_REQUIRE_FULL !== "0");
