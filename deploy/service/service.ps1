@@ -20,11 +20,11 @@ function Invoke-Paseo { param([string[]]$PaseoArgs, [switch]$Scrub)
 function Start-UsageStack { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_USAGE_STACK -eq '1') { return }
   Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot '..\usage\ensure-usage.ps1')) }
 # Put the Agent Hub kinds into Paseo's own Add-provider list (version+hash checked, idempotent, warns and skips on a Paseo it does not know).
-function Invoke-WebPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_WEB_PATCH -eq '1') { return }; & node (Join-Path $PSScriptRoot '..\..\scripts\daemon-ctl.mjs') guard | Out-Null; if ($LASTEXITCODE -eq 0) { try { & node (Join-Path $PSScriptRoot '..\..\scripts\paseo-web-patch.mjs') apply --quiet 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { Write-Host "[WARN] paseo web patch: $_" } }
+function Invoke-WebPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_WEB_PATCH -eq '1') { return }; & node (Join-Path $PSScriptRoot '..\..\scripts\daemon-ctl.mjs') guard | Out-Null; if ($LASTEXITCODE -eq 0) { try { & node (Join-Path $PSScriptRoot '..\..\scripts\paseo-web-patch.mjs') apply --quiet 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { Write-Host "[WARN] paseo web patch: $_" } } }
 # Caps the daemon's provider probes at 4 at once and shortens a failed probe's error (version + sha256 checked, skipped on a Paseo it does not know; the daemon is started right after, so it loads the patched files).
 function Invoke-ServerPatch { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_SERVER_PATCH -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\paseo-server-patch.mjs') apply --quiet 2>&1 | ForEach-Object { "$_" } | Out-Host } catch { Write-Host "[WARN] paseo server patch: $_" } }
 # Who asked for this start/stop: one line (requester process chain) in <home>/restart-requests.log. Never fails the action.
-function Write-RestartLog { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_RESTART_LOG -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\restart-log.mjs') $Action 2>&1 | Out-Null } catch { } } }
+function Write-RestartLog { if ($env:AGENT_HUB_PASEO -or $env:AGENT_HUB_NO_RESTART_LOG -eq '1') { return }; try { & node (Join-Path $PSScriptRoot '..\..\scripts\restart-log.mjs') $Action 2>&1 | Out-Null } catch { } }
 # Reliable restart (scripts/daemon-ctl.mjs): `down` proves the daemon is gone (stops the pid in <home>/paseo.pid when `paseo daemon stop` fails), `up` prints [OK] only when HTTP
 # and `paseo ls` answer and all four plugins run. Skipped under the fake-paseo test hook unless AGENT_HUB_CTL=1.
 function Use-Ctl { return (-not $env:AGENT_HUB_PASEO) -or $env:AGENT_HUB_CTL -eq '1' }
