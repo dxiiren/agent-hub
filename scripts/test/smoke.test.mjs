@@ -6,7 +6,7 @@ import { runDir } from '../../plugins/routing/runstate.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -122,7 +122,7 @@ test('CLI entry points load and answer: gen.mjs, hub.mjs, route.mjs, office.mjs,
 });
 
 // Registry guard: a new .mjs under deploy/ or plugins/ must either import cleanly (a library) or be added to the process list.
-const ENTRY = new Set(['deploy/laptop/laptop-agent.mjs', 'deploy/laptop/laptop-reaper.mjs', 'deploy/office/office-agent.mjs', 'deploy/shared/gen.mjs', 'plugins/routing/route.mjs']);
+const ENTRY = new Set(['deploy/laptop/laptop-agent.mjs', 'deploy/laptop/laptop-reaper.mjs', 'deploy/office/office-agent.mjs', 'deploy/shared/gen.mjs', 'plugins/routing/route.mjs', 'plugins/usage-otel/bin/paseo_run_split.mjs']);
 const mjsFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.name === 'node_modules' || e.name === 'test' ? [] : e.isDirectory() ? mjsFiles(join(dir, e.name)) : e.name.endsWith('.mjs') ? [join(dir, e.name)] : []));
 test('every other .mjs under deploy/ and plugins/ imports without error (a new process script must join ENTRY and get its own test)', () => {
   const libs = [...mjsFiles(f('deploy')), ...mjsFiles(f('plugins'))].filter((p) => !ENTRY.has(relative(ROOT, p).replaceAll('\\', '/')));
@@ -148,4 +148,31 @@ test('laptop-agent: low free RAM is a paused state, not a probe error: initializ
     p.stdin.write('{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{}}\n');
     assert.equal(await exited, 3); assert.match(err, /LAPTOP-REFUSED: free RAM/);
   } finally { if (p.exitCode === null) p.kill(); }
+});
+
+test('paseo_run_split: needs the handshake; creates WITHOUT the prompt, publishes the id, sends the prompt only after the launcher wrote the marker and .go', async () => {
+  const bare = node([f('plugins/usage-otel/bin/paseo_run_split.mjs')], { env: { ...process.env, AGENT_HUB_DIRECT_HANDSHAKE: '' } });
+  assert.equal(bare.status, 2); assert.match(bare.stderr, /HANDSHAKE is required/);
+  const t = mkdtempSync(join(tmpdir(), 'smoke-split-')); const cli = join(t, 'cli'), gate = join(t, 'gate'), hs = join(t, 'hs'), log = join(t, 'calls.log');
+  const mk = (p, body) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, body); };
+  mk(join(cli, 'node_modules', '@getpaseo', 'client', 'dist', 'daemon-client.js'), `import { appendFileSync } from 'node:fs';
+export class DaemonClient {
+  async createAgent(o) { appendFileSync(${JSON.stringify(log)}, 'create prompt=' + (o.initialPrompt ?? 'NONE') + ' labels=' + JSON.stringify(o.labels) + '\\n'); return { id: 'AGENT-1234-FAKE' }; }
+  async sendAgentMessage(id, text) { appendFileSync(${JSON.stringify(log)}, 'send ' + id + ' ' + text + '\\n'); }
+}`);
+  mk(join(cli, 'dist', 'index.js'), `import { DaemonClient } from '../node_modules/@getpaseo/client/dist/daemon-client.js';
+await new DaemonClient().createAgent({ initialPrompt: 'THE-PROMPT', labels: { session: 's' } });`);
+  const child = spawn(process.execPath, [f('plugins/usage-otel/bin/paseo_run_split.mjs')], { env: { ...process.env, AGENT_HUB_PASEO_CLI_DIR: cli, AGENT_HUB_GATE_DIR: gate, AGENT_HUB_DIRECT_HANDSHAKE: hs }, stdio: 'pipe' });
+  let err = ''; child.stderr.on('data', (d) => { err += d; });
+  const until = async (fn) => { for (let i = 0; i < 200 && !fn(); i++) await new Promise((r) => setTimeout(r, 25)); assert.ok(fn(), 'timeout ' + err); };
+  await until(() => existsSync(hs + '.id'));
+  assert.equal(readFileSync(hs + '.id', 'utf8'), 'AGENT-1234-FAKE');
+  writeFileSync(hs + '.go', ''); // an early .go without the marker must NOT release the prompt
+  await new Promise((r) => setTimeout(r, 400));
+  assert.doesNotMatch(readFileSync(log, 'utf8'), /send /, 'no prompt before the marker exists');
+  mkdirSync(join(gate, 'direct'), { recursive: true }); writeFileSync(join(gate, 'direct', 'AGENT-1234-FAKE.json'), '{}');
+  const code = await new Promise((r) => child.on('close', r));
+  assert.equal(code, 0, err);
+  const calls = readFileSync(log, 'utf8').trim().split(/\r?\n/);
+  assert.equal(calls[0].startsWith('create prompt=NONE'), true, calls[0]); assert.equal(calls[1], 'send AGENT-1234-FAKE THE-PROMPT');
 });
