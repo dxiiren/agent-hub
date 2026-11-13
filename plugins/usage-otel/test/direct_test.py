@@ -159,64 +159,63 @@ class ParseTest(unittest.TestCase):
             self.assertGreater(len(set(seen)), 1, seen)
             self.assertFalse(os.path.exists(marker))
 
-    def _paseo(self, t, ok):
-        """Run `direct paseo` against a fake paseo (exit 0 when ok, else 3) with a private gate store; returns (args, gate dir)."""
-        fake(t, "paseo", ["ok"])
-        exe = os.path.join(t, "paseo" + (".cmd" if os.name == "nt" else ""))
-        if ok:
-            body = os.path.join(t, "paseo.py"); src = open(body).read().replace("sys.exit(3)", "sys.exit(0)"); open(body, "w").write(src)
+    def _paseo(self, t, ok, agent_id="AGENT-0001-REAL"):
+        """Run `direct paseo` against a fake paseo that behaves like the create-then-prompt shim: it creates its agent (writes <hs>.id), waits for <hs>.go, and only then records that it was prompted.
+        Returns (args, gate dir, was the marker already there when the prompt was released)."""
+        body = os.path.join(t, "paseo.py")
+        NL = chr(10)
+        lines = ["import os, sys, time", "hs = os.environ['AGENT_HUB_DIRECT_HANDSHAKE']", "gate = os.environ['AGENT_HUB_GATE_DIR']",
+                 "open(hs + '.id', 'w').write(%r)" % agent_id, "end = time.time() + 20",
+                 "while not os.path.exists(hs + '.go') and time.time() < end: time.sleep(0.02)",
+                 "open(%r, 'w').write(' '.join(sys.argv[1:]))" % os.path.join(t, "paseo.args"),
+                 "open(%r, 'w').write(str(os.path.exists(os.path.join(gate, 'direct', %r + '.json'))))" % (os.path.join(t, "marker.before.prompt"), agent_id),
+                 "sys.exit(%d)" % (0 if ok else 3)]
+        open(body, "w").write(NL.join(lines) + NL)
+        exe = os.path.join(t, "paseo.cmd" if os.name == "nt" else "paseo")
+        open(exe, "w").write(('@"%s" "%s" %%*' % (sys.executable, body) + chr(10)) if os.name == "nt" else ('#!/bin/sh' + chr(10) + 'exec "%s" "%s" "$@"' % (sys.executable, body) + chr(10)))
+        if os.name != "nt": os.chmod(exe, os.stat(exe).st_mode | stat.S_IEXEC)
         gate = os.path.join(t, "gate")
-        if "AGENT_HUB_DIRECT_PASEO_LS" not in os.environ:  # the agent lookup must not hit the fake that records the run's args
-            lsb = os.path.join(t, "nols.py"); open(lsb, "w").write("print('[]')" + chr(10))
-            lse = os.path.join(t, "nols.cmd" if os.name == "nt" else "nols")
-            open(lse, "w").write(('@"%s" "%s" %%*' % (sys.executable, lsb) + chr(10)) if os.name == "nt" else ('#!/bin/sh' + chr(10) + 'exec "%s" "%s" "$@"' % (sys.executable, lsb) + chr(10)))
-            if os.name != "nt": os.chmod(lse, os.stat(lse).st_mode | stat.S_IEXEC)
-            os.environ["AGENT_HUB_DIRECT_PASEO_LS"] = lse; own_ls = True
-        else:
-            own_ls = False
         os.environ["AGENT_HUB_DIRECT_PASEO"] = exe; os.environ["AGENT_HUB_GATE_DIR"] = gate
         try:
             with redirect_stdout(io.StringIO()):
                 dr.main(["paseo", "--session", "s-lab", "--", "run", "--cwd", t, "--provider", "codex", "hi"])
         finally:
             del os.environ["AGENT_HUB_DIRECT_PASEO"]; del os.environ["AGENT_HUB_GATE_DIR"]
-            if own_ls: del os.environ["AGENT_HUB_DIRECT_PASEO_LS"]
-        return open(os.path.join(t, "paseo.args")).read(), gate
+        return open(os.path.join(t, "paseo.args")).read(), gate, open(os.path.join(t, "marker.before.prompt")).read()
 
-    def test_paseo_run_gets_session_labels_and_a_matching_gate_nonce(self):
+    def test_paseo_run_gets_session_labels_and_no_nonce_or_label_secret(self):
         with tempfile.TemporaryDirectory() as t:
-            args, gate = self._paseo(t, ok=True)
+            args, gate, _ = self._paseo(t, ok=True)
             self.assertIn("session=s-lab", args); self.assertIn("run --label", args)
-            nonce = args.split("direct-nonce=")[1].split()[0]
-            self.assertRegex(nonce, r"^[0-9a-f]{32}$")
-            # the gate plugin's store holds exactly that single-use nonce (the plugin never trusts a label alone)
-            self.assertEqual(os.listdir(os.path.join(gate, "direct")), [nonce + ".json"])
+            self.assertNotIn("nonce", args, "no secret and no label proves the direct run any more")
+            self.assertEqual(os.listdir(os.path.join(gate, "direct")), ["AGENT-0001-REAL.json"], "the marker is keyed by the agent id only")
             self.assertFalse(os.path.exists(os.path.join(gate, "requests")), "a direct marker never writes into the route request store")
 
-    def test_marker_is_bound_to_the_agent_id_found_by_the_label(self):
+    def test_marker_exists_before_the_prompt_is_released_and_nothing_exists_before_the_agent(self):
         with tempfile.TemporaryDirectory() as t:
-            ls = os.path.join(t, "ls.py"); open(ls, "w").write("import json" + chr(10) + "print(json.dumps([{'id': 'LATE-COPY', 'createdAt': '2026-01-02'}, {'id': 'REAL-AGENT', 'createdAt': '2026-01-01'}]))" + chr(10))
-            exe = os.path.join(t, "ls.cmd" if os.name == "nt" else "ls")
-            open(exe, "w").write(('@"%s" "%s" %%*' % (sys.executable, ls) + chr(10)) if os.name == "nt" else ('#!/bin/sh' + chr(10) + 'exec "%s" "%s" "$@"' % (sys.executable, ls) + chr(10)))
-            if os.name != "nt": os.chmod(exe, os.stat(exe).st_mode | stat.S_IEXEC)
-            os.environ["AGENT_HUB_DIRECT_PASEO_LS"] = exe
-            try:
-                args, gate = self._paseo(t, ok=True)
-            finally:
-                del os.environ["AGENT_HUB_DIRECT_PASEO_LS"]
-            f = os.path.join(gate, "direct", args.split("direct-nonce=")[1].split()[0] + ".json")
-            self.assertEqual(json.load(open(f)).get("agentId"), "REAL-AGENT", "earliest-created agent with the label wins; a later copy is never bound")
+            seen = []
+            real = dr.write_direct_marker
+            def spy(aid):
+                seen.append(os.path.isdir(os.path.join(dr.gate_dir(), "direct")) and os.listdir(os.path.join(dr.gate_dir(), "direct")))  # what a racing reader could see just before the id-keyed marker appears
+                return real(aid)
+            with unittest.mock.patch.object(dr, "write_direct_marker", spy):
+                args, gate, before = self._paseo(t, ok=True)
+            self.assertEqual(before, "True", "create-then-prompt: the marker was already written when the prompt was sent")
+            self.assertEqual(seen, [False], "nothing at all existed in the gate dir before the real agent id was known")
 
-    def test_ambiguous_lookup_without_creation_times_binds_nothing(self):
-        with unittest.mock.patch.object(dr.subprocess, "run", return_value=unittest.mock.Mock(stdout='[{"id": "A"}, {"id": "B"}]')):
-            self.assertIsNone(dr.find_agent_id(["x"], "a" * 32))
-        with unittest.mock.patch.object(dr.subprocess, "run", return_value=unittest.mock.Mock(stdout='[{"id": "A"}]')):
-            self.assertEqual(dr.find_agent_id(["x"], "a" * 32), "A")
+    def test_unusable_agent_id_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as t:
+            old = os.environ.get("AGENT_HUB_GATE_DIR"); os.environ["AGENT_HUB_GATE_DIR"] = os.path.join(t, "gate")
+            try:
+                with self.assertRaises(ValueError): dr.write_direct_marker("../x")
+                self.assertFalse(os.path.exists(os.path.join(t, "gate", "direct")))
+            finally:
+                if old is None: del os.environ["AGENT_HUB_GATE_DIR"]
+                else: os.environ["AGENT_HUB_GATE_DIR"] = old
 
     def test_failed_paseo_run_leaves_no_marker(self):
         with tempfile.TemporaryDirectory() as t:
-            args, gate = self._paseo(t, ok=False)
-            self.assertIn("direct-nonce=", args)
+            args, gate, _ = self._paseo(t, ok=False)
             self.assertEqual(os.listdir(os.path.join(gate, "direct")), [], "the run failed: its marker is removed")
 
     def test_marker_never_overwrites_and_leaves_route_requests_alone(self):
@@ -225,8 +224,8 @@ class ParseTest(unittest.TestCase):
             try:
                 os.makedirs(os.path.join(t, "gate", "requests")); req = os.path.join(t, "gate", "requests", "abc.json")
                 open(req, "w").write('{"cmd": "npm test"}')
-                dr.write_direct_marker("d" * 32)
-                with self.assertRaises(FileExistsError): dr.write_direct_marker("d" * 32)
+                dr.write_direct_marker("AGENT-DDDD-1")
+                with self.assertRaises(FileExistsError): dr.write_direct_marker("AGENT-DDDD-1")
                 self.assertEqual(open(req).read(), '{"cmd": "npm test"}')
             finally:
                 del os.environ["AGENT_HUB_GATE_DIR"]

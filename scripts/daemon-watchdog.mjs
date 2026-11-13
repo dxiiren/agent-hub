@@ -45,16 +45,17 @@ export const writeState = (file, s) => { mkdirSync(dirname(file), { recursive: t
 // 13-11: a provider on another host (name ends in its IP, e.g. qwen-code-192-168-1-122) in error means THAT host is off; a local restart cannot fix it and killed every running task each 12 min for 3 h.
 export const providerErrors = (list) => (Array.isArray(list) ? list : []).filter((x) => /^enabled$/i.test(String(x.enabled)) && x.status === 'error' && !/-\d+-\d+-\d+-\d+$/.test(String(x.provider))).map((x) => x.provider);
 
-/** HTTP health, then the daemon must answer `paseo ls`, and no enabled provider may be in error. -> {state:'up'|'sick'|'hung'|'down', detail} */
+/** HTTP health, then the daemon must answer `paseo ls`. Provider errors only add `warn`. -> {state:'up'|'sick'|'hung'|'down', detail, warn?} */
 export async function deepProbe(port, home, { http = (p) => probeDaemon(p, { attempts: 1, timeoutMs: Number(process.env.AGENT_HUB_WATCHDOG_TIMEOUT_MS || 10000) }), run = null } = {}) {
   const h = await http(port); if (h.state !== 'up') return h;
   const paseo = run ?? ((args, ms) => spawnSyncSafe(process.platform === 'win32' ? 'paseo.cmd' : 'paseo', ['--home', home, ...args], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', windowsHide: true }));
   const ls = paseo(['ls', '--json'], Number(process.env.AGENT_HUB_WATCHDOG_LS_MS || 60000)); // 30 s flapped 3x on 13-11 while workspace churn made the daemon answer slowly
   if (ls.status !== 0) return { state: 'sick', detail: `HTTP answers but \`paseo ls\` does not (exit ${ls.status}${ls.signal ? `, ${ls.signal}` : ''}${ls.stderr ? `: ${String(ls.stderr).trim().slice(0, 120)}` : ''})` }; // the cause travels into the alert: 13-11 it was an unresolved paseo.cmd (exit 127) hidden behind a bare message
+  // 14-11: daemon health = it answers HTTP and lists agents. A provider in error (disabled, known down, no GPU) is a WARNING for the log, never a restart: qwen-code-laptop (no hardware) restarted the daemon every 12 min and killed running tasks.
   const pr = paseo(['provider', 'ls', '--json'], 90000);
-  if (pr.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo provider ls` does not' };
-  let bad = []; try { bad = providerErrors(JSON.parse(pr.stdout || '[]')); } catch { return { state: 'sick', detail: '`paseo provider ls` printed no JSON' }; }
-  return bad.length ? { state: 'sick', detail: `provider status error: ${bad.join(', ')}` } : { state: 'up' };
+  if (pr.status !== 0) return { state: 'up', warn: 'paseo provider ls does not answer' };
+  let bad = []; try { bad = providerErrors(JSON.parse(pr.stdout || '[]')); } catch { return { state: 'up', warn: '`paseo provider ls` printed no JSON' }; }
+  return bad.length ? { state: 'up', warn: `provider status error: ${bad.join(', ')}` } : { state: 'up' };
 }
 
 // Where the alert and incident notes go: env, else "alertFile" / "incidentLog" in the git-ignored config/hub.local.json, else under ~/.paseo (no owner paths in tracked code).
@@ -88,7 +89,10 @@ export async function tick({ home, port, trees = () => { const p = snapshotProcs
   const d = decide({ state: readState(stateFile), ok: p.state === 'up', now, deliberateStop: existsSync(join(home, 'deliberate-stop')), daemonStartedAt });
   const detail = `${d.reason ?? ''}${p.state === 'up' ? '' : ` (${p.state}: ${p.detail ?? ''})`}`.trim();
   if (d.action === 'restart' || d.action === 'backoff') log(d.action === 'restart' ? 'restart' : 'restart-backoff', `watchdog: ${detail}`, { home });
-  writeState(stateFile, d.state);
+  const prev = readState(stateFile).warn; const warn = p.warn ?? null;
+  if (warn !== (prev ?? null) && !dryRun) { try { appendFileSync(join(home, 'watchdog.log'), `${new Date(now).toISOString()} watchdog warn ${warn ?? 'provider warning cleared'} (no restart)
+`); } catch { /* log only */ } } // on change only: one line per new provider problem
+  writeState(stateFile, { ...d.state, warn });
   if (!dryRun && !deliberateStopNow(home)) syncAlert({ ok: p.state === 'up', detail: detail || 'unhealthy', now });
   if (d.action === 'restart' && !dryRun) { const r = await restart(); d.restartExit = r; }
   return { ...d, probe: p };

@@ -13,7 +13,7 @@ agent-hub direct --kill --session <id>        # stops ONLY the child PIDs this w
 
 - `claude`: runs `claude <args> --output-format json`, prints the `result` text, exit code passed through. Reads `total_cost_usd`, `usage`, `modelUsage` and writes one record (provider `claude-headless`, task `direct`) to `usage.jsonl` and `sessions/<id>.jsonl`.
 - `codex`: adds `--json` and sums `turn.completed` token usage (provider `codex-direct`).
-- `paseo`: only for `run`; injects `--label session=<id>,dev=<D>,caller=<C>,route=direct`, so the reaper and the usage board see the agent.
+- `paseo`: only for `run`; injects `--label session=<id>,dev=<D>,caller=<C>,route=direct`, so the reaper and the usage board see the agent. It runs `paseo` through `plugins/usage-otel/bin/paseo_run_split.mjs` (create the agent without a prompt, write the gate marker for its id, then send the prompt); see section 4.
 - A call that returned no usage (failed, 403) writes no record.
 - Env: `AGENT_HUB_SESSION`, `AGENT_HUB_DEV`, `AGENT_HUB_CLIENT`, `AGENT_HUB_USAGE_DIR`; test overrides `AGENT_HUB_DIRECT_CLAUDE|CODEX|PASEO` (path of a fake binary).
 - Check: `agent-hub usage --session <id>` shows `claude-headless`; `agent-hub usage --all` lists it.
@@ -58,3 +58,11 @@ Qoder rows show `in 0 / out 0` and credits only. Checked 13-11-2026 with qodercl
 ## 5. Backfill
 
 `tools/usage_backfill_w3.py --logs <drive-log dir> --label w3-api-docs --out ~/.paseo/usage/usage-backfill-<date>.jsonl [--usage F] [--tz 8] [--dry]` writes a SIDECAR; `usage.jsonl` is never rewritten. `usage --session` merges tag lines (existing no-session records) and synthetic lines (`backfill:true`); `usage --all` adds only the synthetic lines. Undo = delete the sidecar file.
+
+## 4. Why a direct paseo run is exempt from the hub gate (create-then-prompt, 14-11-2026)
+A direct run is never gated or re-prompted (the gate judges route tasks). The exemption must not be winnable by another agent:
+1. `paseo_run_split.mjs` patches `DaemonClient.createAgent` of the installed Paseo CLI: the daemon creates the agent with NO prompt (the daemon client allows it; the CLI run command and the MCP `create_agent` require one).
+2. It writes the new agent id to `<handshake>.id`; the launcher (`agent_hub_direct.py`) writes `<gate>/direct/<agentId>.json` and then `<handshake>.go`.
+3. Only when both exist does the shim send the prompt. So the marker exists before the first turn, and before the agent id is known NOTHING exists in the gate dir (no nonce, no label) for another agent to read, copy or race.
+4. The gate plugin exempts an agent only when `<gate>/direct/<its own id>.json` exists (taken once, 10 min TTL) and no route request is pending for its cwd. Labels are never read.
+Residual risk: the gate store is plain files owned by the OS user. Any process of that user can write `direct/<id>.json`, `requests/` or `state.json` and so exempt (or un-gate) an agent id it knows; this is the same trust boundary as the daemon's own files, not closed by this design. Proven by tests: `plugins/gate/test/gate.test.mjs` (race attack, copied label), `plugins/usage-otel/test/direct_test.py` (marker before prompt, nothing before the id).

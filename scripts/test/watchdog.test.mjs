@@ -172,21 +172,33 @@ test('tick: the restart reason is logged and a young process tree defers it (tre
   assert.equal(r.action, 'restart'); assert.equal(restarts, 1); assert.match(logs[0][1], new RegExp('watchdog: ' + FAILS_TO_RESTART + ' failed health checks in a row'));
 });
 
-test('deepProbe: HTTP up but `paseo ls` failing is sick; an enabled provider in error is sick; all good is up', async () => {
+test('deepProbe: HTTP up but `paseo ls` failing is sick; an enabled provider in error is only a warning (still up); all good is up', async () => {
   const up = async () => ({ state: 'up' });
   const mk = (ls, prov) => (args) => (args[0] === 'ls' ? ls : prov);
   assert.equal((await deepProbe(1, 'h', { http: up, run: mk({ status: 1 }, { status: 0, stdout: '[]' }) })).state, 'sick');
   const bad = JSON.stringify([{ provider: 'qoder', status: 'error', enabled: 'Enabled' }, { provider: 'codex', status: 'error', enabled: 'Disabled' }]);
   const r = await deepProbe(1, 'h', { http: up, run: mk({ status: 0 }, { status: 0, stdout: bad }) });
-  assert.equal(r.state, 'sick'); assert.match(r.detail, /qoder/); assert.doesNotMatch(r.detail, /codex/);
+  assert.equal(r.state, 'up'); assert.match(r.warn, /qoder/); assert.doesNotMatch(r.warn, /codex/);
   assert.equal((await deepProbe(1, 'h', { http: up, run: mk({ status: 0 }, { status: 0, stdout: '[]' }) })).state, 'up');
   assert.equal((await deepProbe(1, 'h', { http: async () => ({ state: 'hung' }), run: () => { throw Error('not reached'); } })).state, 'hung');
   assert.deepEqual(providerErrors(JSON.parse(bad)), ['qoder']);
 });
 
-test('provider error for 3 ticks restarts once; an in-progress boot younger than the window never restarts', async () => {
+test('a provider in error never restarts the daemon (14-11: qwen-code-laptop restarted it every 12 min); the warning is logged once, no alert file', async () => {
   const home = mkdtempSync(join(tmpdir(), 'wd-prov-')); let restarts = 0;
-  const probe = async () => ({ state: 'sick', detail: 'provider status error: qoder' });
+  const up = async () => ({ state: 'up' });
+  const bad = JSON.stringify([{ provider: 'qwen-code-laptop', status: 'error', enabled: 'Enabled' }]);
+  const probe = (p) => deepProbe(p, home, { http: up, run: (args) => (args[0] === 'ls' ? { status: 0 } : { status: 0, stdout: bad }) });
+  const base = { home, port: 1, probe, restart: () => { restarts++; return 0; }, log: () => {} };
+  let r; for (let i = 0; i < 20; i++) r = await tick({ ...base, now: T0 + i * 12 * 60_000, trees: () => T0 - 60 * 60_000 });
+  assert.equal(restarts, 0); assert.equal(r.action, 'none');
+  const warns = readFileSync(join(home, 'watchdog.log'), 'utf8').trim().split(/\r?\n/);
+  assert.equal(warns.length, 1); assert.match(warns[0], /warn provider status error: qwen-code-laptop \(no restart\)/);
+});
+
+test('a daemon that does not answer still restarts after the failed checks; a boot younger than the window never restarts', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'wd-prov-')); let restarts = 0;
+  const probe = async () => ({ state: 'hung', detail: 'no answer' });
   const base = { home, port: 1, probe, restart: () => { restarts++; return 0; }, log: () => {} };
   for (let i = 0; i < 3; i++) await tick({ ...base, now: T0 + i * 60_000, trees: () => T0 - 60 * 60_000 });
   assert.equal(restarts, 1);
