@@ -46,6 +46,12 @@ class Lanes(unittest.TestCase):
                 self.assertTrue(r["in"] > 0 and r["out"] > 0, r)
                 self.assertNotEqual(r.get("kind"), "usage-missing")
 
+    def test_qoder_credits_count_as_recorded_usage_and_only_for_qoder(self):
+        self.assertTrue(dr.usage_recorded({"provider": "qoder", "in": 0, "out": 0, "credits": 0.33}))
+        self.assertFalse(dr.usage_recorded({"provider": "qoder", "in": 0, "out": 0, "credits": 0.0}))
+        self.assertFalse(dr.usage_recorded({"provider": "claude-headless", "in": 0, "out": 0, "credits": 0.33}), "credits never excuse a missing token count outside Qoder")
+        self.assertTrue(dr.usage_recorded({"provider": "codex-direct", "in": 5, "out": 0, "credits": 0}))
+
     def test_success_without_usage_is_logged_usage_missing(self):
         with tempfile.TemporaryDirectory() as t:
             ud = os.path.join(t, "u")

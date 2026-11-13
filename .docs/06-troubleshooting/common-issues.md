@@ -35,6 +35,14 @@ Two causes seen on 13-11: a remote-host provider in `error` counted as sick (a l
 
 A bare `claude -p`, `codex exec` or `paseo run` is not counted. Use `agent-hub direct claude|codex|paseo --session <id> -- <tool args>` or `agent-hub route` (see [usage-direct.md](../../docs/usage-direct.md)).
 
+### Qoder routes show 0 tokens in `agent-hub usage`
+
+By design, not a bug: Qoder rows show `in 0 / out 0` and credits only. Checked 13-11-2026 with qodercli 1.1.81: the session transcripts under `~/.qoder/projects` and `~/.paseo/hub/qoder-home/projects` hold 128,050 assistant `usage` objects and not one has a non-zero `input_tokens`, `output_tokens` or `cache_*` field (they carry `credits`, `original_credits`, `billable` and a `context_usage_ratio`, an estimate of context fill, not a count); the `~/.qoder/logs/runs/*/qodercli.log` files contain no token field either, and the ACP session updates reach Paseo with the same zeros. So Qoder does not expose token counts anywhere we can read, and the hub records its credits instead. The `usage-missing` rule (`usage_recorded` in `plugins/usage-otel/bin/agent_hub_direct.py`, tested in `lanes_test.py`) therefore treats credits > 0 as recorded usage for Qoder only; every other provider with no tokens is still `usage-missing`. Re-check after a qodercli upgrade (the version is pinned at 1.1.81). Details: [usage-direct.md](../../docs/usage-direct.md).
+
+### A route stalls on a provider that cannot start
+
+Fixed 13-11-2026 (r4). `paseo provider ls` is the truth: a provider it lists as disabled, unavailable or error is skipped at once (the config file can only switch one off), the list is cached for 60 s, and a provider whose agent does not start within `startTimeout` (default 90 s, `AGENT_HUB_START_TIMEOUT`) is dropped and its slot released.
+
 ### `just test` fails
 
 `scripts/check-config.mjs` names the template and the key. Templates must be valid JSON with placeholders only; fix the file and re-run.

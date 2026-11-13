@@ -188,6 +188,11 @@ def stop_pid(pid):
         os.kill(pid, 9)
 
 
+def usage_recorded(rec):
+    """A row counts as recorded usage when it carries tokens. Qoder is the one exception: qodercli 1.1.81 reports credits and never tokens (128,050 transcript usage messages, 0 with a token count, 13-11-2026), so credits > 0 is its recorded usage."""
+    return bool(rec.get("in") or rec.get("out") or (str(rec.get("provider", "")).startswith("qoder") and float(rec.get("credits") or 0) > 0))
+
+
 def main(argv):
     if argv and argv[0] == "direct":
         argv = argv[1:]
@@ -278,7 +283,7 @@ def main(argv):
             p = parse_codex(out)
             if p:
                 rec.update(model=p[3], **{"in": p[0], "out": p[1], "cached": p[2]})
-        if r.returncode == 0 and not (rec["in"] or rec["out"]):
+        if r.returncode == 0 and not usage_recorded(rec):
             rec["kind"] = "usage-missing"  # a successful run whose output carried no tokens: recorded loudly, never as a silent zero
             sys.stderr.write("agent-hub direct: usage-missing: %s run succeeded but no token usage was parsed" % tool + chr(10))
         if rec["in"] or rec["out"] or rec["cost_usd"] or rec.get("kind"):  # a failed call with no usage (auth, 403) is not a billed turn

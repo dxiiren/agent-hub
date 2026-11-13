@@ -51,6 +51,10 @@ Read-only and text tools (`grep`, `rg`, `echo`, `printf`, `cat`, `git log|grep|d
 
 The daemon now starts as `node scripts/daemon-main.mjs --title=agent-hub-daemon --home <H>` (via `scripts/daemon-env.mjs`, only for `daemon run`; `AGENT_HUB_DAEMON_MARKER=0` restores the old launch). Its command line has no `@getpaseo` and no ` run `, so the old driver filter (`node.exe` + `@getpaseo` + ` run `) that killed the daemon on 11-11 no longer matches it. A driver must kill only PIDs it started itself (`agent-hub direct --kill --session <id>`); never match on `node.exe`. Takes effect at the next daemon restart; restart only when `paseo ls` shows no running agents.
 
+## 4b. Qoder reports credits, never tokens
+
+Qoder rows show `in 0 / out 0` and credits only. Checked 13-11-2026 with qodercli 1.1.81: the session transcripts under `~/.qoder/projects` and `~/.paseo/hub/qoder-home/projects` hold 128,050 assistant `usage` objects and not one has a non-zero `input_tokens`, `output_tokens` or `cache_*` field (they carry `credits`, `original_credits`, `billable` and a `context_usage_ratio`, an estimate of context fill, not a count); the `~/.qoder/logs/runs/*/qodercli.log` files contain no token field either, and the ACP session updates reach Paseo with the same zeros. So Qoder does not expose token counts anywhere we can read, and the hub records its credits instead. The `usage-missing` rule (`usage_recorded` in `plugins/usage-otel/bin/agent_hub_direct.py`, tested in `lanes_test.py`) therefore treats credits > 0 as recorded usage for Qoder only; every other provider with no tokens is still `usage-missing`. Re-check after a qodercli upgrade (the version is pinned at 1.1.81).
+
 ## 5. Backfill
 
 `tools/usage_backfill_w3.py --logs <drive-log dir> --label w3-api-docs --out ~/.paseo/usage/usage-backfill-<date>.jsonl [--usage F] [--tz 8] [--dry]` writes a SIDECAR; `usage.jsonl` is never rewritten. `usage --session` merges tag lines (existing no-session records) and synthetic lines (`backfill:true`); `usage --all` adds only the synthetic lines. Undo = delete the sidecar file.
