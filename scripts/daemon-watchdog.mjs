@@ -89,8 +89,8 @@ export async function tick({ home, port, trees = () => { const p = snapshotProcs
   const d = decide({ state: readState(stateFile), ok: p.state === 'up', now, deliberateStop: existsSync(join(home, 'deliberate-stop')), daemonStartedAt });
   const detail = `${d.reason ?? ''}${p.state === 'up' ? '' : ` (${p.state}: ${p.detail ?? ''})`}`.trim();
   if (d.action === 'restart' || d.action === 'backoff') log(d.action === 'restart' ? 'restart' : 'restart-backoff', `watchdog: ${detail}`, { home });
-  const prev = readState(stateFile).warn; const warn = p.warn ?? null;
-  if (warn !== (prev ?? null) && !dryRun) { try { appendFileSync(join(home, 'watchdog.log'), `${new Date(now).toISOString()} watchdog warn ${warn ?? 'provider warning cleared'} (no restart)
+  const prev = readState(stateFile).warn ?? null; const warn = p.state === 'up' ? (p.warn ?? null) : prev; // a down/booting probe says nothing about providers: keep the last warning, no flap line
+  if (warn !== prev && !dryRun) { try { appendFileSync(join(home, 'watchdog.log'), `${new Date(now).toISOString()} watchdog warn ${warn ?? 'provider warning cleared'} (no restart)
 `); } catch { /* log only */ } } // on change only: one line per new provider problem
   writeState(stateFile, { ...d.state, warn });
   if (!dryRun && !deliberateStopNow(home)) syncAlert({ ok: p.state === 'up', detail: detail || 'unhealthy', now });
