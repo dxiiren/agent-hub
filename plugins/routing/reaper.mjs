@@ -196,6 +196,9 @@ export async function reapOnce({ run, env = process.env, home = env.PASEO_HOME, 
   return { dead, ...fin, ghosts: ghosts.archived, folders: folders.removed, dupes, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}), spooled, stuck };
 }
 
+/** Office model servers that moved: scripts/discover.mjs repoints the provider config (own log ~/.agent-hub/discovery.log). A changed provider needs the next daemon restart to take effect in Paseo. */
+export const discoverEndpoints = (log) => new Promise((resolve) => execFile(process.execPath, [join(dirname(toPath(import.meta.url)), "..", "..", "scripts", "discover.mjs")], { timeout: 60_000, windowsHide: true }, (e, out) => { if (e) log("agent-hub discover: " + String(e.message).slice(0, 200)); else if (/"changed":\s*[1-9]/.test(out)) log("agent-hub discover: provider endpoint(s) repointed, see ~/.agent-hub/discovery.log (daemon restart loads them)"); resolve(); }));
+
 /** Start the periodic reaper; returns stop(). One pass at a time; the timer never keeps the process alive. */
 export function startReaper({ run, everyMs = REAP_EVERY_MS, log = (m) => console.error(m), ...opts }) {
   let busy = false;
@@ -206,9 +209,10 @@ export function startReaper({ run, everyMs = REAP_EVERY_MS, log = (m) => console
   };
   const t = setInterval(tick, everyMs); t.unref?.();
   let sbusy = false; // workspace sweep every 10 min (guards.mjs): idle, clean worktree workspaces; the cap in route.mjs refuses routes over 20
-  const sweep = async () => { if (sbusy) return; sbusy = true; try { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), log }); if (r.archived.length) log(`agent-hub reaper: archived ${r.archived.length} idle workspace(s)`); const l = await archiveIdleLocalWorkspaces({ run, log }); if (l.length) log(`agent-hub reaper: archived ${l.length} idle local workspace(s)`); const d = await archivePermanentDuplicates({ run, log }); if (d.archived.length) log(`agent-hub reaper: archived ${d.archived.length} duplicate record(s) of a permanent folder`); await reprobeErrorProviders({ run, log }); } catch (e) { log("agent-hub reaper sweep: " + String(e?.message ?? e)); } finally { sbusy = false; } };
+  const sweep = async () => { if (sbusy) return; sbusy = true; try { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), log }); if (r.archived.length) log(`agent-hub reaper: archived ${r.archived.length} idle workspace(s)`); const l = await archiveIdleLocalWorkspaces({ run, log }); if (l.length) log(`agent-hub reaper: archived ${l.length} idle local workspace(s)`); const d = await archivePermanentDuplicates({ run, log }); if (d.archived.length) log(`agent-hub reaper: archived ${d.archived.length} duplicate record(s) of a permanent folder`); await reprobeErrorProviders({ run, log }); await discoverEndpoints(log); } catch (e) { log("agent-hub reaper sweep: " + String(e?.message ?? e)); } finally { sbusy = false; } };
   const t2 = setInterval(sweep, 10 * 60_000); t2.unref?.();
-  return () => { clearInterval(t); clearInterval(t2); };
+  const t3 = setTimeout(() => discoverEndpoints(log), 60_000); t3.unref?.(); // after a daemon start: repoint office providers that moved
+  return () => { clearInterval(t); clearInterval(t2); clearTimeout(t3); };
 }
 
 // node reaper.mjs [--once] [--dry-run] [--older-than 20m] [--every 5m] [--home H]: standalone form of the daemon plugin (plugins/reaper)
