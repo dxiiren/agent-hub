@@ -9,17 +9,18 @@ const BS = String.fromCharCode(92);
 // global npm shim last line:  "%_prog%" [node flags] "%dp0%\<entry>" %*
 const ENTRY = /"%_prog%"\s+((?:--?[\w.=-]+\s+)*)"%dp0%\\([^"%]+)"\s+%\*/;
 
-/** Windows: a bare name (no folder, no extension) is looked up on PATH as .exe, .cmd, .bat (what cmd.exe would find). */
+/** Windows: a bare name (no folder) is looked up on PATH like cmd.exe does: as given when it already has an extension (`paseo.cmd`), else with .exe, .cmd, .bat appended. */
 function findOnPath(name, env) {
+  const exts = /\.[A-Za-z0-9]+$/.test(name) ? [""] : [".exe", ".cmd", ".bat"];
   for (const d of String(env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean))
-    for (const x of [".exe", ".cmd", ".bat"]) { const f = join(d, name + x); if (existsSync(f)) return f; }
+    for (const x of exts) { const f = join(d, name + x); if (existsSync(f)) return f; }
   return name;
 }
 
 /** -> { cmd, args } to hand to spawn/spawnSync with shell:false. Throws on a shim that cannot be resolved. */
 export function resolveCommand(bin, args = [], platform = process.platform, env = process.env) {
   if (platform !== "win32") return { cmd: bin, args };
-  if (!/[\\/]/.test(bin) && !/\.[A-Za-z0-9]+$/.test(bin)) bin = findOnPath(bin, env);
+  if (!/[\\/]/.test(bin)) bin = findOnPath(bin, env);
   if (!SHIM.test(bin)) return { cmd: bin, args };
   let text = "";
   try { text = readFileSync(bin, "utf8"); } catch (e) { throw new Error(`cannot read command shim ${bin}: ${e.code ?? e.message}`); }

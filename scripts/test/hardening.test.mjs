@@ -163,3 +163,11 @@ test('laptop-agent starts Qwen with the scrubbed environment, and the scrub drop
   const e = scrubKeyEnv({ PATH: 'p', HUB_OPENAI_API_KEY: 'k', GITHUB_TOKEN: 't', MY_SECRET: 's', DB_PASSWORD: 'x', KEEP: '1' });
   assert.deepEqual(Object.keys(e).sort(), ['KEEP', 'PATH']);
 });
+test('resolveCommand finds a bare name that already carries .cmd on PATH (the watchdog probe `paseo.cmd` was exit 127 for ever)', () => {
+  const { d, shim, entry } = shimFixture(); // x.cmd in d
+  const env = { PATH: d, Path: d };
+  const r = resolveCommand('x.cmd', ['a'], 'win32', env);
+  assert.equal(r.cmd, process.execPath); assert.deepEqual(r.args, ['--no-warnings', entry, 'a']);
+  assert.equal(resolveCommand('x', ['a'], 'win32', env).args[1], entry); // extensionless still works
+  assert.throws(() => resolveCommand('nope.cmd', [], 'win32', env), /cannot read command shim/);
+});

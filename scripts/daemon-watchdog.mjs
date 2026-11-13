@@ -50,7 +50,7 @@ export async function deepProbe(port, home, { http = (p) => probeDaemon(p, { att
   const h = await http(port); if (h.state !== 'up') return h;
   const paseo = run ?? ((args, ms) => spawnSyncSafe(process.platform === 'win32' ? 'paseo.cmd' : 'paseo', ['--home', home, ...args], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', windowsHide: true }));
   const ls = paseo(['ls', '--json'], Number(process.env.AGENT_HUB_WATCHDOG_LS_MS || 60000)); // 30 s flapped 3x on 13-11 while workspace churn made the daemon answer slowly
-  if (ls.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo ls` does not' };
+  if (ls.status !== 0) return { state: 'sick', detail: `HTTP answers but \`paseo ls\` does not (exit ${ls.status}${ls.signal ? `, ${ls.signal}` : ''}${ls.stderr ? `: ${String(ls.stderr).trim().slice(0, 120)}` : ''})` }; // the cause travels into the alert: 13-11 it was an unresolved paseo.cmd (exit 127) hidden behind a bare message
   const pr = paseo(['provider', 'ls', '--json'], 90000);
   if (pr.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo provider ls` does not' };
   let bad = []; try { bad = providerErrors(JSON.parse(pr.stdout || '[]')); } catch { return { state: 'sick', detail: '`paseo provider ls` printed no JSON' }; }
