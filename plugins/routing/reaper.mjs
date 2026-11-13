@@ -5,7 +5,7 @@
 // `archive --force` ends the CLI process tree. Calls are async (it runs inside the daemon as a plugin, and as `agent-hub reaper`), `concurrency` at a time: the CLI takes seconds per call.
 import { execFile } from "node:child_process";
 import { existsSync, lstatSync, realpathSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath as toPath } from "node:url";
 import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
@@ -117,33 +117,33 @@ export async function reapGhostWorkspaces({ run, home, exists = existsSync, mtim
 }
 
 const NULL_DEV = process.platform === "win32" ? "NUL" : "/dev/null";
-const hardGit = (repo, args) => spawnSyncSafe("git", ["-c", "core.fsmonitor=", "-c", `core.hooksPath=${NULL_DEV}`, "-C", repo, ...args], { encoding: "utf8", timeout: 120_000, windowsHide: true, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: NULL_DEV, GIT_TERMINAL_PROMPT: "0" } });
+// minimal env, no inherited GIT_* variable, no global/system config; fsmonitor and hooks off. Only ever run on a TRUSTED repo, never inside a route worktree.
+const hardGit = (repo, args) => spawnSyncSafe("git", ["-c", "core.fsmonitor=", "-c", `core.hooksPath=${NULL_DEV}`, "-C", repo, ...args], { encoding: "utf8", timeout: 120_000, windowsHide: true, env: { PATH: process.env.PATH ?? process.env.Path ?? "", ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: NULL_DEV, GIT_TERMINAL_PROMPT: "0" } });
 let repoCfg = null;
-/** Main repos hub routes run in: AGENT_HUB_WORKTREE_REPOS (comma list) or "worktreeRepos" in the git-ignored config/hub.local.json. Never read from the worktree's own .git file (an agent can write that). Nothing configured = git is never run. */
+/** Main repos hub routes run in: AGENT_HUB_WORKTREE_REPOS (comma list) or "worktreeRepos" in the git-ignored config/hub.local.json. Used only to `git worktree prune` after a folder is deleted. */
 export function trustedRepos(env = process.env) {
   if (env.AGENT_HUB_WORKTREE_REPOS !== undefined) return env.AGENT_HUB_WORKTREE_REPOS.split(",").map((x) => x.trim()).filter(Boolean);
   if (!repoCfg) { try { repoCfg = JSON.parse(readFileSync(join(dirname(toPath(import.meta.url)), "..", "..", "config", "hub.local.json"), "utf8")).worktreeRepos ?? []; } catch { repoCfg = []; } }
   return repoCfg;
 }
-const real = (p) => { try { return realpathSync.native(p); } catch { return String(p); } }; // 8.3 short names (KOLLEC~1) vs the long path git prints
-const same = (a, b) => real(a).split("\\").join("/").replace(/\/+$/, "").toLowerCase() === real(b).split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+const lower = (p) => String(p).split("\\").join("/").replace(/\/+$/, "").toLowerCase();
 
 /**
- * Remove one route worktree folder. The repo comes ONLY from the trusted list: a repo whose own `git worktree list` names this folder removes it with `git worktree remove` (hardened: no fsmonitor, no hooks, no global/system config).
- * A folder no trusted repo lists (a crafted or dangling .git pointer is never followed) is deleted with rmSync (links are unlinked, never followed) and `git worktree prune` runs on the trusted repos.
+ * Remove one route worktree folder WITHOUT running git inside it (status/clean checks would run the worktree's own filter/textconv/include config) and without following links:
+ *   - the folder must sit directly under `root`: realpath(parent) + the literal basename must still be inside realpath(root), else refused;
+ *   - a symlink or junction at the path is unlinked as a link, never recursed into or handed to git;
+ *   - a real folder is rmSync'd (rmSync unlinks links inside it, it does not follow them), only when `force` (idle past the 1 h bar: a dirty worktree is not told apart without git);
+ *   - then `git worktree prune` runs on each TRUSTED repo (never one read from the folder's .git file) so its admin record goes too.
  */
-export function gitWorktreeRemove(path, force = false, repos = trustedRepos()) {
+export function gitWorktreeRemove(path, force = false, repos = trustedRepos(), root = join(process.env.PASEO_HOME || join(os.homedir(), ".paseo"), "worktrees")) {
   try {
-    for (const repo of repos) {
-      if (!existsSync(repo)) continue;
-      const l = hardGit(repo, ["worktree", "list", "--porcelain"]);
-      if (l.status !== 0 || !String(l.stdout).split(String.fromCharCode(10)).some((x) => x.startsWith("worktree ") && same(x.slice(9).trim(), path))) continue;
-      const r = hardGit(repo, ["worktree", "remove", ...(force ? ["--force"] : []), path]);
-      return r.status === 0 && !existsSync(path);
-    }
-    if (!force) return false; // unlisted folders only after the long-idle bar
-    let st = null; try { st = lstatSync(path); } catch { return true; }
-    if (st.isSymbolicLink()) unlinkSync(path); else rmSync(path, { recursive: true, force: true });
+    let st; try { st = lstatSync(path); } catch { return true; } // already gone
+    const parent = realpathSync.native(dirname(path)), rootReal = realpathSync.native(root);
+    const target = join(parent, basename(path));
+    if (!(lower(target) + "/").startsWith(lower(rootReal) + "/") || lower(target) === lower(rootReal)) return false; // outside the worktrees root
+    if (st.isSymbolicLink()) { unlinkSync(target); return !existsSync(path); } // a planted junction/link: drop the link only
+    if (!force) return false;
+    rmSync(target, { recursive: true, force: true });
     for (const repo of repos) if (existsSync(repo)) hardGit(repo, ["worktree", "prune"]);
     return !existsSync(path);
   } catch { return false; }
@@ -155,8 +155,8 @@ export const FOLDER_IDLE_S = 10 * 60, FOLDER_FORCE_S = 60 * 60;
  * and no active workspace names it, it is not a permanent folder, and nothing touched it for 10 min (--force after 1 h, plain remove only before). Emptied <hash> parents (and empty ones) are rmdir'd, which refuses a non-empty folder.
  * Returns { removed: [paths], kept: [{path, why}], bytes }; `size(path)` is injectable for the proof.
  */
-export async function reapWorktreeFolders({ run, home, dry = false, list = (d) => { try { return readdirSync(d); } catch { return []; } }, mtimeMs = (f) => { try { return statSync(f).mtimeMs; } catch { return Date.now(); } }, now = Date.now, remove = gitWorktreeRemove, size = () => 0, rmEmpty = (d) => { try { rmdirSync(d); return true; } catch { return false; } }, max = 400 }) {
-  const root = join(home || join(os.homedir(), ".paseo"), "worktrees");
+export async function reapWorktreeFolders({ run, home, dry = false, list = (d) => { try { return readdirSync(d); } catch { return []; } }, mtimeMs = (f) => { try { return statSync(f).mtimeMs; } catch { return Date.now(); } }, now = Date.now, remove = null, size = () => 0, rmEmpty = (d) => { try { rmdirSync(d); return true; } catch { return false; } }, max = 400 }) {
+  const root = join(home || join(os.homedir(), ".paseo"), "worktrees"); remove ??= (p, f) => gitWorktreeRemove(p, f, trustedRepos(), root);
   const norm = (p) => String(p).split("\\").join("/").replace(/^~(?=[\/])/, os.homedir()).toLowerCase();
   const agents = await run(["ls"]); const wss = await run(["workspace", "ls", "--json"]);
   if (!Array.isArray(agents) || !Array.isArray(wss)) return { removed: [], kept: [], bytes: 0, failed: "daemon list unreadable" }; // fail closed

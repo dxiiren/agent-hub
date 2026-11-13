@@ -260,25 +260,48 @@ test("(feedback 1) reapWorktreeFolders never removes a permanent folder", async 
   finally { process.env.AGENT_HUB_PERMANENT_WS = prev; }
 });
 
-test("(security) a crafted .git pointer is never followed: git does not run against the fake repo; an unlisted folder is rmSync'd, a listed one goes through the trusted repo", async () => {
+// the folder's own .git file, config, links and filters are attacker-controlled: nothing in them may run or steer a delete
+test("(security) crafted .git pointer + worktree filter/textconv config: no git runs in or via the folder, sentinels never appear", async () => {
   const { gitWorktreeRemove } = await import("../reaper.mjs");
   const { execFileSync } = await import("node:child_process");
-  const { rmSync, writeFileSync: wf, mkdirSync: mk, existsSync: ex } = await import("node:fs");
-  const base = tmp(), marker = join(base, "FSMONITOR-RAN");
-  // fake repo an attacker controls: its config would run a command on any git status/worktree call
+  const { rmSync, writeFileSync: wf, mkdirSync: mk, existsSync: ex, realpathSync } = await import("node:fs");
+  const NL = String.fromCharCode(10), BS = String.fromCharCode(92), fwd = (p) => p.split(BS).join("/");
+  const base = realpathSync(tmp()), root = join(base, "worktrees"), sentinel = join(base, "SENTINEL");
+  const cmd = `node -e "require('fs').writeFileSync(process.argv[1],'x')" ${fwd(sentinel)}`;
   const fake = join(base, "fake"); mk(join(fake, ".git", "worktrees", "w"), { recursive: true });
-  wf(join(fake, ".git", "HEAD"), "ref: refs/heads/main\n"); wf(join(fake, ".git", "config"), `[core]\n\trepositoryformatversion = 0\n\tfsmonitor = node -e "require('fs').writeFileSync(process.argv[1],'x')" ${JSON.stringify(marker).slice(1, -1)}\n`);
-  const crafted = join(base, "route-aa11"); mk(crafted); wf(join(crafted, ".git"), `gitdir: ${join(fake, ".git", "worktrees", "w").split("\\").join("/")}\n`); wf(join(crafted, "f.txt"), "x");
-  const trusted = join(base, "trusted"); mk(trusted);
+  wf(join(fake, ".git", "HEAD"), "ref: refs/heads/main" + NL); wf(join(fake, ".git", "config"), ["[core]", "\trepositoryformatversion = 0", "\tfsmonitor = " + cmd, ""].join(NL));
+  const trusted = join(base, "trusted"); mk(trusted); mk(join(root, "h"), { recursive: true });
   const g = (...a) => execFileSync("git", ["-C", trusted, "-c", "user.email=a@b.c", "-c", "user.name=t", ...a], { stdio: "pipe" });
   g("init", "-q"); g("commit", "-q", "--allow-empty", "-m", "i");
-  assert.equal(gitWorktreeRemove(crafted, false, [trusted]), false); // idle < force bar: nothing deleted, git not aimed at the fake repo
-  assert.ok(ex(crafted));
-  assert.equal(gitWorktreeRemove(crafted, true, [trusted]), true); assert.ok(!ex(crafted)); // not listed by the trusted repo: rmSync
-  assert.ok(!ex(marker), "git must never have run against the repo named by the folder's .git file");
-  assert.equal(gitWorktreeRemove(crafted, true, []), true); // no allowlist: still no git
-  // a real worktree of the trusted repo is removed by the trusted repo's own git
-  const real = join(base, "route-bb22"); g("worktree", "add", "-q", real, "-b", "wt");
-  assert.equal(gitWorktreeRemove(real, false, [trusted]), true); assert.ok(!ex(real));
+  // a real worktree of the trusted repo whose own config carries filter.clean and diff.textconv commands
+  const real = join(root, "h", "route-bb22"); g("worktree", "add", "-q", real, "-b", "wt");
+  wf(join(trusted, ".git", "worktrees", "route-bb22", "config.worktree"), ['[filter "x"]', "\tclean = " + cmd, '[diff "x"]', "\ttextconv = " + cmd, ""].join(NL));
+  wf(join(real, ".gitattributes"), "*.txt filter=x diff=x" + NL); wf(join(real, "a.txt"), "dirty");
+  assert.equal(gitWorktreeRemove(real, false, [trusted], root), false); // not idle long enough: untouched
+  assert.equal(gitWorktreeRemove(real, true, [trusted], root), true); assert.ok(!ex(real));
+  assert.ok(!g("worktree", "list", "--porcelain").toString().includes("route-bb22"), "admin record pruned by the trusted repo");
+  // crafted pointer to the fake repo: the folder is deleted, git is never aimed at the fake repo
+  const crafted = join(root, "h", "route-aa11"); mk(crafted); wf(join(crafted, ".git"), "gitdir: " + fwd(join(fake, ".git", "worktrees", "w")) + NL);
+  assert.equal(gitWorktreeRemove(crafted, true, [trusted], root), true); assert.ok(!ex(crafted));
+  assert.equal(gitWorktreeRemove(crafted, true, [], root), true);
+  assert.ok(!ex(sentinel), "no filter, textconv or fsmonitor command ever ran");
+  rmSync(base, { recursive: true, force: true });
+});
+
+test("(security) a junction under the worktrees root that points outside it: the outside target survives, only the link goes", async () => {
+  const { gitWorktreeRemove } = await import("../reaper.mjs");
+  const { rmSync, writeFileSync: wf, mkdirSync: mk, existsSync: ex, symlinkSync, realpathSync } = await import("node:fs");
+  const base = realpathSync(tmp()), root = join(base, "worktrees"), outside = join(base, "precious");
+  mk(join(root, "h"), { recursive: true }); mk(outside); wf(join(outside, "keep.txt"), "keep");
+  const link = join(root, "h", "route-cc33"); symlinkSync(outside, link, "junction");
+  // a junction INSIDE a real route folder pointing outside: rmSync must unlink it, not recurse
+  const dir = join(root, "h", "route-dd44"); mk(dir); symlinkSync(outside, join(dir, "inner"), "junction");
+  assert.equal(gitWorktreeRemove(link, true, [], root), true); assert.ok(!ex(link));
+  assert.equal(gitWorktreeRemove(dir, true, [], root), true); assert.ok(!ex(dir));
+  assert.ok(ex(join(outside, "keep.txt")), "the outside target must survive");
+  // a path whose parent junction leads outside the root is refused
+  const outer = join(base, "elsewhere"); mk(join(outer, "route-ee55"), { recursive: true });
+  symlinkSync(outer, join(root, "hj"), "junction");
+  assert.equal(gitWorktreeRemove(join(root, "hj", "route-ee55"), true, [], root), false); assert.ok(ex(join(outer, "route-ee55")));
   rmSync(base, { recursive: true, force: true });
 });
