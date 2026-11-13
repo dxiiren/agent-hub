@@ -3,9 +3,9 @@
 // caller's whole one. An agent can run `env`; tokens, API keys and passwords in the shell that started the hub must not be in it.
 // Agent CLIs keep their own logins in their config dirs (~/.codex, ~/.claude, qodercli login ...), which need no environment variable.
 // Usage: node scripts/daemon-env.mjs <paseo-binary> <paseo args...>     Extras: AGENT_HUB_ENV_ALLOW (comma list) or "daemonEnvAllow" in config/hub.local.json.
-import { spawnSafe } from "./../plugins/routing/spawn-safe.mjs";
+import { spawnSafe, resolveCommand } from "./../plugins/routing/spawn-safe.mjs";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -85,7 +85,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const [bin, ...args] = process.argv.slice(2);
   if (!bin) { console.error("usage: daemon-env.mjs <paseo-binary> <args...>"); process.exit(2); }
   const env = buildDaemonEnv(process.env, localExtras());
-  let child; try { child = spawnSafe(bin, args, { env, stdio: "inherit" }); } catch (e) { console.error(`[FAIL] ${e.message}`); process.exit(1); } // .cmd shims run as node <entry>, never through a shell
+  let child;
+  try {
+    if (args[0] === "daemon" && args[1] === "run" && env.AGENT_HUB_DAEMON_MARKER !== "0") { // distinct command line, see scripts/daemon-main.mjs; AGENT_HUB_DAEMON_MARKER=0 = old launch
+      const r = resolveCommand(bin, []); env.AGENT_HUB_PASEO_ENTRY = r.args[r.args.length - 1];
+      child = spawn(r.cmd, [...r.args.slice(0, -1), join(dirname(fileURLToPath(import.meta.url)), "daemon-main.mjs"), "--title=agent-hub-daemon", ...args.slice(2)], { env, stdio: "inherit", shell: false });
+    } else child = spawnSafe(bin, args, { env, stdio: "inherit" });
+  } catch (e) { console.error(`[FAIL] ${e.message}`); process.exit(1); } // .cmd shims run as node <entry>, never through a shell
   try { const f = envNamesFile(process.env); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, JSON.stringify({ at: Date.now(), launcherPid: process.pid, args: args.slice(0, 2), names: Object.keys(env).sort() })); } catch { /* diagnostics only */ }
   child.on("exit", (c, s) => process.exit(c ?? (s ? 1 : 0)));
   child.on("error", (e) => { console.error(`[FAIL] ${e.message}`); process.exit(1); });

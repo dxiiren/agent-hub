@@ -11,6 +11,7 @@ Agent Hub routes tasks to agent providers through a local Paseo daemon. Human do
 - **No recursion:** if you are yourself a task started by the hub, do the work directly and never call `agent-hub route`.
 - Never put credentials, tokens, keys or customer secrets in a task or `--gate`; the hub scans and rejects them.
 - Usage: `agent-hub usage --session <id> --json`, `agent-hub usage --all`. Health: `agent-hub doctor`.
+- **Never launch a bare `claude -p`, `codex exec` or `paseo run`** (a hook refuses it; it would be invisible to usage). Use `agent-hub direct claude|codex|paseo --session <id> -- <args>` or `agent-hub route`. Driver-script patterns, the guard switch, auto-archive and the daemon marker: [docs/usage-direct.md](docs/usage-direct.md).
 - Never run `agent-hub provider add/edit/remove`, `cleanup` or `just down/up` on a hub you do not own; they change the owner's config or restart their daemon.
 
 ## Working ON the repo

@@ -1,0 +1,53 @@
+# Counting every LLM call: `agent-hub direct`, launch guard, auto-archive, daemon marker
+
+Written 13-11-2026 after a fleet drove `claude -p` and `paseo run` directly and its usage never showed in `agent-hub usage`.
+Rule: **every LLM call a driver script makes goes through `agent-hub route` or `agent-hub direct`**, always with a session id.
+
+## 1. `agent-hub direct` (the supported fast path)
+
+```
+agent-hub direct claude|codex|paseo --session <id> [--dev D] [--client C] -- <tool args>
+agent-hub direct --list                       # live wrapped runs (~/.paseo/run/direct/<wrapper pid>.json)
+agent-hub direct --kill --session <id>        # stops ONLY the child PIDs this wrapper recorded for that session
+```
+
+- `claude`: runs `claude <args> --output-format json`, prints the `result` text, exit code passed through. Reads `total_cost_usd`, `usage`, `modelUsage` and writes one record (provider `claude-headless`, task `direct`) to `usage.jsonl` and `sessions/<id>.jsonl`.
+- `codex`: adds `--json` and sums `turn.completed` token usage (provider `codex-direct`).
+- `paseo`: only for `run`; injects `--label session=<id>,dev=<D>,caller=<C>,route=direct`, so the reaper and the usage board see the agent.
+- A call that returned no usage (failed, 403) writes no record.
+- Env: `AGENT_HUB_SESSION`, `AGENT_HUB_DEV`, `AGENT_HUB_CLIENT`, `AGENT_HUB_USAGE_DIR`; test overrides `AGENT_HUB_DIRECT_CLAUDE|CODEX|PASEO` (path of a fake binary).
+- Check: `agent-hub usage --session <id>` shows `claude-headless`; `agent-hub usage --all` lists it.
+
+### How a driver script must start workers
+
+```bash
+# one worker, counted under the driver's session
+agent-hub direct claude --session w3-api-docs --dev akmal --client dreview -- \
+  -p "$PROMPT" --model sonnet --strict-mcp-config
+# a hub agent started by hand, labelled (never a bare `paseo run`)
+agent-hub direct paseo --session w3-api-docs -- run --provider codex/terra --cwd "$WT" "$PROMPT"
+# bulk or gated work: use route (picks the provider, counts it, reaps it)
+agent-hub route code-edit "<task>" --cwd "$WT" --session w3-api-docs --gate "<real test command>"
+```
+
+Rules: pass `--session` (or set `AGENT_HUB_SESSION` once in the driver); headless claude always `--strict-mcp-config`; to stop workers, `agent-hub direct --kill --session <id>`, never by process-name pattern.
+If a script cannot be changed, put the line `agent-hub-direct-ok` in the script, or `AGENT-HUB-DIRECT-OK: <reason>` in the command, and say why in the PR.
+
+## 2. Launch guard (Claude Code hook)
+
+`~/.claude/hooks-local/direct-launch-guard/guard.py` (PreToolUse, Bash|PowerShell) refuses a bare `claude -p`, `codex exec` or `paseo run`, in the command text and in the python/node/ps1 script the command runs.
+Allowed: `agent-hub direct|route`, `agent_hub_direct`, the two opt-out markers above. Switch (owner only): `DIRECT_LAUNCH_GUARD=off`. Blocks are logged to `~/.claude/logs/fleet-cap.jsonl` as kind `unlogged-direct`; the fleet-cap guard also logs (never blocks) a headless claude with no agent-hub ancestor. Self-test: `python guard.py --selftest`.
+
+## 3. Workspace cap auto-archive and error agents
+
+- `route` over `AGENT_HUB_WORKSPACE_CAP` (default 20) no longer refuses at once: it runs `node plugins/routing/reaper.mjs --heal-cap` (archive idle local workspaces and sweep idle ones) once, re-checks, and refuses only if still over.
+- The reaper also archives agents in `error` that have no route/type label (older than its `--older-than`); labelled route agents keep their own cleanup.
+- Manual: `node plugins/routing/reaper.mjs --heal-cap [--home H]`, or `agent-hub cleanup`.
+
+## 4. Daemon marker and safe kill filter
+
+The daemon now starts as `node scripts/daemon-main.mjs --title=agent-hub-daemon --home <H>` (via `scripts/daemon-env.mjs`, only for `daemon run`; `AGENT_HUB_DAEMON_MARKER=0` restores the old launch). Its command line has no `@getpaseo` and no ` run `, so the old driver filter (`node.exe` + `@getpaseo` + ` run `) that killed the daemon on 11-11 no longer matches it. A driver must kill only PIDs it started itself (`agent-hub direct --kill --session <id>`); never match on `node.exe`. Takes effect at the next daemon restart; restart only when `paseo ls` shows no running agents.
+
+## 5. Backfill
+
+`tools/usage_backfill_w3.py --logs <drive-log dir> --label w3-api-docs --out ~/.paseo/usage/usage-backfill-<date>.jsonl [--usage F] [--tz 8] [--dry]` writes a SIDECAR; `usage.jsonl` is never rewritten. `usage --session` merges tag lines (existing no-session records) and synthetic lines (`backfill:true`); `usage --all` adds only the synthetic lines. Undo = delete the sidecar file.

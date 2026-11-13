@@ -779,7 +779,11 @@ function main(argv) {
   if (!(opt("--session") ?? sessionFromEnv(process.env))) console.error("route: note: no session id (CLAUDE_CODE_SESSION_ID is not set in this shell, e.g. a PowerShell tool), so this task is counted under no session; pass --session <id> or set AGENT_HUB_SESSION to see it in `agent-hub usage --session <id>`.");
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
   const routes0 = loadRoutes();
-  { const capErr = workspaceCapError(withRetry(cliPaseo(home)), Number(process.env.AGENT_HUB_WORKSPACE_CAP) || undefined); if (capErr) { console.error("route: " + capErr); return 1; } }
+  { const cap = Number(process.env.AGENT_HUB_WORKSPACE_CAP) || undefined; let capErr = workspaceCapError(withRetry(cliPaseo(home)), cap);
+    if (capErr) { // self-heal once (13-11: idle dr-* workspaces refused routes at 24 and 81 > 20): archive idle workspaces now, then look again
+      try { console.error("route: " + capErr.split(";")[0] + ": archiving idle workspaces, then retrying the check"); spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "reaper.mjs"), "--heal-cap", ...(home ? ["--home", home] : [])], { timeout: 240_000, windowsHide: true, stdio: "ignore" }); capErr = workspaceCapError(withRetry(cliPaseo(home)), cap); } catch { /* keep the refusal */ }
+    }
+    if (capErr) { console.error("route: " + capErr); return 1; } }
   const entry = (() => { try { return acquireEntry({ dir: runDir(), max: maxInFlight(routes0), onWait: (n, m) => console.error(`route: ${n}/${m} routes already in flight: queued here (no daemon traffic) until a slot frees`) }); } catch { return { release() {}, waitedMs: 0 }; } })();
   if (entry === null) { console.error("route: gave up waiting 30 min for a free hub slot (maxInFlight in routes.local.json, env AGENT_HUB_MAX_INFLIGHT); nothing was started"); return 1; }
   process.on("exit", () => entry.release()); // every exit path, including process.exit(130) from a signal

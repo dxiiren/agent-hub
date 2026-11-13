@@ -7,6 +7,7 @@
 
 Agent Hub configures and extends the [Paseo](https://github.com/getpaseo/paseo) agent daemon so that any AI client (Claude Code, Codex, Qoder, OpenCode, Qwen Code) can hand a task to any agent provider (Codex, Qoder, Claude, Qwen Code, an office SGLang server, a laptop llama.cpp server) and get a verdict plus a diff back. It adds provider config templates, a gate plugin (secret scan, diff-size and path check, two-failure return), a usage plugin with an OTel/Prometheus/Grafana stack, a routing table, a laptop pre-flight, and install scripts for Windows and Linux.
 
+- **Usage rule:** never a bare `claude -p` / `codex exec` / `paseo run`; use `agent-hub direct` or `agent-hub route` ([docs/usage-direct.md](docs/usage-direct.md)).
 - **Repo:** GitHub — `github.com/dxiiren/agent-hub`
 - **Config-and-plugins repo** — no dev server and no port; the checks are `just deps && just test`.
   Deploy scripts under `deploy/` target a laptop, a usage host and a server.

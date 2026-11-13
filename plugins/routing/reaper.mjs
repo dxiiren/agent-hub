@@ -10,7 +10,7 @@ import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
-import { archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
+import { healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
 
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 60; // the env override is for the throwaway-hub proof
@@ -65,12 +65,14 @@ export async function reapDeadRoutes({ run, dir = runDir(), dead = pidDead, dry 
  * Archive finished agents older than `olderThan` seconds. mine (default): only agent-hub-made ones (route/type=<type>, doctor); all: every finished agent of the daemon.
  * `parked(id)` true = a parked route agent (waiting for `agent-hub reply`), left alone. Returns { archived: [ids], skipped: n }.
  */
-export async function reapFinished({ run, routes = {}, all = false, olderThan = REAP_AFTER_S, dry = false, parked = () => false, concurrency = 6 }) {
+export async function reapFinished({ run, routes = {}, all = false, olderThan = REAP_AFTER_S, dry = false, parked = () => false, concurrency = 6, errorAny = true }) {
   const rows = async (a) => { const r = await run(a); return Array.isArray(r) ? r : []; };
   const labels = all ? [null] : [...Object.keys(routes.routes ?? {}).map((t) => `route/type=${t}`), DOCTOR_LABEL];
   const [keep, lists] = await Promise.all([rows(["ls", "--label", "route/keep=1"]), pmap(labels, (l) => rows(l ? ["ls", "--label", l] : ["ls"]), concurrency)]);
   const keepIds = new Set(keep.map((a) => a.id));
   const pool = new Map(), typeOf = new Map(); lists.forEach((l, i) => { for (const a of l) { pool.set(a.id, a); if (labels[i]?.startsWith("route/type=")) typeOf.set(a.id, labels[i].slice(11)); } });
+  // an agent in `error` made outside route.mjs (a driver's bare `paseo run`, no route/type label) holds its workspace and CLI forever (13-11: Qwen .122 agent in error): any error agent past olderThan is archived too
+  if (!all && errorAny) for (const a of await rows(["ls"])) if (/^error$/i.test(String(a.status ?? "")) && !pool.has(a.id)) pool.set(a.id, a);
   const victims = [];
   for (const a of pool.values()) {
     const age = ageSeconds(a.created); // unreadable = Infinity: archived only when no age limit was asked for
@@ -155,6 +157,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const home = opt("--home") ?? process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"); const r = await sweepRegistryOffline({ file: join(home, "projects", "workspaces.json"), runDir: runDir(), dry, log: console.log });
     console.log(JSON.stringify({ archived: r.archived.length, skipped: r.skipped.map((x) => `${x.cwd}: ${x.why}`), failed: r.failed })); process.exit(0);
   }
+  if (a.includes("--heal-cap")) { const r = await healWorkspaces({ run, runDir: runDir(), log: console.log }); console.log(JSON.stringify(r)); process.exit(0); } // route.mjs calls this once when the workspace cap would refuse a route
   if (a.includes("--sweep")) { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), dry, idleS: opt("--idle") ? parseAge(opt("--idle")) : undefined, log: console.log }); console.log(JSON.stringify({ archived: r.archived, skipped: r.skipped.length, failed: r.failed })); process.exit(0); }
   if (a.includes("--once") || dry) { const r = await reapOnce({ run, olderThan, dry }); console.log(JSON.stringify(r)); process.exit(0); }
   startReaper({ run, olderThan, everyMs: (opt("--every") ? parseAge(opt("--every")) : REAP_EVERY_MS / 1000) * 1000, log: console.log }); // the interval is unref'd, so hold the process open

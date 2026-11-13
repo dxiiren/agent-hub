@@ -125,6 +125,7 @@ Route result fields: `used`, `agentId`, `status` (`completed`, `asking`, `gate-f
 - [`.docs/tldr.md`](.docs/tldr.md): every doc in one page.
 - [Providers, accounts, security, latest aliases (full reference)](.docs/05-reference/providers-security-reference.md)
 - [Benchmarks, concurrency, change notes](.docs/05-reference/benchmarks-and-changes.md)
+- [Counting every LLM call: `agent-hub direct`, launch guard, auto-archive, daemon marker](docs/usage-direct.md)
 - [`AGENTS.md`](AGENTS.md): for AI agents working on or with this repo.
 
 ## Layout

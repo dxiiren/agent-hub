@@ -4,6 +4,7 @@ case "$2" in --help|-h|help) exec node "$d/../../../scripts/help.mjs" "$1" ;; es
 case "$1" in
   ""|--help|-h|help) exec node "$d/../../../scripts/help.mjs" ;;
   usage) exec python3 -S -E "$d/agent_hub_usage.py" "$@" ;;
+  direct) shift; exec python3 -S -E "$d/agent_hub_direct.py" "$@" ;;
   doctor) shift; exec node "$d/../../../scripts/hub.mjs" doctor "$@" ;;
   provider) shift; exec node "$d/../../../scripts/hub.mjs" provider "$@" ;;
   routes) shift; exec node "$d/../../../scripts/hub.mjs" routes "$@" ;;

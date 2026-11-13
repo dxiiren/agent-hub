@@ -115,6 +115,13 @@ export async function archiveIdleLocalWorkspaces({ run, dry = false, log = () =>
   return out;
 }
 
+/** The cap-refusal self-heal: local workspaces nobody owns, then idle (5 min) worktree workspaces. Never touches a workspace an unfinished agent names. -> {local, worktree} counts */
+export async function healWorkspaces({ run, runDir = null, idleS = 5 * 60, log = () => {} }) {
+  const local = await archiveIdleLocalWorkspaces({ run, log });
+  const w = await sweepIdleWorkspaces({ run, runDir, idleS, log });
+  return { local: local.length, worktree: w.archived.length };
+}
+
 /** Archive every workspace record whose cwd is `path` (async `run`). `paseo run --cwd <worktree>` makes its own record next to the one `worktree create` made, and only the route's own id was ever archived: 09-11, 2 records per finished route. */
 export async function archiveWorkspacesAt(run, path) {
   const rows = await run(["workspace", "ls", "--json"]).catch(() => null); let ok = true;

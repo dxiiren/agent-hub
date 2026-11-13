@@ -1,6 +1,6 @@
 // agent-hub --help and agent-hub <command> --help: plain text only, never runs the command.
 const H = {
-  _: `usage: agent-hub <route|reply|provider|routes|usage|doctor|cleanup> [--help]
+  _: `usage: agent-hub <route|direct|reply|provider|routes|usage|doctor|cleanup> [--help]
 agent-hub hands a task to an agent provider through the local Paseo daemon.
 
 Commands (run \`agent-hub <command> --help\` for details and examples):
@@ -48,6 +48,11 @@ usage: agent-hub routes show [--json] | models <provider> | undo
        agent-hub routes move <type> <entry> up|down|off
 Invalid input is refused with every problem listed and nothing is written. undo restores the file byte for byte.
 example: agent-hub routes set codex --models gpt-6.1-sol --slots 2`,
+  direct: `direct: run a tool yourself (claude -p, codex exec, paseo run) and still count it in agent-hub usage.
+usage: agent-hub direct claude|codex|paseo --session <id> [--dev D] [--client C] -- <tool args>
+       agent-hub direct --list | agent-hub direct --kill --session <id>
+claude forces --output-format json; the usage record is written to usage.jsonl and sessions/<id>.jsonl. paseo mode is for run only (adds --label session=,dev=,caller=,route=direct).
+env: AGENT_HUB_SESSION, AGENT_HUB_DEV, AGENT_HUB_CLIENT, AGENT_HUB_USAGE_DIR. Bare claude -p / codex exec / paseo run are refused by the direct-launch-guard hook.`,
   usage: `usage: show tokens, credits and estimated cost.
 usage: agent-hub usage --session <id> [--json] [--dir D] | agent-hub usage --all
 example: agent-hub usage --all`,
@@ -60,6 +65,6 @@ usage: agent-hub cleanup [--older-than 30m] [--mine|--all] [--dry-run] [--stale-
 example: agent-hub cleanup --older-than 30m --dry-run`,
 };
 const a = process.argv[2];
-if (a && !H[a] && !['help', '--help', '-h'].includes(a)) console.error(`agent-hub: unknown command '${a}'. Use one of: route, reply, provider, routes, usage, doctor, cleanup.`);
+if (a && !H[a] && !['help', '--help', '-h'].includes(a)) console.error(`agent-hub: unknown command '${a}'. Use one of: route, direct, reply, provider, routes, usage, doctor, cleanup.`);
 console.log(H[a] || H._);
 process.exit(a && !H[a] && !['help', '--help', '-h'].includes(a) ? 2 : 0);

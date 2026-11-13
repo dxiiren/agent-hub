@@ -10,6 +10,7 @@ if /i "%sub%"=="-h" goto help
 if /i "%sub%"=="help" goto help
 for %%h in (--help -h help) do if /i "%~2"=="%%h" goto help
 if /i "%sub%"=="usage" goto usage
+if /i "%sub%"=="direct" goto direct
 if /i "%sub%"=="doctor" goto doctor
 if /i "%sub%"=="provider" goto provider
 if /i "%sub%"=="routes" goto routes
@@ -23,6 +24,9 @@ node "%~dp0..\..\..\scripts\help.mjs" %sub%
 exit /b %errorlevel%
 :usage
 python -S -E "%~dp0agent_hub_usage.py" %*
+exit /b %errorlevel%
+:direct
+python -S -E "%~dp0agent_hub_direct.py" %rest%
 exit /b %errorlevel%
 :doctor
 node "%~dp0..\..\..\scripts\hub.mjs" doctor %rest%
