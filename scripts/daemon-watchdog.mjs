@@ -48,7 +48,7 @@ export const providerErrors = (list) => (Array.isArray(list) ? list : []).filter
 export async function deepProbe(port, home, { http = (p) => probeDaemon(p, { attempts: 1, timeoutMs: Number(process.env.AGENT_HUB_WATCHDOG_TIMEOUT_MS || 10000) }), run = null } = {}) {
   const h = await http(port); if (h.state !== 'up') return h;
   const paseo = run ?? ((args, ms) => spawnSync(process.platform === 'win32' ? 'paseo.cmd' : 'paseo', ['--home', home, ...args], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', windowsHide: true, shell: process.platform === 'win32' }));
-  const ls = paseo(['ls', '--json'], 30000);
+  const ls = paseo(['ls', '--json'], Number(process.env.AGENT_HUB_WATCHDOG_LS_MS || 60000)); // 30 s flapped 3x on 13-11 while workspace churn made the daemon answer slowly
   if (ls.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo ls` does not' };
   const pr = paseo(['provider', 'ls', '--json'], 90000);
   if (pr.status !== 0) return { state: 'sick', detail: 'HTTP answers but `paseo provider ls` does not' };
