@@ -97,6 +97,50 @@ def fold(out, recs):
             dd["cost_usd"] += r.get("cost_usd", 0.0); dd["credits"] += r.get("credits", 0.0); dd["n"] += 1
 
 
+def live_counts(d):
+    """{route, claude, codex, paseo}: live markers in <usage dir>/active (pid alive, touched < 1800 s ago); direct runs carry "direct": true."""
+    import json, time
+    c = {"route": 0, "claude": 0, "codex": 0, "paseo": 0}
+    a = os.path.join(d, "active")
+    try:
+        names = os.listdir(a)
+    except OSError:
+        return c
+    for n in names:
+        try:
+            p = os.path.join(a, n)
+            if not n.startswith("t-") or time.time() - os.path.getmtime(p) >= 1800 or not _pid_alive(int(n.split("-")[1].split(".")[0])):
+                continue
+            m = json.load(open(p, encoding="utf-8"))
+            if m.get("direct"):
+                k = {"claude-headless": "claude", "codex-direct": "codex", "paseo-direct": "paseo"}.get(m.get("provider"))
+                if k:
+                    c[k] += 1
+            elif m.get("provider"):
+                c["route"] += 1
+        except Exception:
+            continue
+    return c
+
+
+def _pid_alive(pid):
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    k = ctypes.windll.kernel32
+    h = k.OpenProcess(0x1000, 0, pid)
+    if not h:
+        return k.GetLastError() == 5
+    code = ctypes.c_ulong()
+    ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+    k.CloseHandle(h)
+    return (not ok) or code.value == 259
+
+
 def main(argv):
     if argv and argv[0] == "usage":
         argv = argv[1:]
@@ -125,6 +169,8 @@ def main(argv):
         out["session"] = sid or "*"
     fold(out, backfilled(d, None if "--all" in argv else sid))
     import json
+    if "--all" in argv:
+        out["live"] = live_counts(d)
     if "--json" in argv:
         sys.stdout.write(json.dumps(out) + "\n")
     elif by_model:
@@ -134,6 +180,9 @@ def main(argv):
         parts = ["%s %d" % (k, v["in"] + v["out"]) for k, v in sorted(out["providers"].items())]
         t = out["total"]
         sys.stdout.write("hub  %s | %.2fcr ~$%.2f\n" % (" | ".join(parts) or "0", t["credits"], t["cost_usd"]))
+        if "--all" in argv:
+            lv = out["live"]
+            sys.stdout.write("live: route %d | headless claude %d codex %d paseo %d\n" % (lv["route"], lv["claude"], lv["codex"], lv["paseo"]))
     return 0
 
 

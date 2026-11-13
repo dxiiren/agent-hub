@@ -277,7 +277,10 @@ def main(argv):
             p = parse_codex(out)
             if p:
                 rec.update(model=p[3], **{"in": p[0], "out": p[1], "cached": p[2]})
-        if rec["in"] or rec["out"] or rec["cost_usd"]:  # a failed call with no usage (auth, 403) is not a billed turn
+        if r.returncode == 0 and not (rec["in"] or rec["out"]):
+            rec["kind"] = "usage-missing"  # a successful run whose output carried no tokens: recorded loudly, never as a silent zero
+            sys.stderr.write("agent-hub direct: usage-missing: %s run succeeded but no token usage was parsed" % tool + chr(10))
+        if rec["in"] or rec["out"] or rec["cost_usd"] or rec.get("kind"):  # a failed call with no usage (auth, 403) is not a billed turn
             rec["agent"] = rec["agent"] or "direct-" + uuid.uuid4().hex[:12]
             append_usage(usage_dir(), rec, also=os.environ.get("CLAUDE_CODE_SESSION_ID") or None)
     except Exception as e:  # recording must never break the caller's run
