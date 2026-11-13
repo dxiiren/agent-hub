@@ -131,6 +131,36 @@ export async function healWorkspaces({ run, runDir = null, idleS = 5 * 60, log =
   return { local: local.length, worktree: w.archived.length };
 }
 
+/**
+ * Duplicate RECORDS of one permanent folder (13-11: 6 records of the staging folder, every cwd-bound agent start made another). Keeps ONE record (the oldest createdAt in the registry, else the first listed) and archives the rest,
+ * one at a time. Only when Paseo does not own the worktree (registry isPaseoOwnedWorktree === false): then archive drops the record and never the folder. The folder is checked after every archive and the pass stops if it is gone.
+ * -> { archived: [ids], kept: {cwd: id}, skipped: [why], failed }
+ */
+export async function archivePermanentDuplicates({ run, home = process.env.PASEO_HOME || join(homedir(), ".paseo"), dry = false, exists = existsSync, readRegistry = () => JSON.parse(readFileSync(join(home, "projects", "workspaces.json"), "utf8")), log = () => {} }) {
+  const out = { archived: [], kept: {}, skipped: [], failed: null };
+  const rows = await run(["workspace", "ls", "--json"]).catch(() => null); if (!Array.isArray(rows)) { out.failed = "workspace list unreadable"; return out; }
+  let reg = {}; try { const r = readRegistry(); const it = Array.isArray(r) ? r : Object.values(r.workspaces ?? r); for (const w of it) if (w?.workspaceId) reg[w.workspaceId] = w; } catch { /* no registry: nothing is proven owned by the user, so nothing is archived */ }
+  const groups = new Map();
+  for (const w of rows) if (w.workspaceId && w.cwd && PERMANENT.test(norm(w.cwd))) { const k = norm(w.cwd); (groups.get(k) ?? groups.set(k, []).get(k)).push(w); }
+  for (const [k, list] of groups) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => String(reg[a.workspaceId]?.createdAt ?? "9").localeCompare(String(reg[b.workspaceId]?.createdAt ?? "9")));
+    out.kept[k] = list[0].workspaceId;
+    for (const w of list.slice(1)) {
+      const r = reg[w.workspaceId];
+      if (!r || r.isPaseoOwnedWorktree !== false) { out.skipped.push(`${w.workspaceId}: not proven user-owned`); continue; }
+      if (!exists(w.cwd)) { out.skipped.push(`${w.workspaceId}: folder missing`); continue; }
+      if (dry) { out.archived.push(w.workspaceId); continue; }
+      const a = await run(["workspace", "archive", w.workspaceId, "--json"]);
+      if (a?.error && !/not found|archived/i.test(JSON.stringify(a.error))) { out.failed = JSON.stringify(a.error).slice(0, 160); break; }
+      out.archived.push(w.workspaceId); log(`archived duplicate record ${w.workspaceId} of ${w.cwd}`);
+      if (!exists(w.cwd)) { out.failed = "FOLDER GONE after archive: stopped " + w.cwd; break; }
+    }
+    if (out.failed) break;
+  }
+  return out;
+}
+
 /** Archive every workspace record whose cwd is `path` (async `run`). `paseo run --cwd <worktree>` makes its own record next to the one `worktree create` made, and only the route's own id was ever archived: 09-11, 2 records per finished route. */
 export async function archiveWorkspacesAt(run, path) {
   const rows = await run(["workspace", "ls", "--json"]).catch(() => null); let ok = true;

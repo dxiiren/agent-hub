@@ -22,7 +22,7 @@ export default function contribute(_server: PluginServerContext) {
     let file: string; try { file = script(); } catch (e) { busy = false; console.error(String(e)); return; }
     execFile(process.execPath, [file, "--once"], { env: process.env, timeout: 10 * 60_000, windowsHide: true }, (e, out) => {
       busy = false;
-      if (e) console.error("agent-hub-reaper", String(e.message).slice(0, 300)); else if (/"(dead|archived|ghosts)":\[[^\]]/.test(out)) console.error("agent-hub-reaper " + out.trim().slice(0, 300));
+      if (e) console.error("agent-hub-reaper", String(e.message).slice(0, 300)); else if (/"(dead|archived|ghosts|dupes)":\[[^\]]/.test(out)) console.error("agent-hub-reaper " + out.trim().slice(0, 300));
     });
   };
   const first = setTimeout(pass, 60_000);
