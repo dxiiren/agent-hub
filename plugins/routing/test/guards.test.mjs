@@ -259,3 +259,26 @@ test("(feedback 1) reapWorktreeFolders never removes a permanent folder", async 
   try { const r = await reapWorktreeFolders({ run: async () => [], home, list, mtimeMs: () => 0, remove: () => { throw new Error("must not remove"); }, rmEmpty: () => true }); assert.equal(r.removed.length, 0); assert.match(r.kept[0].why, /permanent/); }
   finally { process.env.AGENT_HUB_PERMANENT_WS = prev; }
 });
+
+test("(security) a crafted .git pointer is never followed: git does not run against the fake repo; an unlisted folder is rmSync'd, a listed one goes through the trusted repo", async () => {
+  const { gitWorktreeRemove } = await import("../reaper.mjs");
+  const { execFileSync } = await import("node:child_process");
+  const { rmSync, writeFileSync: wf, mkdirSync: mk, existsSync: ex } = await import("node:fs");
+  const base = tmp(), marker = join(base, "FSMONITOR-RAN");
+  // fake repo an attacker controls: its config would run a command on any git status/worktree call
+  const fake = join(base, "fake"); mk(join(fake, ".git", "worktrees", "w"), { recursive: true });
+  wf(join(fake, ".git", "HEAD"), "ref: refs/heads/main\n"); wf(join(fake, ".git", "config"), `[core]\n\trepositoryformatversion = 0\n\tfsmonitor = node -e "require('fs').writeFileSync(process.argv[1],'x')" ${JSON.stringify(marker).slice(1, -1)}\n`);
+  const crafted = join(base, "route-aa11"); mk(crafted); wf(join(crafted, ".git"), `gitdir: ${join(fake, ".git", "worktrees", "w").split("\\").join("/")}\n`); wf(join(crafted, "f.txt"), "x");
+  const trusted = join(base, "trusted"); mk(trusted);
+  const g = (...a) => execFileSync("git", ["-C", trusted, "-c", "user.email=a@b.c", "-c", "user.name=t", ...a], { stdio: "pipe" });
+  g("init", "-q"); g("commit", "-q", "--allow-empty", "-m", "i");
+  assert.equal(gitWorktreeRemove(crafted, false, [trusted]), false); // idle < force bar: nothing deleted, git not aimed at the fake repo
+  assert.ok(ex(crafted));
+  assert.equal(gitWorktreeRemove(crafted, true, [trusted]), true); assert.ok(!ex(crafted)); // not listed by the trusted repo: rmSync
+  assert.ok(!ex(marker), "git must never have run against the repo named by the folder's .git file");
+  assert.equal(gitWorktreeRemove(crafted, true, []), true); // no allowlist: still no git
+  // a real worktree of the trusted repo is removed by the trusted repo's own git
+  const real = join(base, "route-bb22"); g("worktree", "add", "-q", real, "-b", "wt");
+  assert.equal(gitWorktreeRemove(real, false, [trusted]), true); assert.ok(!ex(real));
+  rmSync(base, { recursive: true, force: true });
+});
