@@ -5,7 +5,7 @@ so `agent-hub usage --session <id>` counts it. stdout/stderr/exit code pass thro
   codex   adds --json when absent (reads turn.completed usage); then stdout is the JSONL event stream.
   paseo   runs `paseo run ...` with --label session/dev/caller so the daemon's usage plugin records it labelled (no record written here).
 Stdlib only, ASCII output."""
-import getpass, json, os, shutil, subprocess, sys, time, uuid
+import getpass, json, os, shutil, subprocess, sys, threading, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agent_hub_usage import usage_dir, safe  # noqa: E402
@@ -84,7 +84,7 @@ def parse_claude(out):
             if isinstance(o, dict) and o.get("type") == "result":
                 obj = o
                 break
-    if not isinstance(obj, dict):
+    if not isinstance(obj, dict) or obj.get("type") != "result":
         return None
     u = obj.get("usage") or {}
     mu = obj.get("modelUsage") or {}
@@ -158,7 +158,22 @@ def mark_active(provider):
         return None
 
 
-def unmark(p):
+def heartbeat(p):
+    """Touch the marker every AGENT_HUB_HEARTBEAT_S (60) so the status line (ignores markers older than 1800 s) keeps a long run visible. Returns the stop event."""
+    ev = threading.Event()
+    if p:
+        iv = float(os.environ.get("AGENT_HUB_HEARTBEAT_S") or 60)
+        def beat():
+            while not ev.wait(iv):
+                try: os.utime(p, None)
+                except OSError: pass
+        threading.Thread(target=beat, daemon=True).start()
+    return ev
+
+
+def unmark(p, hb=None):
+    if hb:
+        hb.set()
     if p:
         try:
             os.remove(p)
@@ -214,10 +229,11 @@ def main(argv):
             return 2
         lab = ["--label", "session=" + sid, "--label", "dev=" + dev, "--label", "caller=" + client, "--label", "route/type=direct"]
         mk = mark_active("paseo-direct")
+        hb = heartbeat(mk)
         try:
             return subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
         finally:
-            unmark(mk)
+            unmark(mk, hb)
     env_bin = os.environ.get("AGENT_HUB_DIRECT_" + tool.upper())
     exe = env_bin or shutil.which(tool)
     if not exe:
@@ -238,12 +254,13 @@ def main(argv):
     # runtime backstop marker: claude-fleet-cap lets a headless claude run only when this pair is set and the wrapper pid is an ancestor
     cenv = dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))
     mk = mark_active(PROVIDER[tool])
+    hb = heartbeat(mk)
     proc = subprocess.Popen([exe] + args, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=cenv)
     with open(reg, "w", encoding="utf-8") as f:
         json.dump({"wrapper": os.getpid(), "child": proc.pid, "tool": tool, "session": sid, "ts": time.strftime("%FT%TZ", time.gmtime())}, f)
     out = proc.communicate()[0] or ""
     r = proc
-    unmark(mk)
+    unmark(mk, hb)
     try: os.remove(reg)
     except OSError: pass
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()), "agent": "", "session": sid, "provider": PROVIDER[tool], "model": "",
