@@ -159,25 +159,49 @@ class ParseTest(unittest.TestCase):
             self.assertGreater(len(set(seen)), 1, seen)
             self.assertFalse(os.path.exists(marker))
 
-    def test_paseo_run_gets_session_labels(self):
-        with tempfile.TemporaryDirectory() as t:
-            fake(t, "paseo", ["ok"])
-            exe = os.path.join(t, "paseo" + (".cmd" if os.name == "nt" else ""))
+    def _paseo(self, t, ok):
+        """Run `direct paseo` against a fake paseo (exit 0 when ok, else 3) with a private gate store; returns (args, gate dir)."""
+        fake(t, "paseo", ["ok"])
+        exe = os.path.join(t, "paseo" + (".cmd" if os.name == "nt" else ""))
+        if ok:
+            body = os.path.join(t, "paseo.py"); src = open(body).read().replace("sys.exit(3)", "sys.exit(0)"); open(body, "w").write(src)
+        gate = os.path.join(t, "gate")
+        os.environ["AGENT_HUB_DIRECT_PASEO"] = exe; os.environ["AGENT_HUB_GATE_DIR"] = gate
+        try:
             with redirect_stdout(io.StringIO()):
-                os.environ["AGENT_HUB_DIRECT_PASEO"] = exe
-                os.environ["AGENT_HUB_GATE_DIR"] = os.path.join(t, "gate")
-                try:
-                    dr.main(["paseo", "--session", "s-lab", "--", "run", "--cwd", t, "--provider", "codex", "hi"])
-                finally:
-                    del os.environ["AGENT_HUB_DIRECT_PASEO"]; del os.environ["AGENT_HUB_GATE_DIR"]
-            args = open(os.path.join(t, "paseo.args")).read()
-            self.assertIn("session=s-lab", args)
-            self.assertIn("run --label", args)
-            # the gate plugin's store holds the direct marker for that cwd (the plugin never trusts the label): sha1 of lower-cased, slash-normalised cwd
-            import hashlib
-            key = hashlib.sha1(os.path.abspath(t).replace(chr(92), "/").rstrip("/").lower().encode()).hexdigest()
-            m = json.load(open(os.path.join(t, "gate", "requests", key + ".json")))
-            self.assertIs(m["direct"], True); self.assertIsNone(m["cmd"]); self.assertGreater(m["ts"], 1_700_000_000_000)
+                dr.main(["paseo", "--session", "s-lab", "--", "run", "--cwd", t, "--provider", "codex", "hi"])
+        finally:
+            del os.environ["AGENT_HUB_DIRECT_PASEO"]; del os.environ["AGENT_HUB_GATE_DIR"]
+        return open(os.path.join(t, "paseo.args")).read(), gate
+
+    def test_paseo_run_gets_session_labels_and_a_matching_gate_nonce(self):
+        with tempfile.TemporaryDirectory() as t:
+            args, gate = self._paseo(t, ok=True)
+            self.assertIn("session=s-lab", args); self.assertIn("run --label", args)
+            nonce = args.split("direct-nonce=")[1].split()[0]
+            self.assertRegex(nonce, r"^[0-9a-f]{32}$")
+            # the gate plugin's store holds exactly that single-use nonce (the plugin never trusts a label alone)
+            self.assertEqual(os.listdir(os.path.join(gate, "direct")), [nonce + ".json"])
+            self.assertFalse(os.path.exists(os.path.join(gate, "requests")), "a direct marker never writes into the route request store")
+
+    def test_failed_paseo_run_leaves_no_marker(self):
+        with tempfile.TemporaryDirectory() as t:
+            args, gate = self._paseo(t, ok=False)
+            self.assertIn("direct-nonce=", args)
+            self.assertEqual(os.listdir(os.path.join(gate, "direct")), [], "the run failed: its marker is removed")
+
+    def test_marker_never_overwrites_and_leaves_route_requests_alone(self):
+        with tempfile.TemporaryDirectory() as t:
+            os.environ["AGENT_HUB_GATE_DIR"] = os.path.join(t, "gate")
+            try:
+                os.makedirs(os.path.join(t, "gate", "requests")); req = os.path.join(t, "gate", "requests", "abc.json")
+                open(req, "w").write('{"cmd": "npm test"}')
+                dr.write_direct_marker("d" * 32)
+                with self.assertRaises(FileExistsError): dr.write_direct_marker("d" * 32)
+                self.assertEqual(open(req).read(), '{"cmd": "npm test"}')
+            finally:
+                del os.environ["AGENT_HUB_GATE_DIR"]
+
 
 
 if __name__ == "__main__":

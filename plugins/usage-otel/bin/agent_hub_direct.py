@@ -197,14 +197,19 @@ def gate_dir():
     return os.environ.get("AGENT_HUB_GATE_DIR") or os.path.join(os.environ.get("PASEO_HOME") or os.path.join(os.path.expanduser("~"), ".paseo"), "gate")
 
 
-def write_direct_marker(cwd):
-    """Tell the gate plugin (plugins/gate/server/store.mjs, same key: sha1 of the lower-cased, slash-normalised cwd) that the next agent created in cwd is a direct run,
-    which is never gated or re-prompted. Written BEFORE the agent exists, in the plugin's store, so no agent label can fake it."""
-    import hashlib
-    key = hashlib.sha1(cwd.replace("\\", "/").rstrip("/").lower().encode("utf8")).hexdigest()
-    d = os.path.join(gate_dir(), "requests"); os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, key + ".json"), "w") as f:
-        json.dump({"cmd": None, "base": None, "direct": True, "ts": int(time.time() * 1000)}, f)
+def write_direct_marker(nonce):
+    """Store a single-use direct-run nonce in the gate plugin store (plugins/gate/server/store.mjs: <gate>/direct/<nonce>.json) BEFORE the agent exists. The plugin exempts an agent only when its label direct-nonce
+    carries a nonce it still holds (and binds it to that agent id): no cwd or label alone can fake it. Never overwrites (O_EXCL), never touches a route request."""
+    d = os.path.join(gate_dir(), "direct"); os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, nonce + ".json"), "x") as f:
+        json.dump({"ts": int(time.time() * 1000)}, f)
+
+
+def remove_direct_marker(nonce):
+    try:
+        os.remove(os.path.join(gate_dir(), "direct", nonce + ".json"))
+    except OSError:
+        pass
 
 
 def main(argv):
@@ -246,17 +251,22 @@ def main(argv):
         if not args or args[0] != "run":
             sys.stderr.write("agent-hub direct paseo: only `run` is labelled; pass: -- run --provider ... \n")
             return 2
-        lab = ["--label", "session=" + sid, "--label", "dev=" + dev, "--label", "caller=" + client, "--label", "route/type=direct"]
+        nonce = uuid.uuid4().hex
+        lab = ["--label", "session=" + sid, "--label", "dev=" + dev, "--label", "caller=" + client, "--label", "route/type=direct", "--label", "direct-nonce=" + nonce]
         mk = mark_active("paseo-direct")
         hb = heartbeat(mk)
+        ok = False
         try:
-            run_cwd = opt_arg(args, "--cwd") or os.getcwd()
             try:
-                write_direct_marker(os.path.abspath(run_cwd))
+                write_direct_marker(nonce)
             except OSError as e:
-                sys.stderr.write("agent-hub direct: could not write the gate marker (%s); the run may be gated\n" % e)
-            return subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
+                sys.stderr.write("agent-hub direct: could not write the gate marker (%s); the run may be gated" % e + chr(10))
+            rc = subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
+            ok = rc == 0
+            return rc
         finally:
+            if not ok:
+                remove_direct_marker(nonce)  # a failed launch leaves no marker behind (a successful one is consumed by the plugin on the agent's first turn)
             unmark(mk, hb)
     env_bin = os.environ.get("AGENT_HUB_DIRECT_" + tool.upper())
     exe = env_bin or shutil.which(tool)

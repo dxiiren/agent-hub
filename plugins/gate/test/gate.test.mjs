@@ -64,7 +64,7 @@ test("repo default gate: matching row, then gateDefault, placeholder ignored", (
 });
 
 import { evaluate } from "../server/hook.mjs";
-import { writeRequest } from "../server/store.mjs";
+import { writeRequest, writeDirectMarker, removeDirectMarker, hasDirectMarkers } from "../server/store.mjs";
 import { existsSync, writeFileSync as wf, readFileSync as rf, readdirSync } from "node:fs";
 const require_len = (d) => readdirSync(d).length;
 
@@ -273,24 +273,29 @@ test("worktree task with NO recorded request fails closed: the base is never der
   const r = evaluate({ dir: mkdtempSync(join(tmpdir(), "gs-")), id: "F", cwd: wt, routes: {} });
   assert.notEqual(r.d.status, "PASS"); assert.match(r.res.reasons.join(), /no base commit recorded/);
 });
-test("direct run: exempt only when agent-hub direct left a marker in the gate store; no marker = gated (fail closed); a label cannot fake it", () => {
-  const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-"));
-  // no marker: gated as before, whatever the agent writes into its own labels (evaluate takes no labels at all)
-  assert.equal(evaluate({ dir: mkdtempSync(join(tmpdir(), "gs-")), id: "LABELLED", cwd: wt, routes: {}, direct: true, labels: { "route/type": "direct" } }).d.reprompt, true, "a routed agent that labels itself direct is still gated");
-  // the real launcher writes the marker BEFORE the agent exists
-  writeRequest(dir, wt, null, null, { direct: true, ts: Date.now() });
-  const r = evaluate({ dir, id: "DIR", cwd: wt, routes: {} });
+test("direct run: exempt only for the agent that claims the launcher's single-use nonce; a label, a cwd, another agent, a stale or used nonce, or a route request never exempts", () => {
+  const { wt, start } = linkedWorktree(); const N = "a".repeat(32), N2 = "b".repeat(32);
+  const fresh = () => mkdtempSync(join(tmpdir(), "gs-"));
+  // 1. a routed agent that labels itself direct (labels are not even an input) or invents a nonce is still gated
+  assert.equal(evaluate({ dir: fresh(), id: "LABELLED", cwd: wt, routes: {}, directNonce: N, labels: { "route/type": "direct" } }).d.reprompt, true, "invented nonce, nothing in the store: gated");
+  // 2. the launcher stores the nonce first; only the agent carrying it is exempt, exactly once
+  const dir = fresh(); writeDirectMarker(dir, N);
+  assert.equal(evaluate({ dir, id: "OTHER", cwd: wt, routes: {}, directNonce: null }).d.reprompt, true, "a different agent in the same cwd inside the TTL (no nonce) is gated");
+  writeDirectMarker(dir, N2); // OTHER's gate consumed no marker; N is still held
+  assert.equal(evaluate({ dir, id: "WRONG", cwd: wt, routes: {}, directNonce: "c".repeat(32) }).d.reprompt, true, "a wrong nonce is gated");
+  const r = evaluate({ dir, id: "DIR", cwd: wt, routes: {}, directNonce: N });
   assert.equal(r.d.status, "N/A"); assert.equal(r.d.reprompt, false); assert.deepEqual(r.res.reasons, []);
-  assert.equal(existsSync(join(dir, "requests")) && require_len(join(dir, "requests")), 0, "the marker is claimed by the first turn");
-  assert.equal(evaluate({ dir, id: "DIR", cwd: wt, routes: {} }).d.reprompt, false, "second turn: still never re-prompted");
-  // a second, unrelated agent in the same cwd finds no marker left: gated
-  assert.equal(evaluate({ dir, id: "OTHER", cwd: wt, routes: {} }).d.reprompt, true);
-  // an old marker (the direct run never started) exempts nobody
-  const old = mkdtempSync(join(tmpdir(), "gs-")); writeRequest(old, wt, null, null, { direct: true, ts: Date.now() - 11 * 60_000 });
-  assert.equal(evaluate({ dir: old, id: "LATE", cwd: wt, routes: {} }).d.reprompt, true, "stale marker ignored");
-  // a route request (cmd) always gates, even next to a direct flag
-  const mixed = mkdtempSync(join(tmpdir(), "gs-")); wreq(mixed, wt, null, start); writeFileSync(join(wt, "ok.txt"), "OK" + String.fromCharCode(10));
-  assert.equal(evaluate({ dir: mixed, id: "ROUTED", cwd: wt, routes: {} }).d.status, "PASS", "a request without the marker is gated normally");
+  assert.equal(evaluate({ dir, id: "DIR", cwd: wt, routes: {}, directNonce: null }).d.reprompt, false, "second turn of the same agent id: still exempt");
+  assert.equal(evaluate({ dir, id: "REPLAY", cwd: wt, routes: {}, directNonce: N }).d.reprompt, true, "the nonce is single use: another agent replaying it is gated");
+  // 3. a stale marker exempts nobody
+  const old = fresh(); writeDirectMarker(old, N, Date.now() - 11 * 60_000);
+  assert.equal(evaluate({ dir: old, id: "LATE", cwd: wt, routes: {}, directNonce: N }).d.reprompt, true, "expired");
+  // 4. a route request for the cwd always wins, and the marker is left alone
+  const mixed = fresh(); writeDirectMarker(mixed, N); wreq(mixed, wt, null, start); writeFileSync(join(wt, "ok.txt"), "OK" + String.fromCharCode(10));
+  assert.equal(evaluate({ dir: mixed, id: "ROUTED", cwd: wt, routes: {}, directNonce: N }).d.status, "PASS", "request present: gated normally even with a valid nonce");
+  // 5. a marker is never overwritten, a bad nonce is refused
+  assert.throws(() => writeDirectMarker(mixed, N), /EEXIST/); assert.throws(() => writeDirectMarker(mixed, "../x"), /32 hex/);
+  removeDirectMarker(mixed, N); assert.equal(hasDirectMarkers(mixed), false);
 });
 test("worktree task with a request registered before the agent starts is judged against that base, and a clean task passes the first time", () => {
   const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-"));
