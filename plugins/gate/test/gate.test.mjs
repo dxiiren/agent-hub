@@ -272,6 +272,15 @@ test("worktree task with NO recorded request fails closed: the base is never der
   const r = evaluate({ dir: mkdtempSync(join(tmpdir(), "gs-")), id: "F", cwd: wt, routes: {} });
   assert.notEqual(r.d.status, "PASS"); assert.match(r.res.reasons.join(), /no base commit recorded/);
 });
+test("direct run in a git folder with no request: never gated, never re-prompted; a routed agent (request present) ignores the direct flag", () => {
+  const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-"));
+  const r = evaluate({ dir, id: "DIR", cwd: wt, routes: {}, direct: true });
+  assert.equal(r.d.status, "N/A"); assert.equal(r.d.reprompt, false); assert.deepEqual(r.res.reasons, []);
+  assert.equal(evaluate({ dir, id: "DIR", cwd: wt, routes: {}, direct: true }).d.reprompt, false, "second turn: still never re-prompted");
+  assert.equal(evaluate({ dir: mkdtempSync(join(tmpdir(), "gs-")), id: "NOFLAG", cwd: wt, routes: {} }).d.reprompt, true, "without the flag the old fail-closed rule holds");
+  wreq(dir, wt, null, start); writeFileSync(join(wt, "ok.txt"), "OK\n");
+  assert.equal(evaluate({ dir, id: "ROUTED", cwd: wt, routes: {}, direct: true }).d.status, "PASS", "a request exists: gated normally even with direct=true");
+});
 test("worktree task with a request registered before the agent starts is judged against that base, and a clean task passes the first time", () => {
   const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-"));
   wreq(dir, wt, null, start);

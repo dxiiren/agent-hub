@@ -1,10 +1,13 @@
 // The gate decision for one finished turn. Takes no agent labels on purpose: an agent can rewrite its own labels.
 import { decide, gateOpts, runGate } from "./gate.mjs";
-import { claimRequest, loadState, saveState } from "./store.mjs";
+import { claimRequest, loadState, peekRequest, saveState } from "./store.mjs";
 
 /** Returns { d, res, mirror } and persists attempts/status in the plugin store. */
-export function evaluate({ dir, id, cwd, routes }) {
+export function evaluate({ dir, id, cwd, routes, direct = false }) {
   const state = loadState(dir);
+  // `agent-hub direct paseo` runs are never gated or re-prompted (the caller reads the answer itself). The plugin passes direct=true only when the agent carries the launcher's route/type=direct label AND no route request exists for its cwd,
+  // so a routed agent (it always has a request) can never switch its gate off by writing a label: the label only matters when there is nothing to gate against.
+  if (direct && !state[id] && !peekRequest(dir, cwd)) return { d: { status: "N/A", attempts: 0, reprompt: false }, res: { reasons: [] }, mirror: { "gate/status": "N/A", "gate/reasons": "direct run: the hub gate never applies" } };
   const mine = (state[id] ??= (() => { const q = claimRequest(dir, cwd); return { attempts: 0, cmd: q?.cmd ?? null, base: q?.base ?? null, readOnly: q?.readOnly === true, maxLines: q?.maxLines ?? null }; })());
   // summarise/review judge the answer, not a diff: the code-edit gate has nothing to verify and must neither fail them nor re-prompt them
   if (mine.readOnly) { mine.status = "N/A"; saveState(dir, state); return { d: { status: "N/A", attempts: 0, reprompt: false }, res: { reasons: [] }, mirror: { "gate/status": "N/A", "gate/reasons": "read-only task: the diff gate does not apply" } }; }
