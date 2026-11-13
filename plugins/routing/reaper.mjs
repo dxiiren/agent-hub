@@ -10,10 +10,11 @@ import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
-import { healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline } from "./guards.mjs";
+import { healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline, archivePermanentDuplicates, reprobeErrorProviders } from "./guards.mjs";
 
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 60; // the env override is for the throwaway-hub proof
+export const DIRECT_MAX_S = Number(process.env.AGENT_HUB_DIRECT_MAX_S) || 3 * 3600;
 export const REAP_AFTER_S = 20 * 60, REAP_EVERY_MS = 5 * 60_000;
 
 /** async paseo(args) -> parsed JSON or {error}. */
@@ -73,8 +74,11 @@ export async function reapFinished({ run, routes = {}, all = false, olderThan = 
   const pool = new Map(), typeOf = new Map(); lists.forEach((l, i) => { for (const a of l) { pool.set(a.id, a); if (labels[i]?.startsWith("route/type=")) typeOf.set(a.id, labels[i].slice(11)); } });
   // an agent in `error` made outside route.mjs (a driver's bare `paseo run`, no route/type label) holds its workspace and CLI forever (13-11: Qwen .122 agent in error): any error agent past olderThan is archived too
   if (!all && errorAny) for (const a of await rows(["ls"])) if (/^error$/i.test(String(a.status ?? "")) && !pool.has(a.id)) pool.set(a.id, a);
-  const victims = [];
+  // 13-11 (hubfix-0911): 16 qwen agents started by a driver (`agent-hub direct paseo`, label route=direct) sat "running" 3-4 h on a pending permission, held every slot and sent each chain to qoder; a route-made agent is bounded above, a direct one was not
+  const direct = new Set(); if (!all) for (const a of await rows(["ls", "--label", "route=direct"])) { const g = ageSeconds(a.created); if (/^running$/i.test(String(a.status ?? "")) && g !== Infinity && g > DIRECT_MAX_S && !keepIds.has(a.id)) direct.add(a.id); }
+  const victims = [...direct];
   for (const a of pool.values()) {
+    if (direct.has(a.id)) continue;
     const age = ageSeconds(a.created); // unreadable = Infinity: archived only when no age limit was asked for
     // a route-made agent still "running" long after its route's own per-attempt time limit has nobody waiting for it (its route died or timed out): stop and archive it
     const t = typeOf.get(a.id);
@@ -123,7 +127,8 @@ export async function reapOnce({ run, env = process.env, home = env.PASEO_HOME, 
   let ghosts = { archived: [] }; if (opts.ghosts !== false) { try { ghosts = await reapGhostWorkspaces({ run, home, dry: opts.dry }); } catch { /* next pass */ } }
   let spooled = [], stuck = []; // guards.mjs: off-slot cleanup of finished routes, and slots held by routes whose agents went silent
   if (!opts.dry) { try { spooled = await drainSpool({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } try { stuck = await reapStuckRoutes({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } }
-  return { dead, ...fin, ghosts: ghosts.archived, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}), spooled, stuck };
+  let dupes = []; if (!opts.dry && opts.dupes !== false) { try { dupes = (await archivePermanentDuplicates({ run, home })).archived; } catch { /* next pass */ } } // duplicate records of a permanent folder (the folder is never touched)
+  return { dead, ...fin, ghosts: ghosts.archived, dupes, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}), spooled, stuck };
 }
 
 /** Start the periodic reaper; returns stop(). One pass at a time; the timer never keeps the process alive. */
@@ -136,7 +141,7 @@ export function startReaper({ run, everyMs = REAP_EVERY_MS, log = (m) => console
   };
   const t = setInterval(tick, everyMs); t.unref?.();
   let sbusy = false; // workspace sweep every 10 min (guards.mjs): idle, clean worktree workspaces; the cap in route.mjs refuses routes over 20
-  const sweep = async () => { if (sbusy) return; sbusy = true; try { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), log }); if (r.archived.length) log(`agent-hub reaper: archived ${r.archived.length} idle workspace(s)`); const l = await archiveIdleLocalWorkspaces({ run, log }); if (l.length) log(`agent-hub reaper: archived ${l.length} idle local workspace(s)`); } catch (e) { log("agent-hub reaper sweep: " + String(e?.message ?? e)); } finally { sbusy = false; } };
+  const sweep = async () => { if (sbusy) return; sbusy = true; try { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), log }); if (r.archived.length) log(`agent-hub reaper: archived ${r.archived.length} idle workspace(s)`); const l = await archiveIdleLocalWorkspaces({ run, log }); if (l.length) log(`agent-hub reaper: archived ${l.length} idle local workspace(s)`); const d = await archivePermanentDuplicates({ run, log }); if (d.archived.length) log(`agent-hub reaper: archived ${d.archived.length} duplicate record(s) of a permanent folder`); await reprobeErrorProviders({ run, log }); } catch (e) { log("agent-hub reaper sweep: " + String(e?.message ?? e)); } finally { sbusy = false; } };
   const t2 = setInterval(sweep, 10 * 60_000); t2.unref?.();
   return () => { clearInterval(t); clearInterval(t2); };
 }
@@ -157,6 +162,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const home = opt("--home") ?? process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"); const r = await sweepRegistryOffline({ file: join(home, "projects", "workspaces.json"), runDir: runDir(), dry, log: console.log });
     console.log(JSON.stringify({ archived: r.archived.length, skipped: r.skipped.map((x) => `${x.cwd}: ${x.why}`), failed: r.failed })); process.exit(0);
   }
+  if (a.includes("--reprobe")) { console.log(JSON.stringify({ probed: await reprobeErrorProviders({ run, log: console.log }) })); process.exit(0); }
+  if (a.includes("--dedupe-permanent")) { const r = await archivePermanentDuplicates({ run, dry, log: console.log }); console.log(JSON.stringify(r)); process.exit(0); }
   if (a.includes("--heal-cap")) { const r = await healWorkspaces({ run, runDir: runDir(), log: console.log }); console.log(JSON.stringify(r)); process.exit(0); } // route.mjs calls this once when the workspace cap would refuse a route
   if (a.includes("--sweep")) { const r = await sweepIdleWorkspaces({ run, runDir: runDir(), dry, idleS: opt("--idle") ? parseAge(opt("--idle")) : undefined, log: console.log }); console.log(JSON.stringify({ archived: r.archived, skipped: r.skipped.length, failed: r.failed })); process.exit(0); }
   if (a.includes("--once") || dry) { const r = await reapOnce({ run, olderThan, dry }); console.log(JSON.stringify(r)); process.exit(0); }

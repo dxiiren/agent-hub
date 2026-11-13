@@ -15,6 +15,26 @@ Paseo's own supervisor restarts a daemon that crashes, not one that hangs (08-11
 - **`service restart`** (`service.ps1 restart`, `service.sh restart`): stop then start, without the deliberate-stop marker. `stop` now recognises the real topology: the pid in `paseo.pid` is the supervisor and its child `daemon-worker.js` holds the port. It stops the supervisor first (so it cannot respawn the worker), then the worker, by exact pid. A process on the port that is not a descendant of the recorded pid is still refused.
 - **RAM floor.** New routes wait below `minFreeRamGb` (1 GB in the owner's routes file). The value compared is Windows `\Memory\Available MBytes` (free plus standby, read through `Win32_PerfFormattedData_PerfOS_Memory` so it works in any language), not `FreePhysicalMemory`; Linux uses `MemAvailable`; both fall back to `os.freemem()` (`availableGb()` in `plugins/routing/budget.mjs`).
 
+### A route is refused with `WORKSPACE_CAP` or the daemon answers slowly
+
+Every workspace costs the daemon git work; over 20 the route refuses. `route` now runs `node plugins/routing/reaper.mjs --heal-cap` once and re-checks. By hand: `agent-hub cleanup`, or `node plugins/routing/reaper.mjs --sweep --idle 5m`. The reaper also archives finished agents that pin a local workspace, error agents without a route label, and duplicate records of a permanent folder (`--dedupe-permanent`; the folder is never touched). A driver's `agent-hub direct paseo` agent (label `route=direct`) still `running` after 3 h (`AGENT_HUB_DIRECT_MAX_S`, usually stuck on a permission) is stopped and archived. Cause history: 13-11 (102 leaked local workspaces), 09-11 hubfix (16 stuck Qwen agents held every slot).
+
+### A route sits for 30 minutes after its agent finished
+
+The gate secret scan used to start one gitleaks process per file (355 s on a 5,000-file folder) and nothing bounded it. Fixed 09-11 (batches of 4 MB, a deadline of the route's wait timeout, fail closed). A route that still hangs: `agent-hub route --status <agent id>`.
+
+### A provider stays `error` after its host came back
+
+Paseo takes one provider snapshot at boot and never refreshes it (an office Qwen unreachable for seconds at start stays `error`). The 10-minute reaper sweep now runs `paseo provider diagnostic <id>` for every enabled provider in `error`; by hand: `node plugins/routing/reaper.mjs --reprobe`. If the diagnostic still fails, curl the host: `curl -m 4 http://<host>:<port>/v1/models` on 8000-8010, 30000 and 11434. A host that pings but answers on no port is down (start the model server there), a changed port means repoint the config.
+
+### The watchdog restarts a healthy daemon every few minutes
+
+Two causes seen on 13-11: a remote-host provider in `error` counted as sick (a local restart cannot fix an office host: fixed, such providers are ignored), and the probe could not find `paseo.cmd` on Windows (exit 127 read as "does not answer"; fixed in `spawn-safe.mjs`). Read the alert: `HUB-ALERT.txt` now carries exit code, signal and stderr. The probe timeout is 60 s (`AGENT_HUB_WATCHDOG_LS_MS`). After a daemon restart, never kill hub processes by name pattern: use `agent-hub direct --kill --session <id>`; the daemon's command line has `--title=agent-hub-daemon`.
+
+### A driver's LLM calls do not show in `agent-hub usage`
+
+A bare `claude -p`, `codex exec` or `paseo run` is not counted. Use `agent-hub direct claude|codex|paseo --session <id> -- <tool args>` or `agent-hub route` (see [usage-direct.md](../../docs/usage-direct.md)).
+
 ### `just test` fails
 
 `scripts/check-config.mjs` names the template and the key. Templates must be valid JSON with placeholders only; fix the file and re-run.
