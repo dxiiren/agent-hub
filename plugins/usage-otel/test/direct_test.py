@@ -1,4 +1,4 @@
-import io, json, os, stat, sys, tempfile, unittest
+import io, json, os, stat, sys, tempfile, unittest, unittest.mock
 from contextlib import redirect_stdout
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bin"))
@@ -206,6 +206,12 @@ class ParseTest(unittest.TestCase):
                 del os.environ["AGENT_HUB_DIRECT_PASEO_LS"]
             f = os.path.join(gate, "direct", args.split("direct-nonce=")[1].split()[0] + ".json")
             self.assertEqual(json.load(open(f)).get("agentId"), "REAL-AGENT", "earliest-created agent with the label wins; a later copy is never bound")
+
+    def test_ambiguous_lookup_without_creation_times_binds_nothing(self):
+        with unittest.mock.patch.object(dr.subprocess, "run", return_value=unittest.mock.Mock(stdout='[{"id": "A"}, {"id": "B"}]')):
+            self.assertIsNone(dr.find_agent_id(["x"], "a" * 32))
+        with unittest.mock.patch.object(dr.subprocess, "run", return_value=unittest.mock.Mock(stdout='[{"id": "A"}]')):
+            self.assertEqual(dr.find_agent_id(["x"], "a" * 32), "A")
 
     def test_failed_paseo_run_leaves_no_marker(self):
         with tempfile.TemporaryDirectory() as t:

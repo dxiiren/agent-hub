@@ -220,12 +220,14 @@ def bind_direct_marker(nonce, agent_id):
 
 
 def find_agent_id(ls_cmd, nonce):
-    """The agent that carries this launch's nonce label: the earliest-created match (a later agent that copied the label is never picked)."""
+    """The agent that carries this launch's nonce label: the earliest-created match when ls gives creation times, else the only match (the poller sees the real agent alone, first: a copy of the label can only appear after it)."""
     out = subprocess.run(ls_cmd + ["ls", "-g", "--label", "direct-nonce=" + nonce, "--json"], capture_output=True, text=True, timeout=30).stdout
     items = json.loads(out)
     items = items.get("agents", []) if isinstance(items, dict) else items
     rows = [(str(x.get("createdAt") or x.get("CreatedAt") or ""), str(x.get("id") or x.get("agentId") or x.get("Id") or x.get("ID") or "")) for x in items if isinstance(x, dict)]
     rows = sorted(r for r in rows if r[1])
+    if len(rows) > 1 and not all(r[0] for r in rows):
+        return None  # several carriers and no creation times (paseo ls --json has none): ambiguous, bind nothing (fail closed); the poller normally sees the real agent alone, first
     return rows[0][1] if rows else None
 
 
