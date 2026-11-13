@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { archivePermanentDuplicates, archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 process.env.AGENT_HUB_PERMANENT_WS = "/desktop/code/keep-me"; // the permanent-folder list is configuration, never tracked code
 import { runRoute as runRouteReal } from "../route.mjs";
 const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test and needs gitleaks on PATH; a route test must not depend on the machine
@@ -231,4 +231,19 @@ test("(1) sweep: duplicate records of one folder outside Paseo's root are archiv
   const run = async (a) => a[1] === "ls" ? rows : a[0] === "ls" ? [] : (done.push(a[2]), a[2] === "wks_d1" ? { error: "Error: Timeout waiting for message (60000ms)" } : {});
   const r = await sweepIdleWorkspaces({ run, exists: () => true, touched: () => true, paseoRoot: "c:/nowhere/" }); // touched = true: only the duplicate rule can archive
   assert.deepEqual(done, ["wks_d1", "wks_d2"]); assert.equal(r.failed, null); assert.equal(r.archived.length, 2);
+});
+
+test("archivePermanentDuplicates keeps the oldest record, archives the rest, never touches the folder, stops if it vanishes", async () => {
+  const cwd = "C:/Users/u/Desktop/code/Keep-Me";
+  const rows = ["a", "b", "c"].map((id) => ({ workspaceId: "wks_" + id, cwd }));
+  const reg = [{ workspaceId: "wks_a", createdAt: "2026-11-12", isPaseoOwnedWorktree: false }, { workspaceId: "wks_b", createdAt: "2026-11-10", isPaseoOwnedWorktree: false }, { workspaceId: "wks_c", createdAt: "2026-11-13", isPaseoOwnedWorktree: false }];
+  const calls = []; const run = async (a) => { calls.push(a.join(" ")); return a[0] === "ls" ? [] : a[1] === "ls" ? rows : {}; };
+  const r = await archivePermanentDuplicates({ run, exists: () => true, readRegistry: () => reg });
+  assert.deepEqual(r.archived.sort(), ["wks_a", "wks_c"]); assert.equal(Object.values(r.kept)[0], "wks_b");
+  let gone = false; const r2 = await archivePermanentDuplicates({ run: async (a) => { if (a[1] === "archive") gone = true; return a[0] === "ls" ? [] : a[1] === "ls" ? rows : {}; }, exists: () => !gone, readRegistry: () => reg });
+  assert.equal(r2.archived.length, 1); assert.match(r2.failed, /FOLDER GONE/);
+  const r3 = await archivePermanentDuplicates({ run, exists: () => true, readRegistry: () => [] }); // no proof the folder is user-owned: nothing archived
+  assert.equal(r3.archived.length, 0);
+  const r4 = await archivePermanentDuplicates({ run: async (a) => (a[0] === "ls" ? [{ id: "x", status: "running", cwd }] : a[1] === "ls" ? rows : {}), exists: () => true, readRegistry: () => reg }); // a running agent in that folder: group untouched
+  assert.equal(r4.archived.length, 0);
 });
