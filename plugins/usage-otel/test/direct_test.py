@@ -166,12 +166,21 @@ class ParseTest(unittest.TestCase):
         if ok:
             body = os.path.join(t, "paseo.py"); src = open(body).read().replace("sys.exit(3)", "sys.exit(0)"); open(body, "w").write(src)
         gate = os.path.join(t, "gate")
+        if "AGENT_HUB_DIRECT_PASEO_LS" not in os.environ:  # the agent lookup must not hit the fake that records the run's args
+            lsb = os.path.join(t, "nols.py"); open(lsb, "w").write("print('[]')" + chr(10))
+            lse = os.path.join(t, "nols.cmd" if os.name == "nt" else "nols")
+            open(lse, "w").write(('@"%s" "%s" %%*' % (sys.executable, lsb) + chr(10)) if os.name == "nt" else ('#!/bin/sh' + chr(10) + 'exec "%s" "%s" "$@"' % (sys.executable, lsb) + chr(10)))
+            if os.name != "nt": os.chmod(lse, os.stat(lse).st_mode | stat.S_IEXEC)
+            os.environ["AGENT_HUB_DIRECT_PASEO_LS"] = lse; own_ls = True
+        else:
+            own_ls = False
         os.environ["AGENT_HUB_DIRECT_PASEO"] = exe; os.environ["AGENT_HUB_GATE_DIR"] = gate
         try:
             with redirect_stdout(io.StringIO()):
                 dr.main(["paseo", "--session", "s-lab", "--", "run", "--cwd", t, "--provider", "codex", "hi"])
         finally:
             del os.environ["AGENT_HUB_DIRECT_PASEO"]; del os.environ["AGENT_HUB_GATE_DIR"]
+            if own_ls: del os.environ["AGENT_HUB_DIRECT_PASEO_LS"]
         return open(os.path.join(t, "paseo.args")).read(), gate
 
     def test_paseo_run_gets_session_labels_and_a_matching_gate_nonce(self):
@@ -183,6 +192,20 @@ class ParseTest(unittest.TestCase):
             # the gate plugin's store holds exactly that single-use nonce (the plugin never trusts a label alone)
             self.assertEqual(os.listdir(os.path.join(gate, "direct")), [nonce + ".json"])
             self.assertFalse(os.path.exists(os.path.join(gate, "requests")), "a direct marker never writes into the route request store")
+
+    def test_marker_is_bound_to_the_agent_id_found_by_the_label(self):
+        with tempfile.TemporaryDirectory() as t:
+            ls = os.path.join(t, "ls.py"); open(ls, "w").write("import json" + chr(10) + "print(json.dumps([{'id': 'LATE-COPY', 'createdAt': '2026-01-02'}, {'id': 'REAL-AGENT', 'createdAt': '2026-01-01'}]))" + chr(10))
+            exe = os.path.join(t, "ls.cmd" if os.name == "nt" else "ls")
+            open(exe, "w").write(('@"%s" "%s" %%*' % (sys.executable, ls) + chr(10)) if os.name == "nt" else ('#!/bin/sh' + chr(10) + 'exec "%s" "%s" "$@"' % (sys.executable, ls) + chr(10)))
+            if os.name != "nt": os.chmod(exe, os.stat(exe).st_mode | stat.S_IEXEC)
+            os.environ["AGENT_HUB_DIRECT_PASEO_LS"] = exe
+            try:
+                args, gate = self._paseo(t, ok=True)
+            finally:
+                del os.environ["AGENT_HUB_DIRECT_PASEO_LS"]
+            f = os.path.join(gate, "direct", args.split("direct-nonce=")[1].split()[0] + ".json")
+            self.assertEqual(json.load(open(f)).get("agentId"), "REAL-AGENT", "earliest-created agent with the label wins; a later copy is never bound")
 
     def test_failed_paseo_run_leaves_no_marker(self):
         with tempfile.TemporaryDirectory() as t:

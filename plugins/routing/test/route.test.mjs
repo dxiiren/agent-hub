@@ -67,7 +67,7 @@ test("unsafe mode is dropped outside a worktree and kept (with --new-workspace w
 });
 
 import { cmpVer, newest, parseCodex, parseClaude, resolveEntry, stalePins } from "../resolve.mjs";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync, existsSync } from "node:fs";
 const privDir = () => mkdtempSync(join(tmpdir(), "rt-")); // a private empty cwd: the read-only snapshot walks the cwd, and a shared %TEMP% full of other tools files made these tests slow and order-dependent
 import { join } from "node:path";
 const cacheFile = join(mkdtempSync(join(tmpdir(), "rs-")), "models.json");
@@ -847,10 +847,10 @@ test("a provider paseo reports as disabled, unavailable or error is skipped in u
   assert.deepEqual(r.trace.slice(0, 3).map((x) => /disabled or unavailable/.test(x.skip)), [true, true, true]);
   assert.deepEqual(calls.filter((c) => c[0] === "run").map((c) => c[c.indexOf("--provider") + 1]), ["claude-clean"], "only the healthy provider was ever started");
 });
-test("providerState cache: one `provider ls` per 60 s across processes, a failed read is never cached", () => {
+test("providerState cache: one `provider ls` per 15 s across processes, a failed read is never cached", () => {
   const file = join(mkdtempSync(join(tmpdir(), "pc-")), "c.json"); let n = 0; let t = 1000; const ls = () => { n++; return [{ provider: "a", status: "available", enabled: "Enabled" }]; };
-  providerState(ls, {}, { file, now: () => t }); providerState(ls, {}, { file, now: () => t + 59_000 }); assert.equal(n, 1);
-  providerState(ls, {}, { file, now: () => t + 61_000 }); assert.equal(n, 2);
+  providerState(ls, {}, { file, now: () => t }); providerState(ls, {}, { file, now: () => t + 14_000 }); assert.equal(n, 1);
+  providerState(ls, {}, { file, now: () => t + 16_000 }); assert.equal(n, 2);
   const f2 = join(mkdtempSync(join(tmpdir(), "pc-")), "c.json"); let m = 0; const bad = () => { m++; return { error: "daemon down" }; };
   assert.equal(providerState(bad, {}, { file: f2 }), null); providerState(bad, {}, { file: f2 }); assert.equal(m, 2);
 });
@@ -1000,4 +1000,28 @@ test("hardening2 3: findstr is not a read command at all", () => {
   const sh = (command) => batchAllowed([{ name: "execute", kind: "execute", paths: [], command }], [cwd]).ok;
   for (const c of ["findstr foo app.log", "findstr /N foo app.log", "findstr /C:foo app.log", "findstr foo app.log /S", "grep foo app.log | findstr x"]) assert.equal(sh(c), false, c);
   assert.equal(sh("grep foo app.log"), true);
+});
+
+// round 5 (14-11): an unavailable provider must never delay a route
+const lapBusy = { freeGb: 8, cpuPct: 99 };
+const mkPaseo = (runs, script = {}) => (a) => { if (a[0] === "run") { const p = a[a.indexOf("--provider") + 1]; runs.push(p); return script[p]?.() ?? { agentId: "A", status: "completed" }; } return a[0] === "logs" ? { text: "ok" } : a[0] === "ls" ? [] : {}; };
+test("r5: high CPU never holds a route on a remote-model provider (claude) and a laptop-hosted one is skipped at once", () => {
+  let slept = 0; const runs = [];
+  const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", limitsDir: mkdtempSync(join(tmpdir(), "lim-")), freeMem: () => 8, laptop: () => lapBusy, sleep: () => { slept++; }, providerState: new Map([["qwen-code-laptop", true], ["claude-clean", true]]) }, mkPaseo(runs), { slots: { "qwen-code-laptop": 1, "claude-clean": 2 }, readOnlyEnforced: ALL.concat(["qwen-code-laptop"]), readOnlyModes: { "qwen-code-laptop": "read-only", "claude-clean": "plan" }, routes: { review: ["qwen-code-laptop", "claude-clean"] } });
+  assert.equal(slept, 0, JSON.stringify(r.trace)); assert.match(r.trace[0].skip, /CPU 99%.*skipped at once/); assert.deepEqual(runs, ["claude-clean"]); assert.equal(r.used, "claude-clean");
+});
+test("r5: an ACP exit on one provider falls through to the next at once, drops the provider cache and the provider is skipped by the next route", () => {
+  const limitsDir = mkdtempSync(join(tmpdir(), "lim-")); const cache = join(limitsDir, "provider-ls-cache.json"); writeFileSync(cache, "{}"); let slept = 0;
+  const runs = []; const script = { "qwen-code-laptop": () => ({ status: "error", error: "ACP agent process exited (exit code 3)", agentId: "Z" }) };
+  const base = { type: "review", prompt: "p", cwd: privDir(), session: "s", limitsDir, providerCache: cache, freeMem: () => 8, laptop: () => ({ freeGb: 8, cpuPct: 1 }), sleep: () => { slept++; }, providerState: new Map([["qwen-code-laptop", true], ["claude-clean", true]]) };
+  const rt = { slots: { "qwen-code-laptop": 1, "claude-clean": 2 }, readOnlyEnforced: ALL.concat(["qwen-code-laptop"]), readOnlyModes: { "qwen-code-laptop": "read-only", "claude-clean": "plan" }, routes: { review: ["qwen-code-laptop", "claude-clean"] } };
+  const r = runRoute(base, mkPaseo(runs, script), rt);
+  assert.equal(r.used, "claude-clean", JSON.stringify(r.trace)); assert.equal(slept, 0); assert.deepEqual(runs, ["qwen-code-laptop", "claude-clean"]); assert.equal(existsSync(cache), false, "the cached provider list is dropped on a start failure");
+  const runs2 = []; const r2 = runRoute(base, mkPaseo(runs2, script), rt);
+  assert.match(r2.trace[0].skip, /failed to start a moment ago/); assert.deepEqual(runs2, ["claude-clean"], "the failing provider is not tried again");
+});
+test("r5: a non-local resource wait is bounded (resourceWait) and then the next provider is tried", () => {
+  let slept = 0; const runs = [];
+  const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", limitsDir: mkdtempSync(join(tmpdir(), "lim-")), freeMem: () => 0.1, laptop: () => ({ freeGb: 0.1, cpuPct: 1 }), sleep: (ms) => { slept += ms; }, providerState: new Map([["claude-clean", true], ["qwen", true]]) }, mkPaseo(runs), { resourceWait: "10s", slots: { "claude-clean": 2, qwen: 1 }, readOnlyEnforced: ALL, readOnlyModes: { "claude-clean": "plan", qwen: "read-only" }, routes: { review: ["claude-clean", "qwen"] } });
+  assert.ok(slept <= 10_000, "slept " + slept); assert.equal(r.used, null); assert.equal(runs.length, 0);
 });

@@ -271,6 +271,12 @@ export function limitUntil(text, now = Date.now()) {
 }
 const limitsFile = (o) => join(o.limitsDir ?? (() => { try { return runDir(); } catch { return os.tmpdir(); } })(), "limits.json");
 const readLimits = (o) => readStateJson(limitsFile(o)) ?? {};
+/** A provider that just failed to START an agent (ACP process exited, spawn error, "could not start") is skipped by every route for a short while and the shared provider-list cache is dropped, so a stale "enabled" can never make a route try it again (14-11: qwen-code-laptop had no GPU, the cache still said ready). */
+export const START_FAIL_RE = /^could not start|ACP agent( process)? exited|failed to (create|start) agent|spawn .*(ENOENT|EACCES)|provider .*(unavailable|not available)/i;
+export const PROVIDER_FAIL_TTL_MS = 120_000;
+const failFile = (o) => join(o.limitsDir ?? (() => { try { return runDir(); } catch { return os.tmpdir(); } })(), "provider-fail.json");
+const readFails = (o) => readStateJson(failFile(o)) ?? {};
+const markStartFail = (o, id) => { tryWriteState(failFile(o), { ...readFails(o), [id]: (o.now ?? Date.now)() + PROVIDER_FAIL_TTL_MS }); if (o.providerCache) { try { rmSync(o.providerCache, { force: true }); } catch { /* best effort */ } } };
 
 /** Shallow snapshot of a folder (names + mtimes, capped) for the read-only post-check. */
 export function snapshot(dir, max = 5000) {
@@ -511,6 +517,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (installed && !installed.has(base(prov))) { trace.push({ provider: prov, skip: "provider not configured: add it in Settings > Providers" }); continue; }
     if (state && state.get(base(prov)) === false) { trace.push({ provider: prov, skip: "provider disabled or unavailable in Paseo (Settings > Providers)" }); continue; }
     { const until = Number(readLimits(o)[base(prov)]); if (until > (o.now ?? Date.now)()) { trace.push({ provider: prov, skip: `${base(prov)}: usage limit until ${new Date(until).toISOString()}, skipped` }); continue; } }
+    { const until = Number(readFails(o)[base(prov)]); if (until > (o.now ?? Date.now)()) { trace.push({ provider: prov, skip: `${base(prov)} failed to start a moment ago: skipped for ${Math.ceil((until - (o.now ?? Date.now)()) / 1000)} s` }); continue; } }
     { const dn = o.endpointDown?.(base(prov)); if (dn) { trace.push({ provider: prov, skip: dn }); continue; } } // a known-down endpoint is skipped at once, not retried for minutes
     { const oh = outsideHours(routes, entry, (o.now ?? Date.now)()); if (oh) { trace.push({ provider: prov, skip: oh }); continue; } } // chain entry with a time window (routes.hours)
     { const na = modelNotAllowed(routes, prov); if (na) { trace.push({ provider: prov, skip: na }); continue; } } // Routing & slots model allow-list
@@ -523,20 +530,20 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.freeMem) {
       const floor = routes.minFreeRamGbByProvider?.[base(prov)] ?? routes.minFreeRamGb ?? 2;
       const sleep = o.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
-      ramLeftMs ??= attemptLimit(o, routes) * 1000;
+      ramLeftMs ??= Math.min(attemptLimit(o, routes), toSeconds(routes.resourceWait ?? "90s")) * 1000; // a resource wait is bounded: after that the next provider is tried
       // Hold until this laptop can carry one more agent: free RAM above the provider's floor AND the laptop budget (budget.mjs) not used up by the routes already running. A waiting route is "queued" (holds no slot) and starts no CLI.
       const blocked = () => {
         if (o.freeMem() < floor) return `low RAM: ${o.freeMem().toFixed(1)} GB free, floor ${floor} GB`;
-        const held = heldOthers(); const b = budgetFor(routes, state, lapNow(), held);
+        const held = heldOthers(); const lap = lapNow(); const b = budgetFor(routes, state, kindOf(base(prov)) === "local" ? lap : { ...lap, cpuPct: undefined }, held); // CPU load only gates a model that computes on this laptop; claude/codex/qoder run their model remotely
         return b.laptopCap !== null && held >= b.effective ? `laptop budget ${b.effective} used up (configured ${b.configured}): ${b.reasons.filter((r) => r.startsWith("laptop")).join("; ") || "all slots busy"}` : null;
       };
       let why = blocked(); let waited = false;
-      if (why && /^low RAM/.test(why) && kindOf(base(prov)) === "local") { setMarker(o.marker, null); trace.push({ provider: prov, skip: why + ": this model runs on the laptop, so it is skipped at once and the next provider is tried" }); continue; }
+      if (why && kindOf(base(prov)) === "local") { setMarker(o.marker, null); trace.push({ provider: prov, skip: why + ": this model runs on the laptop, so it is skipped at once and the next provider is tried" }); continue; }
       if (why) {
         setMarker(o.marker, null); waited = true; trace.push({ provider: prov, note: `waiting, nothing started: ${why}` });
         if (routes.dropWslCache === true) { const l = (o.dropCache ?? (() => dropWslCache({ logDir: o.marker?.dir })))(); if (l) trace.push({ provider: prov, note: l }); why = blocked(); }
       }
-      let wait = 2000; while (why && ramLeftMs > 0) { sleep(wait); ramLeftMs -= wait; wait = Math.min(wait * 2, 30000); why = blocked(); }
+      let wait = 2000; while (why && ramLeftMs > 0) { const w = Math.min(wait, ramLeftMs); sleep(w); ramLeftMs -= w; wait = Math.min(wait * 2, 30000); why = blocked(); }
       if (why) { trace.push({ provider: prov, skip: why }); continue; }
       if (waited && !claimSlot(o.marker, base(prov), own(slots, base(prov)))) { trace.push({ provider: prov, skip: `slots full: ${own(slots, base(prov))} other routes already hold ${base(prov)}` }); continue; }
     }
@@ -591,6 +598,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: plainError(j.error) } : hint), ...why });
+    if (j.status !== "completed" && j.status !== "permission" && START_FAIL_RE.test(String(trace.at(-1).error ?? "") + " " + String(j.error ?? ""))) { try { markStartFail(o, base(prov)); } catch { /* best effort */ } }
     { const t = trace.at(-1); const msg = t.error ?? "";
       if (j.status !== "completed" && j.status !== "permission" && LIMIT_RE.test(msg)) { // remember it: every later route skips this provider until the reset
         const until = limitUntil(msg, (o.now ?? Date.now)()); tryWriteState(limitsFile(o), { ...readLimits(o), [base(prov)]: until });
@@ -649,7 +657,7 @@ export function providerState(paseo, cfg, cache) {
   } catch { return null; }
 }
 /** The provider list, cached in a file for ttlMs (default 60 s) so every route process shares one daemon call a minute. cache = { file, ttlMs?, now? }. A failed or empty read is never cached. */
-export function cachedProviderLs(paseo, { file, ttlMs = 60_000, now = Date.now }) {
+export function cachedProviderLs(paseo, { file, ttlMs = 15_000, now = Date.now }) {
   try { const c = JSON.parse(readFileSync(file, "utf8")); if (Array.isArray(c.rows) && c.rows.length && now() - c.at < ttlMs) return c.rows; } catch { /* no cache yet */ }
   const r = paseo(["provider", "ls"]); const rows = Array.isArray(r) ? r : r?.providers;
   if (Array.isArray(rows) && rows.length) { try { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify({ at: now(), rows })); } catch { /* best effort */ } }
@@ -811,7 +819,7 @@ function main(argv) {
   // every provider skipped only because its slots are held by other routes: queue here and retry, never exit 1 with nothing started
   const allFull = (r) => !r.used && Array.isArray(r.trace) && r.trace.length > 0 && r.trace.every((t) => /^(slots full|busy \d+\/)/.test(t.skip ?? ""));
   try { for (;;) { res = runRoute({
-    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
+    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }

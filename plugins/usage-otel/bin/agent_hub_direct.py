@@ -205,6 +205,43 @@ def write_direct_marker(nonce):
         json.dump({"ts": int(time.time() * 1000)}, f)
 
 
+def bind_direct_marker(nonce, agent_id):
+    """Bind the marker to the id of the agent this launcher created (first bind wins). The gate plugin exempts only that id, so a copy of the label on any other agent proves nothing (same format as store.mjs bindDirect)."""
+    f = os.path.join(gate_dir(), "direct", nonce + ".json")
+    with open(f) as fh:
+        m = json.load(fh)
+    if m.get("agentId"):
+        return m["agentId"] == agent_id
+    tmp = "%s.%d.tmp" % (f, os.getpid())
+    with open(tmp, "w") as fh:
+        json.dump(dict(m, agentId=agent_id), fh)
+    os.replace(tmp, f)
+    return True
+
+
+def find_agent_id(ls_cmd, nonce):
+    """The agent that carries this launch's nonce label: the earliest-created match (a later agent that copied the label is never picked)."""
+    out = subprocess.run(ls_cmd + ["ls", "-g", "--label", "direct-nonce=" + nonce, "--json"], capture_output=True, text=True, timeout=30).stdout
+    items = json.loads(out)
+    items = items.get("agents", []) if isinstance(items, dict) else items
+    rows = [(str(x.get("createdAt") or x.get("CreatedAt") or ""), str(x.get("id") or x.get("agentId") or x.get("Id") or x.get("ID") or "")) for x in items if isinstance(x, dict)]
+    rows = sorted(r for r in rows if r[1])
+    return rows[0][1] if rows else None
+
+
+def bind_when_created(ls_cmd, nonce, stop, limit=180):
+    """Background: poll until the labelled agent exists, bind the marker to its id, stop when the run ends."""
+    end = time.time() + limit
+    while not stop.is_set() and time.time() < end:
+        try:
+            aid = find_agent_id(ls_cmd, nonce)
+            if aid and bind_direct_marker(nonce, aid):
+                return
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        stop.wait(0.7)
+
+
 def remove_direct_marker(nonce):
     try:
         os.remove(os.path.join(gate_dir(), "direct", nonce + ".json"))
@@ -261,12 +298,24 @@ def main(argv):
                 write_direct_marker(nonce)
             except OSError as e:
                 sys.stderr.write("agent-hub direct: could not write the gate marker (%s); the run may be gated" % e + chr(10))
-            rc = subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
+            stop = threading.Event()
+            ls_cmd = [os.environ["AGENT_HUB_DIRECT_PASEO_LS"]] if os.environ.get("AGENT_HUB_DIRECT_PASEO_LS") else argv2
+            threading.Thread(target=bind_when_created, args=(ls_cmd, nonce, stop), daemon=True).start()
+            try:
+                rc = subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()))).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
+            finally:
+                stop.set()
+                try:  # a run that ended before the poller saw the agent: one last lookup so the plugin can still bind it
+                    aid = find_agent_id(ls_cmd, nonce)
+                    if aid:
+                        bind_direct_marker(nonce, aid)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
             ok = rc == 0
             return rc
         finally:
             if not ok:
-                remove_direct_marker(nonce)  # a failed launch leaves no marker behind (a successful one is consumed by the plugin on the agent's first turn)
+                remove_direct_marker(nonce)  # a failed launch leaves no marker behind (a successful one is bound to the agent id and consumed by the plugin on that agent's first turn)
             unmark(mk, hb)
     env_bin = os.environ.get("AGENT_HUB_DIRECT_" + tool.upper())
     exe = env_bin or shutil.which(tool)

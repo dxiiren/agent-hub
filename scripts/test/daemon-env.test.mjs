@@ -39,6 +39,7 @@ test('extras: a URL with user:pass@ is always dropped, credential-looking extras
 test('auditNames flags names the allow-list would drop, passes the ones it keeps', async () => {
   const { auditNames } = await import('../daemon-env.mjs');
   assert.deepEqual(auditNames(['PATH', 'HOME', 'PASEO_HOME', 'LC_ALL']), []);
+  assert.deepEqual(auditNames(['AGENT_HUB_PASEO_ENTRY']), [], 'the launcher itself sets this (daemon-env.mjs main) and records it: doctor must not flag it');
   assert.deepEqual(auditNames(['PATH', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'RANDOM_THING']), ['GITHUB_TOKEN', 'OPENAI_API_KEY', 'RANDOM_THING']);
   assert.deepEqual(auditNames(['MY_VAR'], ['MY_VAR']), [], 'an extra the owner named is allowed');
 });

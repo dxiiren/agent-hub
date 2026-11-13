@@ -19,10 +19,20 @@ if (log) {
     if (localDirs.includes(dirname(f)) && /[.]local[.-]|[.]local$|migrated/.test(basename(f)) && !/template/.test(basename(f))) return true;
     return !!paseo && (f === paseo || f.startsWith(paseo + sep));
   };
-  for (const name of ["readFileSync", "existsSync", "statSync", "readdirSync", "openSync", "writeFileSync", "copyFileSync"]) {
+  const refuse = (name, p) => { try { fs.appendFileSync(log, `${name} ${resolve(String(p))} (${process.argv[1] ?? "?"}) ${(new Error().stack.split(String.fromCharCode(10))[3] ?? "").trim()}${String.fromCharCode(10)}`); } catch { /* best effort */ } return Object.assign(new Error(`test touched the real local config: ${p}`), { code: "EACCES" }); };
+  // reads AND every write path (rename, rm, unlink, append, copy: provider add/remove write by rename; 14-11 a real config was rolled back and re-written by a run nobody could trace)
+  const sync = ["readFileSync", "existsSync", "statSync", "readdirSync", "openSync", "writeFileSync", "copyFileSync", "renameSync", "rmSync", "unlinkSync", "appendFileSync", "truncateSync", "cpSync", "mkdirSync"];
+  for (const name of sync) {
     const orig = fs[name];
     fs[name] = function (p, ...rest) {
-      if (bad(p)) { try { fs.appendFileSync(log, `${name} ${resolve(String(p))} (${process.argv[1] ?? "?"}) ${(new Error().stack.split("\n")[2] ?? "").trim()}\n`); } catch { /* best effort */ } throw Object.assign(new Error(`test touched the real local config: ${p}`), { code: "EACCES" }); }
+      if (bad(p) || ((name === "renameSync" || name === "copyFileSync" || name === "cpSync") && bad(rest[0]))) throw refuse(name, bad(p) ? p : rest[0]);
+      return orig.call(this, p, ...rest);
+    };
+  }
+  for (const name of ["readFile", "writeFile", "copyFile", "rename", "rm", "unlink", "appendFile", "open", "stat", "readdir", "truncate", "cp", "mkdir"]) {
+    const orig = fs.promises[name];
+    fs.promises[name] = function (p, ...rest) {
+      if (bad(p) || ((name === "rename" || name === "copyFile" || name === "cp") && bad(rest[0]))) return Promise.reject(refuse(name, bad(p) ? p : rest[0]));
       return orig.call(this, p, ...rest);
     };
   }

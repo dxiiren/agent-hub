@@ -7,9 +7,9 @@ const DIRECT = { d: { status: "N/A", attempts: 0, reprompt: false }, res: { reas
 export function evaluate({ dir, id, cwd, routes, directNonce = null }) {
   const state = loadState(dir);
   // A direct run (`agent-hub direct paseo`) is never gated or re-prompted. It proves itself with the single-use nonce the launcher stored here before the agent existed (and put on the agent as a label):
-  // the exemption is bound to this agent id on first claim. A route request for the cwd always wins (gated normally), and no nonce, a wrong, used or expired one = gated as before (fail closed).
+  // the launcher binds the marker to the id of the agent it created, so only that id is exempt (a label copied to another agent never matches). A route request for the cwd always wins (gated normally), and no nonce, a wrong, used or expired one = gated as before (fail closed).
   if (state[id]?.direct) return DIRECT;
-  if (!state[id] && directNonce && !peekRequest(dir, cwd) && claimDirect(dir, directNonce)) { state[id] = { direct: true, status: "N/A" }; saveState(dir, state); return DIRECT; }
+  if (!state[id] && directNonce && !peekRequest(dir, cwd) && claimDirect(dir, directNonce, id) === true) { state[id] = { direct: true, status: "N/A" }; saveState(dir, state); return DIRECT; }
   const mine = (state[id] ??= (() => { const q = claimRequest(dir, cwd); return { attempts: 0, cmd: q?.cmd ?? null, base: q?.base ?? null, readOnly: q?.readOnly === true, maxLines: q?.maxLines ?? null }; })());
   // summarise/review judge the answer, not a diff: the code-edit gate has nothing to verify and must neither fail them nor re-prompt them
   if (mine.readOnly) { mine.status = "N/A"; saveState(dir, state); return { d: { status: "N/A", attempts: 0, reprompt: false }, res: { reasons: [] }, mirror: { "gate/status": "N/A", "gate/reasons": "read-only task: the diff gate does not apply" } }; }

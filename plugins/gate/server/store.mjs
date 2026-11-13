@@ -19,7 +19,7 @@ export function writeRequest(dir, cwd, cmd, base = null, extra = {}) {
 }
 
 // Direct runs (`agent-hub direct paseo`): an unguessable single-use nonce, stored here BEFORE the agent exists and also passed to it as the label direct-nonce.
-// The gate exempts an agent only when its label carries a nonce that is still in this store (claimed once, bound to that agent id). Neither a cwd nor a label alone proves anything.
+// The gate exempts an agent only when its label carries a nonce that is still in this store (bound by the launcher to the agent id it created, claimed once by that id). Neither a cwd nor a label alone proves anything.
 export const DIRECT_MARKER_TTL_MS = 10 * 60_000;
 const NONCE = /^[0-9a-f]{32}$/;
 const directFile = (dir, nonce) => join(dir, "direct", nonce + ".json");
@@ -29,10 +29,26 @@ export function writeDirectMarker(dir, nonce, now = Date.now()) {
 }
 export const removeDirectMarker = (dir, nonce) => { if (NONCE.test(String(nonce))) try { unlinkSync(directFile(dir, nonce)); } catch { /* gone */ } };
 export const hasDirectMarkers = (dir) => { try { return readdirSync(join(dir, "direct")).length > 0; } catch { return false; } };
-/** Take (and delete) a fresh marker for this nonce; true only once, only inside the TTL. */
-export function claimDirect(dir, nonce, now = Date.now()) {
-  if (!NONCE.test(String(nonce))) return false;
-  try { const m = JSON.parse(readFileSync(directFile(dir, nonce), "utf8")); unlinkSync(directFile(dir, nonce)); return now - (m.ts ?? 0) < DIRECT_MARKER_TTL_MS; } catch { return false; }
+/** The launcher binds the marker to the agent id it found by the label (first bind wins). Returns false when the marker is gone or already bound to another id. */
+export function bindDirect(dir, nonce, agentId) {
+  if (!NONCE.test(String(nonce)) || !agentId) return false;
+  try {
+    const m = JSON.parse(readFileSync(directFile(dir, nonce), "utf8"));
+    if (m.agentId) return m.agentId === agentId;
+    const tmp = directFile(dir, nonce) + "." + process.pid + ".tmp"; writeFileSync(tmp, JSON.stringify({ ...m, agentId })); renameSync(tmp, directFile(dir, nonce)); return true;
+  } catch { return false; }
+}
+/** true = the marker is bound to exactly this agent id (taken and deleted: once only, inside the TTL); "pending" = not bound yet (the launcher is still looking the agent up); false = anything else.
+ *  A label copied onto another agent never matches the bound id, so it neither exempts that agent nor burns the real one's marker. */
+export function claimDirect(dir, nonce, agentId, now = Date.now(), consume = true) {
+  if (!NONCE.test(String(nonce)) || !agentId) return false;
+  try {
+    const m = JSON.parse(readFileSync(directFile(dir, nonce), "utf8"));
+    if (now - (m.ts ?? 0) >= DIRECT_MARKER_TTL_MS) { unlinkSync(directFile(dir, nonce)); return false; }
+    if (!m.agentId) return "pending";
+    if (m.agentId !== agentId) return false;
+    if (consume) unlinkSync(directFile(dir, nonce)); return true;
+  } catch { return false; }
 }
 
 /** Plugin side: take (and delete) the pending request for cwd. */
