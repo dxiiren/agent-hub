@@ -327,3 +327,10 @@ test("reprobeErrorProviders runs the diagnostic only for enabled providers in er
   assert.deepEqual(calls, ["provider ls", "provider diagnostic q1"]);
   assert.deepEqual(await reprobeErrorProviders({ run: async () => ({ error: "x" }) }), []);
 });
+
+test("archiveIdleLocalWorkspaces: duplicates of one owned cwd shrink to one; none are archived while an agent runs there", async () => {
+  const rows = ["a", "b", "c"].map((id) => ({ workspaceId: id, cwd: "C:/x/dup", isolation: "local" }));
+  const mk = (agents) => async (a) => (a[0] === "workspace" && a[1] === "ls" ? rows : a[0] === "ls" ? agents : { status: "archived" });
+  assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/dup", status: "closed", created: "1 minute ago" }]), dry: true }), ["b", "c"]);
+  assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/dup", status: "running", created: "1 minute ago" }]), dry: true }), []);
+});

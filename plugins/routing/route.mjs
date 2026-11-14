@@ -236,6 +236,26 @@ export function safeGit(cwd, args) {
   const hooks = join(os.tmpdir(), "agent-hub-no-hooks"); try { mkdirSync(hooks, { recursive: true }); } catch { /* best effort */ }
   return spawnSync("git", ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", `core.hooksPath=${hooks.split(String.fromCharCode(92)).join("/")}`, ...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
 }
+/**
+ * Diff of an agent's worktree against its start commit, written to outFile (returns the path, or null when nothing changed). Nothing the agent can write is trusted: git runs on a SCRATCH git dir (empty config, no hooks, objects borrowed read-only through GIT_ALTERNATE_OBJECT_DIRECTORIES), so a filter / textconv / ext-diff driver planted in the worktree's .gitattributes or the repo config is never defined there and cannot run, and `git add` never touches the agent's own index or config.
+ */
+export function harvestPatch(wtPath, base, outFile) {
+  let tmp = null;
+  try {
+    const common = safeGit(wtPath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    if (common.status !== 0) return null;
+    tmp = mkdtempSync(join(os.tmpdir(), "agent-hub-harvest-"));
+    const empty = join(tmp, "empty"); writeFileSync(empty, ""); const gd = join(tmp, "gd"), hooks = join(tmp, "hooks"); mkdirSync(hooks);
+    const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: empty, GIT_ATTR_NOSYSTEM: "1", GIT_DIR: gd, GIT_WORK_TREE: wtPath, GIT_INDEX_FILE: join(tmp, "index"), GIT_ALTERNATE_OBJECT_DIRECTORIES: join(common.stdout.trim(), "objects") };
+    const g = (a) => { const r = spawnSync("git", ["-c", `core.attributesFile=${empty.split(sep).join("/")}`, "-c", "core.fsmonitor=false", "-c", `core.hooksPath=${hooks.split(sep).join("/")}`, ...a], { cwd: tmp, encoding: "utf8", env, maxBuffer: 256 * 1024 * 1024 }); if (process.env.HARVEST_DEBUG && r.status !== 0) console.error(a.join(" "), r.stderr); return r; };
+    if (spawnSync("git", ["init", "-q", "--bare", gd], { cwd: tmp, env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).status !== 0) return null;
+    if (g(["read-tree", base]).status !== 0 || g(["add", "-A"]).status !== 0) return null;
+    const d = g(["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base]);
+    if (d.status !== 0 || !d.stdout) return null;
+    mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, d.stdout);
+    return outFile.split(sep).join("/");
+  } catch (e) { if (process.env.HARVEST_DEBUG) console.error(e); return null; } finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
+}
 export function headSha(cwd) {
   const inRepo = safeGit(cwd, ["rev-parse", "--is-inside-work-tree"]);
   if (inRepo.status !== 0) return null;
@@ -515,7 +535,9 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (unnamed) { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } unnamed = false; }
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
-  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path } : {}) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
+  // The route-created worktree is archived by retire, and an agent that edited without committing loses its diff with it (09-11: CR-004 "gate PASS", worktree gone, branch route-1c96f76704 empty). Save the diff against the start commit first.
+  const savePatch = (wt) => { if (!wt || !o.base) return {}; const f = harvestPatch(wt.path, o.base, join(o.home || paseoHome(), "route-patches", wt.name + ".patch")); return f ? { patch: f } : {}; };
+  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path, ...savePatch(wt) } : {}) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
@@ -596,7 +618,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
     const guard = ro ? snapshot(o.cwd) : null;
     let ws = null; if (!o.worktree && !o.keep) { let g = null; try { g = o.ledgerDir ? acquireEntry({ dir: join(o.ledgerDir, "wtcreate"), max: 2, waitMs: createTimeoutS() * 1000 }) : { release() {} }; } catch { g = { release() {} }; } // same 2-at-once gate as worktree creates; never resent (a retry only queues a duplicate behind the stuck one: 16:37-16:47 09-11, 60 in flight)
-      let c = null; if (g) { try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } }
+      // 14-11: reuse the local workspace this cwd already has (25 duplicates of one folder filled the 20-workspace cap); a reused one is not ours to archive, the idle-local sweep drops it later
+      const have = (() => { const r = paseo(["workspace", "ls", "--json"]); const key = (p) => String(p ?? "").split("\\").join("/").toLowerCase().replace(/\/+$/, ""); return Array.isArray(r) ? r.find((x) => x.workspaceId && x.isolation === "local" && key(x.cwd) === key(o.cwd)) : null; })();
+      if (have) { args.push("--workspace", have.workspaceId); g?.release(); } else {
+      let c = null; if (g) { try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } } }
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
     let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
     live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
@@ -607,7 +632,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     }
     if (ro && j.status === "permission") j = grantReads(paseo, j, left(), { cwd: o.cwd, allow: routes.readAllow }, 8, left);
     const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes, denied: j.denied }) } : {};
-    const slow = (!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? ""));
+    // 14-11: the create call itself timed out (no agent id): say so, and stop the chain, the next provider would queue another create behind the stuck one on the same busy daemon
+    const createTimedOut = !j.agentId && /^(CREATE_TIMEOUT|no answer in )/.test(String(j.error ?? ""));
+    if (createTimedOut && !/^CREATE_TIMEOUT/.test(String(j.error))) j = { ...j, error: `CREATE_TIMEOUT: the daemon did not create the agent within ${startLimitS(routes)} s (saturated daemon, not a slow provider); nothing was retried on another provider. Check \`paseo ls\` and the laptop load, retry, or raise AGENT_HUB_START_TIMEOUT.` };
+    const slow = !createTimedOut && ((!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? "")));
     if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: plainError(j.error) } : hint), ...why });
@@ -652,6 +680,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // a read-only agent stopped on a refused read may still have written an answer: keep it (the refusal stays in the trace) in case no entry completes
     if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
     if (j.agentId || wt) retire(j.agentId, wt); // a timed-out agent must not keep running while the next entry works
+    if (createTimedOut) { setMarker(o.marker, null); break; } // see createTimedOut above
     setMarker(o.marker, null); // a failed attempt gives its slot back at once: the next entry, a parallel route, or the end of this one never sees it held
   }
   } finally { drain(); ACTIVE.delete(drain); }
@@ -825,6 +854,12 @@ function main(argv) {
       try { console.error("route: " + capErr.split(";")[0] + ": archiving idle workspaces, then retrying the check"); spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "reaper.mjs"), "--heal-cap", ...(home ? ["--home", home] : [])], { timeout: 240_000, windowsHide: true, stdio: "ignore" }); capErr = workspaceCapError(withRetry(cliPaseo(home)), cap); } catch { /* keep the refusal */ }
     }
     if (capErr) { console.error("route: " + capErr); return 1; } }
+  // 14-11: one session fired 11 parallel routes and all 11 timed out at 600 s (38 credits, 0 files). At most AGENT_HUB_SESSION_MAX (default 2) routes per session run at once; the rest queue on disk (no daemon traffic) for AGENT_HUB_SESSION_WAIT_S (default 300 s), then are refused with this message.
+  const sessId = opt("--session") ?? sessionFromEnv(process.env);
+  const sessGate = (() => { const max = process.env.AGENT_HUB_SESSION_MAX === undefined ? 2 : Number(process.env.AGENT_HUB_SESSION_MAX); if (!sessId || !Number.isFinite(max)) return { release() {} };
+    try { return acquireEntry({ dir: join(runDir(), "session-" + String(sessId).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 60)), max, waitMs: (Number(process.env.AGENT_HUB_SESSION_WAIT_S) || 300) * 1000, onWait: (n, m) => console.error(`route: session ${sessId} already has ${n}/${m} routes running: queued here (AGENT_HUB_SESSION_MAX raises it); start fewer parallel calls`) }); } catch { return { release() {} }; } })();
+  if (sessGate === null) { console.error(`route: session ${sessId} has ${process.env.AGENT_HUB_SESSION_MAX ?? 2} routes running and none finished within the wait; nothing was started. Run fewer parallel routes per session (AGENT_HUB_SESSION_MAX, AGENT_HUB_SESSION_WAIT_S).`); return 1; }
+  process.on("exit", () => sessGate.release());
   const entry = (() => { try { return acquireEntry({ dir: runDir(), max: maxInFlight(routes0), onWait: (n, m) => console.error(`route: ${n}/${m} routes already in flight: queued here (no daemon traffic) until a slot frees`) }); } catch { return { release() {}, waitedMs: 0 }; } })();
   if (entry === null) { console.error("route: gave up waiting 30 min for a free hub slot (maxInFlight in routes.local.json, env AGENT_HUB_MAX_INFLIGHT); nothing was started"); return 1; }
   process.on("exit", () => entry.release()); // every exit path, including process.exit(130) from a signal

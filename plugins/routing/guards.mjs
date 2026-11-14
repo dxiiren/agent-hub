@@ -115,9 +115,13 @@ export async function archiveIdleLocalWorkspaces({ run, dry = false, log = () =>
   const cwdKey = (c) => norm(c).replace(/^~(?=\/)/, home);
   // a finished agent (idle/error/closed) older than 10 min no longer owns its workspace: 09:06 12-11, 102 local workspaces were all kept by finished agents and the 20-workspace cap refused every route
   const owned = new Set(agents.filter((a) => !FINISHED.test(String(a.status ?? "")) || ageSeconds(a.created) < 10 * 60).map((a) => cwdKey(a.cwd ?? "")));
-  const out = [];
+  // 14-11: 25 local workspaces of ONE cwd survived together because young finished agents "owned" the cwd. Duplicates of an owned cwd are archived down to one, but never while an unfinished agent runs there (paseo ls has no workspace id, so the live agent's workspace cannot be told apart).
+  const running = new Set(agents.filter((a) => !FINISHED.test(String(a.status ?? ""))).map((a) => cwdKey(a.cwd ?? "")));
+  const out = [], kept = new Set();
   for (const w of rows) {
-    if (!w.workspaceId || !w.cwd || w.isolation !== "local" || PERMANENT.test(norm(w.cwd)) || owned.has(cwdKey(w.cwd))) continue;
+    if (!w.workspaceId || !w.cwd || w.isolation !== "local" || PERMANENT.test(norm(w.cwd))) continue;
+    const k = cwdKey(w.cwd);
+    if (owned.has(k)) { if (running.has(k) || !kept.has(k)) { kept.add(k); continue; } }
     if (!dry) { const r = await safe(["workspace", "archive", w.workspaceId, "--json"]); if (r?.error && !/not found|archived/i.test(JSON.stringify(r.error))) continue; }
     out.push(w.workspaceId); log(`archived local ${w.workspaceId} ${w.cwd}`);
   }

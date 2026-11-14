@@ -827,14 +827,14 @@ test("a read-only attempt that gets no answer in its limit fails with a plain re
   assert.match(r.trace[0].error, /^no answer in 8 min/); assert.equal(runs.length, 2); assert.equal(r.used, "claude-clean");
   const run1 = calls.find(([a]) => a[0] === "run"); assert.equal(run1[0][run1[0].indexOf("--wait-timeout") + 1], "480s"); assert.equal(run1[1].timeoutMs, 90_000, "the create call is bounded by the start limit (90 s), not by the 8 min attempt limit");
 });
-test("a provider that hangs while STARTING is dropped after the start limit, its slot is released, and the next provider answers", async () => {
+test("a create call that times out says CREATE_TIMEOUT (not a 25-min silence), its slot is released, and the chain stops (no second create queued behind it)", async () => {
   const { startLimitS } = await import("../route.mjs");
   assert.equal(startLimitS({}), 90); assert.equal(startLimitS({ startTimeout: "20s" }), 20); assert.equal(startLimitS({ startTimeout: "20s" }, { AGENT_HUB_START_TIMEOUT: "5s" }), 5);
   const runs = []; const marks = [];
   const paseo = (a, opts) => { if (a[0] === "run") { runs.push([a[a.indexOf("--provider") + 1], opts?.timeoutMs]); return runs.length === 1 ? { error: "no answer in 20 s: the call was stopped" } : { agentId: "H2", status: "completed" }; } if (a[0] === "logs") return { text: "answer text" }; if (a[0] === "provider") return [{ provider: "qwen-code" }, { provider: "claude-clean" }]; return a[0] === "ls" ? [] : {}; };
   const mdir = mkdtempSync(join(tmpdir(), "mk-")); const marker = { file: join(mdir, "t-" + process.pid + "-1.json"), dir: mdir }; const before = Date.now();
   const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", marker, providerState: new Map([["qwen-code", true], ["claude-clean", true]]) }, paseo, { startTimeout: "20s", readOnlyModes: {}, routes: { review: ["qwen-code", "claude-clean"] } });
-  assert.equal(r.used, "claude-clean"); assert.equal(runs[0][1], 20_000, "start-bound call"); assert.match(r.trace[0].error, /no answer in/); assert.ok(Date.now() - before < 5000);
+  assert.equal(r.used, null); assert.equal(runs.length, 1, "no second provider after a create timeout"); assert.equal(runs[0][1], 20_000, "start-bound call"); assert.match(r.trace[0].error, /^CREATE_TIMEOUT/); assert.doesNotMatch(r.trace[0].error, /took too long/); assert.ok(Date.now() - before < 5000);
 });
 test("a provider paseo reports as disabled, unavailable or error is skipped in under 2 s, never claims a slot and never starts a CLI", () => {
   const rows = [{ provider: "qwen-code", status: "unavailable", enabled: "Disabled" }, { provider: "qwen-code-2", status: "unavailable", enabled: "Enabled" }, { provider: "qwen-code-3", status: "error", enabled: "Enabled" }, { provider: "claude-clean", status: "available", enabled: "Enabled" }];
