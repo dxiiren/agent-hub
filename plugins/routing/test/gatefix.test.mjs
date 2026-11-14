@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { callerGate, runStatus } from "../route.mjs";
+import { callerGate, runStatus, snapshot, sha } from "../route.mjs";
 import { evaluate } from "../../gate/server/hook.mjs";
 import { writeRequest } from "../../gate/server/store.mjs";
 import { gateOpts, runGate, gitSig } from "../../gate/server/gate.mjs";
@@ -141,4 +141,19 @@ test("read-only: callerGate with --gate passes on no change, fails on a change o
   assert.equal(callerGate(o('node -e "process.exit(1)"'), "A1", p, runGate, {}).status, "FAIL");
   writeFileSync(join(d, "a.txt"), "z\n");
   const r = callerGate(o('node -e "process.exit(0)"'), "A1", p, runGate, {}); assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /changed the work tree/);
+});
+test("read-only: a commit or branch switch by the agent is caught (status and diff stay clean)", () => {
+  const d = repo(), b = head(d), sig = gitSig(d), p = (a) => (a[0] === "ls" ? [{ id: "A1", cwd: d }] : {});
+  const o = { gate: 'node -e "process.exit(0)"', base: b, ro: true, roSig: sig };
+  writeFileSync(join(d, "c.txt"), "c\n"); sh(d, "add", "."); sh(d, "-c", "user.name=t", "-c", "user.email=t@t.t", "commit", "-qm", "sneaky");
+  const r = callerGate(o, "A1", p, runGate, {}); assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /changed the work tree/);
+  const sig2 = gitSig(d); sh(d, "checkout", "-q", "-b", "other"); assert.notEqual(gitSig(d), sig2);
+});
+test("read-only: no recorded before-state is unverifiable, never PASS; the folder snapshot can verify instead", () => {
+  const d = repo(), b = head(d), st = mkdtempSync(join(tmpdir(), "st-")), p = (a) => (a[0] === "inspect" ? { Status: "idle", Cwd: d } : a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "logs" ? { text: "x\nok\n" } : {});
+  writeRequest(st, d, null, b, { readOnly: true });
+  const r = runStatus("A1", p, st, runGate, {}); assert.equal(r.status, "unverifiable"); assert.equal(r.gate.status, "FAIL");
+  assert.equal(callerGate({ gate: 'node -e "process.exit(0)"', base: b, ro: true }, "A1", p, runGate, {}).status, "FAIL");
+  writeRequest(st, d, null, b, { readOnly: true, guardHash: sha(snapshot(d)) });
+  assert.equal(runStatus("A1", p, st, runGate, {}).status, "completed");
 });

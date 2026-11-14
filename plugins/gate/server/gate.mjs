@@ -207,6 +207,9 @@ export function gitSig(cwd) {
     const h = createHash("sha1");
     h.update(git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]));
     h.update(git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"]));
+    h.update(git(cwd, ["rev-parse", "HEAD"])); // a commit or reset leaves status and diff clean
+    try { h.update(git(cwd, ["symbolic-ref", "-q", "HEAD"])); } catch { h.update("detached"); } // a branch switch likewise
+    // shortcut: ignored files and mtimes are not hashed (50 MB / 34 s on a pnpm worktree), so a read-only agent that edits only an ignored file is not caught here; upgrade if read-only providers ever gain write access
     return h.digest("hex");
   } catch { return null; }
 }
