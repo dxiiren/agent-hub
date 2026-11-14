@@ -90,3 +90,14 @@ test('shipped spec is well formed: every edit has find and replace, rev is set, 
   for (const f of sp.files) { assert.match(f.sha256, /^[0-9a-f]{64}$/); assert.ok(!f.path.startsWith('/')); for (const e of f.edits) assert.ok(e.find && typeof e.replace === 'string', e.name); }
   assert.ok(sp.files[0].edits.some((e) => /agent-hub-server-rev:\d+/.test(e.replace)));
 });
+
+test('shipped spec rev 3: the reconcile cooldown edits are present and each matches the pristine Paseo file exactly once', async () => {
+  const { findServerDir } = await import('../paseo-web-patch.mjs');
+  const sp = loadServerSpec('0.15.2'); assert.ok(sp.rev >= 3);
+  const f = sp.files.find((x) => x.path.endsWith('workspace-reconciliation-service.js'));
+  for (const n of ['reconcile-cooldown', 'reconcile-end-stamp', 'reconcile-queued-cooldown']) assert.ok(f.edits.some((e) => e.name === n), n);
+  const dir = findServerDir(); const orig = dir && join(dir, f.path + '.agent-hub-orig');
+  if (!orig || !existsSync(orig)) return; // no pristine copy on this machine: the shape check above is all we can do
+  const src = readFileSync(orig, 'utf8');
+  for (const e of f.edits) assert.equal(src.split(e.find).length - 1, 1, e.name);
+});

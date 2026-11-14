@@ -1,6 +1,6 @@
 {
  "paseo": "0.15.2",
- "rev": 2,
+ "rev": 3,
  "files": [
   {
    "path": "dist/server/server/agent/provider-snapshot-manager.js",
@@ -36,7 +36,22 @@
     {
      "name": "rescan-30min",
      "find": "const DEFAULT_RESCAN_INTERVAL_MS = 5 * 60000;",
-     "replace": "/*agent-hub-server-rev:2*/const DEFAULT_RESCAN_INTERVAL_MS = 30 * 60000; // was 5 min: the full rescan runs git for every active workspace behind one queue; on 08-11 it never drained (getpaseo/paseo#3426, #8244)"
+     "replace": "/*agent-hub-server-rev:3*/const DEFAULT_RESCAN_INTERVAL_MS = 30 * 60000; // was 5 min: the full rescan runs git for every active workspace behind one queue; on 08-11 it never drained (getpaseo/paseo#3426, #8244)"
+    },
+    {
+     "name": "reconcile-cooldown",
+     "find": "}, this.debounceMs);",
+     "replace": "}, Math.max(this.debounceMs, (this.__ahLastEnd ?? 0) + 120000 - Date.now())); // HUBQ: a .git touch in any of 140+ project roots re-ran a git read of every project (~850 git commands, daemon queue 100-400 deep); one metadata pass per 2 min at most"
+    },
+    {
+     "name": "reconcile-end-stamp",
+     "find": "finally {\n            this.reconciling = false;\n            if (this.reconcileQueuedMode) {",
+     "replace": "finally {\n            this.reconciling = false;\n            this.__ahLastEnd = Date.now();\n            if (this.reconcileQueuedMode) {"
+    },
+    {
+     "name": "reconcile-queued-cooldown",
+     "find": "void this.reconcileObservedGitMetadata(queuedMode);",
+     "replace": "if (queuedMode === \"full\") void this.reconcileObservedGitMetadata(queuedMode);\n                else this.scheduleObservedReconciliation();"
     }
    ]
   }
