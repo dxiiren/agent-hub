@@ -236,6 +236,26 @@ export function safeGit(cwd, args) {
   const hooks = join(os.tmpdir(), "agent-hub-no-hooks"); try { mkdirSync(hooks, { recursive: true }); } catch { /* best effort */ }
   return spawnSync("git", ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", `core.hooksPath=${hooks.split(String.fromCharCode(92)).join("/")}`, ...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
 }
+/**
+ * Diff of an agent's worktree against its start commit, written to outFile (returns the path, or null when nothing changed). Nothing the agent can write is trusted: git runs on a SCRATCH git dir (empty config, no hooks, objects borrowed read-only through GIT_ALTERNATE_OBJECT_DIRECTORIES), so a filter / textconv / ext-diff driver planted in the worktree's .gitattributes or the repo config is never defined there and cannot run, and `git add` never touches the agent's own index or config.
+ */
+export function harvestPatch(wtPath, base, outFile) {
+  let tmp = null;
+  try {
+    const common = safeGit(wtPath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    if (common.status !== 0) return null;
+    tmp = mkdtempSync(join(os.tmpdir(), "agent-hub-harvest-"));
+    const empty = join(tmp, "empty"); writeFileSync(empty, ""); const gd = join(tmp, "gd"), hooks = join(tmp, "hooks"); mkdirSync(hooks);
+    const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: empty, GIT_ATTR_NOSYSTEM: "1", GIT_DIR: gd, GIT_WORK_TREE: wtPath, GIT_INDEX_FILE: join(tmp, "index"), GIT_ALTERNATE_OBJECT_DIRECTORIES: join(common.stdout.trim(), "objects") };
+    const g = (a) => { const r = spawnSync("git", ["-c", `core.attributesFile=${empty.split(sep).join("/")}`, "-c", "core.fsmonitor=false", "-c", `core.hooksPath=${hooks.split(sep).join("/")}`, ...a], { cwd: tmp, encoding: "utf8", env, maxBuffer: 256 * 1024 * 1024 }); if (process.env.HARVEST_DEBUG && r.status !== 0) console.error(a.join(" "), r.stderr); return r; };
+    if (spawnSync("git", ["init", "-q", "--bare", gd], { cwd: tmp, env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).status !== 0) return null;
+    if (g(["read-tree", base]).status !== 0 || g(["add", "-A"]).status !== 0) return null;
+    const d = g(["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base]);
+    if (d.status !== 0 || !d.stdout) return null;
+    mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, d.stdout);
+    return outFile.split(sep).join("/");
+  } catch (e) { if (process.env.HARVEST_DEBUG) console.error(e); return null; } finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
+}
 export function headSha(cwd) {
   const inRepo = safeGit(cwd, ["rev-parse", "--is-inside-work-tree"]);
   if (inRepo.status !== 0) return null;
@@ -516,7 +536,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
   // The route-created worktree is archived by retire, and an agent that edited without committing loses its diff with it (09-11: CR-004 "gate PASS", worktree gone, branch route-1c96f76704 empty). Save the diff against the start commit first.
-  const savePatch = (wt) => { if (!wt || !o.base) return {}; try { safeGit(wt.path, ["add", "-A"]); const d = safeGit(wt.path, ["diff", "--cached", "--binary", o.base]); if (d.status !== 0 || !d.stdout) return {}; const dir = join(o.home || paseoHome(), "route-patches"); mkdirSync(dir, { recursive: true }); const f = join(dir, wt.name + ".patch"); writeFileSync(f, d.stdout); return { patch: f.split(sep).join("/") }; } catch { return {}; } };
+  const savePatch = (wt) => { if (!wt || !o.base) return {}; const f = harvestPatch(wt.path, o.base, join(o.home || paseoHome(), "route-patches", wt.name + ".patch")); return f ? { patch: f } : {}; };
   const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path, ...savePatch(wt) } : {}) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
