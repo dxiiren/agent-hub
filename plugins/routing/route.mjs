@@ -7,7 +7,7 @@ import { modelNotAllowed } from "./allow.mjs";
 import { outsideHours } from "./hours.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync, mkdtempSync, copyFileSync, realpathSync, cpSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync, mkdtempSync, copyFileSync, realpathSync, cpSync, unlinkSync, lstatSync } from "node:fs";
 import path, { basename, dirname, join, resolve, sep, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -341,11 +341,21 @@ export function snapshot(dir, max = 5000) {
 }
 
 /** HUBFIX3: a read-only route runs in its own hub-owned copy of the task folder (node_modules skipped), so another writer in the original can no longer trip the read-only guard; a change inside the copy still fails the route. null when the folder is too big to copy (the route then runs in place as before). */
+/** HUBFIX3: a read-only route runs in its own hub-owned copy of the task folder (node_modules skipped), so another writer in the original can no longer trip the read-only guard; a change inside the copy still fails the route. null when the folder is too big to copy (the route then runs in place as before). */
+/** A symlink in the copy whose target is outside the copy would let the agent read or write the original: remove it. */
+export function dropEscapingLinks(dir) {
+  const root = realpathSync(dir); const inside = (t) => t === root || t.startsWith(root + sep);
+  const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = join(d, e.name);
+    if (e.isSymbolicLink() || lstatSync(p).isSymbolicLink()) { let t = null; try { t = realpathSync(p); } catch { /* dangling */ } if (!t || !inside(t)) { try { unlinkSync(p); } catch { rmdirSync(p); } } } else if (e.isDirectory()) walk(p); } };
+  walk(dir);
+}
+/** Links and junctions are never copied (Windows cpSync turns a junction into a real folder holding the target's files): the agent cannot read or write outside through the copy. */
+const isLink = (p) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
 export function privateCopy(src, { maxFiles = 20000, maxBytes = 500e6, tmp = os.tmpdir() } = {}) {
-  let n = 0, bytes = 0; const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { if (e.name === "node_modules") continue; const p = join(d, e.name); if (e.isDirectory()) { walk(p); } else { n++; try { bytes += statSync(p).size; } catch { /* vanished */ } } if (n > maxFiles || bytes > maxBytes) throw new Error("too big"); } };
+  let n = 0, bytes = 0; const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { if (e.name === "node_modules") continue; const p = join(d, e.name); if (isLink(p)) continue; if (e.isDirectory()) { walk(p); } else { n++; try { bytes += statSync(p).size; } catch { /* vanished */ } } if (n > maxFiles || bytes > maxBytes) throw new Error("too big"); } };
   try { walk(src); } catch { return null; }
   const dir = mkdtempSync(join(tmp, "hub-ro-"));
-  try { cpSync(src, dir, { recursive: true, filter: (f) => basename(f) !== "node_modules" }); } catch { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return null; }
+  try { cpSync(src, dir, { recursive: true, verbatimSymlinks: true, dereference: false, filter: (f) => basename(f) !== "node_modules" && !isLink(f) }); } catch { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return null; }
   return dir;
 }
 
@@ -912,7 +922,7 @@ function main(argv) {
   }
   const [type, prompt0, ...rest] = argv; let prompt = prompt0;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
-  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--max-lines N] [--file PATH ...]  |  route.mjs --status <agentId>'); return 2; }
+  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--private-copy] [--max-lines N] [--file PATH ...]  |  route.mjs --status <agentId>'); return 2; }
   const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
   let cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
   const maxLines = opt("--max-lines") === undefined ? undefined : Number(opt("--max-lines"));
@@ -929,8 +939,8 @@ function main(argv) {
     process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } });
     cwd = dir.split(String.fromCharCode(92)).join("/");
   }
-  let privateRo = false; // HUBFIX3: read-only route on a plain --cwd runs in a private copy (AGENT_HUB_RO_COPY=0 turns it off); the guard compares that copy only
-  if (!files.length && process.env.AGENT_HUB_RO_COPY !== "0" && existsSync(cwd) && readOnlyType(type, loadRoutes())) { const pc = privateCopy(cwd); if (pc) { process.on("exit", () => { try { rmSync(pc, { recursive: true, force: true }); } catch { /* temp */ } }); cwd = pc.split(String.fromCharCode(92)).join("/"); privateRo = true; } }
+  let privateRo = false, origCwd = null, origSnap0 = null; // HUBFIX3: OPT-IN `--private-copy`: a read-only route runs in a hub-owned copy and the guard compares the copy; default stays the strict whole-folder check. shortcut: an agent that guesses the ORIGINAL absolute path can still write there; only the provider read-only mode blocks that (use the flag only with claude-clean and the qwen-code-* providers, the readOnlyEnforced list); the original is fingerprinted before/after and a change is reported as a warning
+  if (!files.length && rest.includes("--private-copy") && existsSync(cwd) && readOnlyType(type, loadRoutes())) { const pc = privateCopy(cwd); if (pc) { origCwd = cwd; origSnap0 = snapshot(cwd); process.on("exit", () => { try { rmSync(pc, { recursive: true, force: true }); } catch { /* temp */ } }); cwd = pc.split(String.fromCharCode(92)).join("/"); privateRo = true; } }
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
   const mcpNames = opt("--mcp");
   if (mcpNames !== undefined) { const g = grantMcp({ names: mcpNames, allow: loadMcpAllow(), readOnly: readOnlyType(type, loadRoutes()) }); if (g.refused) { console.error("route: " + g.refused); return 2; } }
@@ -973,6 +983,7 @@ function main(argv) {
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), mcp: mcpNames, deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }
+  if (privateRo && origCwd && snapshot(origCwd) !== origSnap0) res = { ...res, warning: "original-changed-during-readonly" }; // another writer, or the agent wrote outside its copy: shown, not a failure
   try { appendLedger(ledgerLine(res, { type, session: opt("--session") ?? sessionFromEnv(process.env), startedMs: ROUTE_T0 }), ledgerFile(process.env.PASEO_HOME || undefined)); } catch { /* the ledger never fails a route */ }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;

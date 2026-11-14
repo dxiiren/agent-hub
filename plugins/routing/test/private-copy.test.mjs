@@ -25,3 +25,14 @@ test("a folder over the cap is not copied (route runs in place as before)", () =
   const src = mkSrc();
   try { assert.equal(privateCopy(src, { maxFiles: 0 }), null); } finally { rmSync(src, { recursive: true, force: true }); }
 });
+
+import { symlinkSync, readdirSync, lstatSync } from "node:fs";
+test("a link pointing outside the copy is not followed: it is removed from the copy (security review)", (t) => {
+  const src = mkSrc(), outside = mkdtempSync(join(tmpdir(), "pc-out-")); writeFileSync(join(outside, "secret.txt"), "s");
+  try { symlinkSync(outside, join(src, "escape"), "junction"); } catch { rmSync(src, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); return t.skip("cannot create links here"); }
+  const pc = privateCopy(src);
+  try {
+    assert.ok(pc, "copy made"); assert.equal(existsSync(join(pc, "escape")), false, "the escaping link is gone from the copy");
+    assert.equal(existsSync(join(pc, "escape", "secret.txt")), false); assert.ok(existsSync(join(outside, "secret.txt")), "the target is untouched");
+  } finally { rmSync(src, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); if (pc) rmSync(pc, { recursive: true, force: true }); }
+});
