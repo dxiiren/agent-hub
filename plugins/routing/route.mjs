@@ -893,6 +893,14 @@ export function runStatus(id, paseo, dir = gateDir(), gate = runGate, routes = {
   return withAnswer(out, paseo);
 }
 
+/** A bare `claude` / `claude-clean` pin has no model and falls to the account default (14-11: Opus, $0.479 for 981 tokens). It becomes claude-clean/claude-haiku-5-5; an explicit model is left alone. */
+export const BARE_CLAUDE_MODEL = "claude-clean/claude-haiku-5-5";
+export function pinBare(p, say = () => {}) {
+  if (p !== "claude" && p !== "claude-clean") return p;
+  say(`route: provider ${p} names no model; using ${BARE_CLAUDE_MODEL} (pass ${p}/<model> to choose another)`);
+  return BARE_CLAUDE_MODEL;
+}
+
 const ROUTE_T0 = Date.now();
 function main(argv) {
   if (argv[0] === "--status") {
@@ -923,6 +931,7 @@ function main(argv) {
   const [type, prompt0, ...rest] = argv; let prompt = prompt0;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--private-copy] [--max-lines N] [--file PATH ...]  |  route.mjs --status <agentId>'); return 2; }
+  const providerArg = pinBare(opt("--provider"), (m) => console.error(m));
   const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
   let cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
   const maxLines = opt("--max-lines") === undefined ? undefined : Number(opt("--max-lines"));
@@ -944,7 +953,7 @@ function main(argv) {
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
   const mcpNames = opt("--mcp");
   if (mcpNames !== undefined) { const g = grantMcp({ names: mcpNames, allow: loadMcpAllow(), readOnly: readOnlyType(type, loadRoutes()) }); if (g.refused) { console.error("route: " + g.refused); return 2; } }
-  const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? sessionFromEnv(process.env), dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
+  const early = inputError({ type, provider: providerArg, cwd, home, mode: opt("--mode"), session: opt("--session") ?? sessionFromEnv(process.env), dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
   if (early) { console.error("route: " + early); return 2; }
   if (!(opt("--session") ?? sessionFromEnv(process.env))) console.error("route: note: no session id (CLAUDE_CODE_SESSION_ID is not set in this shell, e.g. a PowerShell tool), so this task is counted under no session; pass --session <id> or set AGENT_HUB_SESSION to see it in `agent-hub usage --session <id>`.");
   if (!existsSync(cwd)) { console.error(`route: --cwd ${cwd} is not an existing folder (on Windows pass C:/abs/path; Git-Bash /c/... is rewritten to C:/...)`); return 2; }
@@ -974,12 +983,12 @@ function main(argv) {
   const pcache = { file: providerCacheFile(process.env.PASEO_HOME) };
   const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache);
   { const bail = () => { for (const d of [...ACTIVE]) { try { d(); } catch { /* best effort */ } } }; process.on("exit", bail); for (const sg of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sg, () => process.exit(130)); } // Ctrl-C / kill: the exit handler archives what this route started
-  const unmark = markActive(routes, opt("--provider"), undefined, pstate, laptopNow());
+  const unmark = markActive(routes, providerArg, undefined, pstate, laptopNow());
   let res; const slotWaitUntil = Date.now() + (Number(process.env.AGENT_HUB_SLOT_WAIT_MIN) || 25) * 60_000;
   // every provider skipped only because its slots are held by other routes: queue here and retry, never exit 1 with nothing started
   const allFull = (r) => !r.used && Array.isArray(r.trace) && r.trace.length > 0 && r.trace.every((t) => /^(slots full|busy \d+\/)/.test(t.skip ?? ""));
   try { for (;;) { res = runRoute({
-    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, privateRo, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
+    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: providerArg, cwd, privateRo, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), mcp: mcpNames, deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }

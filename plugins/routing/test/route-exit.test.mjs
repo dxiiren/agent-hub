@@ -44,3 +44,13 @@ test("a permission whose request is not listed yet is looked up again before the
   const none = grantReads((a) => (a[0] === "pending" ? [] : {}), { agentId: "A", status: "permission" }, 60, { cwd: dirname(fileURLToPath(import.meta.url)), sleep: () => {} });
   assert.equal(none.status, "permission", "still nothing pending: the route ends as before");
 });
+
+import { pinBare, BARE_CLAUDE_MODEL } from "../route.mjs";
+test("bare claude / claude-clean resolve to the haiku model with one line; an explicit model is left alone (HUBREAD2 A)", () => {
+  const said = [];
+  assert.equal(pinBare("claude", (m) => said.push(m)), "claude-clean/claude-haiku-5-5");
+  assert.equal(pinBare("claude-clean", (m) => said.push(m)), BARE_CLAUDE_MODEL);
+  assert.equal(said.length, 2); assert.match(said[0], /names no model/);
+  const quiet = []; assert.equal(pinBare("claude-clean/claude-sonnet-5-5", (m) => quiet.push(m)), "claude-clean/claude-sonnet-5-5");
+  assert.equal(pinBare("claude/latest-haiku", (m) => quiet.push(m)), "claude/latest-haiku"); assert.equal(pinBare(undefined), undefined); assert.equal(quiet.length, 0);
+});
