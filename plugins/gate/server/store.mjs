@@ -10,12 +10,24 @@ export function gateDir(env = process.env) {
 }
 
 const norm = (cwd) => cwd.split(String.fromCharCode(92)).join("/").replace(/\/+$/, "").toLowerCase();
-const reqFile = (dir, cwd) => join(dir, "requests", createHash("sha1").update(norm(cwd)).digest("hex") + ".json");
+// One file per run: two routes on the same --cwd never overwrite or claim each other's request (run = the route/run label, a selector only, never a trust input).
+const reqDir = (dir, cwd) => join(dir, "requests", createHash("sha1").update(norm(cwd)).digest("hex"));
+const safeRun = (run) => (typeof run === "string" && /^[0-9A-Za-z_-]{1,64}$/.test(run) ? run : "_");
+const reqFile = (dir, cwd, run) => join(reqDir(dir, cwd), safeRun(run) + ".json");
+/** The request file a run may take: its own; a run with no label takes the unlabelled one, else the oldest. */
+function pickReq(dir, cwd, run) {
+  const own = reqFile(dir, cwd, run); if (existsSync(own)) return own;
+  const legacy = reqDir(dir, cwd) + ".json"; // written by a route started before the per-run files: still honoured so an upgrade loses no pending request
+  if (safeRun(run) !== "_") return existsSync(legacy) ? legacy : null;
+  try { const d = reqDir(dir, cwd); const f = readdirSync(d).filter((n) => n.endsWith(".json")).map((n) => join(d, n)).sort(); if (f[0]) return f[0]; } catch { /* no dir */ }
+  return existsSync(legacy) ? legacy : null;
+}
 
 /** Caller side: register the caller-supplied gate command for the next agent created in cwd. */
 export function writeRequest(dir, cwd, cmd, base = null, extra = {}) {
-  mkdirSync(join(dir, "requests"), { recursive: true });
-  writeFileSync(reqFile(dir, cwd), JSON.stringify({ cmd: cmd ?? null, base, ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v)) })); // extra: { readOnly, maxLines }
+  const { run, ...rest } = extra; extra = rest;
+  mkdirSync(reqDir(dir, cwd), { recursive: true });
+  writeFileSync(reqFile(dir, cwd, run), JSON.stringify({ cmd: cmd ?? null, base, ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v)) })); // extra: { readOnly, maxLines }
 }
 
 // Direct runs (`agent-hub direct paseo`): create-then-prompt. The launcher creates the agent WITHOUT a prompt, learns its id, writes <gate>/direct/<agentId>.json, and only then sends the prompt.
@@ -41,15 +53,15 @@ export function claimDirect(dir, agentId, now = Date.now()) {
 }
 
 /** Plugin side: take (and delete) the pending request for cwd. */
-export function claimRequest(dir, cwd) {
-  const f = reqFile(dir, cwd);
-  if (!existsSync(f)) return null;
+export function claimRequest(dir, cwd, run) {
+  const f = pickReq(dir, cwd, run);
+  if (!f) return null;
   try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } finally { try { unlinkSync(f); } catch { /* gone */ } }
 }
 
 /** Read the pending request for cwd without taking it (route --status: a cut-off route never ran its caller-side gate). */
-export function peekRequest(dir, cwd) {
-  try { return JSON.parse(readFileSync(reqFile(dir, cwd), "utf8")); } catch { return null; }
+export function peekRequest(dir, cwd, run) {
+  try { return JSON.parse(readFileSync(pickReq(dir, cwd, run), "utf8")); } catch { return null; }
 }
 
 const stateFile = (dir) => join(dir, "state.json");

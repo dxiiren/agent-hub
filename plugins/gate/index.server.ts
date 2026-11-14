@@ -22,7 +22,7 @@ async function gate(event: any, context: any) {
     try {
       // No agent label is read here: cmd, limits and patterns come from the routes file or the caller's request,
       // attempts and status from the plugin store. Labels are written for display only.
-      const { d, res, mirror: m } = evaluate({ dir: gateDir(), id, cwd: event.agent.cwd, routes: loadRoutes() });
+      const { d, res, mirror: m } = evaluate({ dir: gateDir(), id, cwd: event.agent.cwd, routes: loadRoutes(), run: event.agent.labels?.["route/run"] });
       mirror = m;
       if (d.reprompt) await context.paseo.agents.ref(id).send("Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish.");
     } catch (e) {

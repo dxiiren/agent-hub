@@ -61,3 +61,69 @@ test("D3: the read-only change error names the changed paths", () => {
   assert.deepEqual(changedPaths(b, a), ["C:/c/b.txt (modified)", "C:/c/new.tmp (added)"]);
   assert.deepEqual(changedPaths(b, "C:/c/a.txt|1"), ["C:/c/b.txt (removed)"]);
 });
+
+// ---- follow-ups (15-11-2026): apply-back to --cwd, per-run gate requests, read-only time cap ----
+import { applyPatchToCwd, cwdFingerprint, attemptLimit, DEFAULT_TIMEOUTS } from "../route.mjs";
+import { writeRequest, claimRequest, peekRequest } from "../../gate/server/store.mjs";
+
+const git = (cwd, ...a) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd, encoding: "utf8" });
+function repo() {
+  const d = mkdtempSync(join(tmpdir(), "hf4-apply-")); git(d, "init", "-q"); git(d, "config", "core.autocrlf", "false");
+  writeFileSync(join(d, "calc.py"), "def add(a, b):\n    return a - b\n"); git(d, "add", "-A"); git(d, "commit", "-qm", "init"); return d;
+}
+const patchFor = (d) => { // a fixed copy of calc.py as a patch against the repo
+  const f = join(mkdtempSync(join(tmpdir(), "hf4-p-")), "x.patch");
+  writeFileSync(join(d, "calc.py"), "def add(a, b):\n    return a + b\n"); const p = git(d, "diff").stdout; git(d, "checkout", "--", "calc.py"); writeFileSync(f, p); return f;
+};
+
+test("apply-back: an unchanged --cwd gets the patch, the result lists the file; nothing else is touched", () => {
+  const d = repo(), p = patchFor(d), sig = cwdFingerprint(d);
+  const r = applyPatchToCwd(d, p, sig);
+  assert.equal(r.ok, true); assert.deepEqual(r.files, ["calc.py"]);
+  assert.match(readFileSync(join(d, "calc.py"), "utf8"), /a \+ b/);
+  assert.equal(git(d, "status", "--short").stdout.trim(), "M calc.py");
+});
+
+test("apply-back: --cwd changed underneath (edit or new commit) => NOT applied, reason given, nothing overwritten", () => {
+  const d = repo(), p = patchFor(d), sig = cwdFingerprint(d);
+  writeFileSync(join(d, "calc.py"), "def add(a, b):\n    return 99\n"); // someone edits the same file while the route runs
+  const r = applyPatchToCwd(d, p, sig);
+  assert.equal(r.ok, false); assert.match(r.reason, /changed underneath/);
+  assert.match(readFileSync(join(d, "calc.py"), "utf8"), /99/);
+  const d2 = repo(), p2 = patchFor(d2), sig2 = cwdFingerprint(d2);
+  writeFileSync(join(d2, "other.txt"), "x"); git(d2, "add", "-A"); git(d2, "commit", "-qm", "more");
+  assert.equal(applyPatchToCwd(d2, p2, sig2).ok, false);
+  assert.equal(applyPatchToCwd(d2, p2, null).ok, false, "no fingerprint (not a git tree at the start) never applies");
+});
+
+test("gate requests are per run: two routes on one --cwd each claim their own request; no overwrite", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hf4-gate-")), cwd = mkdtempSync(join(tmpdir(), "hf4-cwd-"));
+  writeRequest(dir, cwd, "gate-A", "baseA", { run: "runa1111" }); writeRequest(dir, cwd, "gate-B", "baseB", { run: "runb2222" });
+  assert.equal(peekRequest(dir, cwd, "runb2222").cmd, "gate-B");
+  assert.equal(claimRequest(dir, cwd, "runb2222").cmd, "gate-B");
+  assert.equal(claimRequest(dir, cwd, "runa1111").cmd, "gate-A");
+  assert.equal(claimRequest(dir, cwd, "runa1111"), null, "a request is taken once");
+  writeRequest(dir, cwd, "gate-C", null, { run: "runc3333" });
+  assert.equal(claimRequest(dir, cwd, "rund4444"), null, "a run never takes another run's request");
+});
+
+test("read-only time cap: summarise and review fail over after at most 10 minutes by default; routes.timeouts overrides", () => {
+  for (const t of ["summarise", "review"]) assert.ok(attemptLimit({ type: t }, {}) <= 600, t);
+  assert.equal(attemptLimit({ type: "summarise" }, { timeouts: { summarise: "5m" } }), 300);
+  assert.deepEqual(DEFAULT_TIMEOUTS, { review: "8m", summarise: "8m" });
+});
+
+import { writeBack } from "../route.mjs";
+test("writeBack: gate-failed leaves --cwd untouched; a pass on a CRLF (autocrlf=true) checkout applies cleanly", () => {
+  const d = repo(), p = patchFor(d), sig = cwdFingerprint(d);
+  const wt = { name: "x", path: d }, home = mkdtempSync(join(tmpdir(), "hf4-home-"));
+  const base = git(d, "rev-parse", "HEAD").stdout.trim();
+  writeFileSync(join(d, "calc.py"), "def add(a, b):\n    return a + b\n"); // stand-in for the agent's worktree (here the same folder)
+  const failed = writeBack({ status: "gate-failed", wt, base, home, cwd: d, sig0: sig });
+  assert.equal(failed.writtenBackToCwd, false); assert.match(failed.applyNote, /--cwd untouched/);
+  const c = repo(); git(c, "config", "core.autocrlf", "true"); // CRLF on disk, LF in the index
+  writeFileSync(join(c, "calc.py"), "def add(a, b):\r\n    return a - b\r\n");
+  const sigC = cwdFingerprint(c), pc = join(mkdtempSync(join(tmpdir(), "hf4-pc-")), "x.patch");
+  writeFileSync(pc, "diff --git a/calc.py b/calc.py\n--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a - b\n+    return a + b\n");
+  const r = applyPatchToCwd(c, pc, sigC); assert.equal(r.ok, true, JSON.stringify(r));
+});

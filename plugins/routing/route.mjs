@@ -303,7 +303,8 @@ export function harvestPatch(wtPath, base, outFile) {
     tmp = mkdtempSync(join(os.tmpdir(), "agent-hub-harvest-"));
     const empty = join(tmp, "empty"); writeFileSync(empty, ""); const gd = join(tmp, "gd"), hooks = join(tmp, "hooks"); mkdirSync(hooks);
     const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: empty, GIT_ATTR_NOSYSTEM: "1", GIT_DIR: gd, GIT_WORK_TREE: wtPath, GIT_INDEX_FILE: join(tmp, "index"), GIT_ALTERNATE_OBJECT_DIRECTORIES: join(common.stdout.trim(), "objects") };
-    const g = (a) => { const r = spawnSync("git", ["-c", `core.attributesFile=${empty.split(sep).join("/")}`, "-c", "core.fsmonitor=false", "-c", `core.hooksPath=${hooks.split(sep).join("/")}`, ...a], { cwd: tmp, encoding: "utf8", env, maxBuffer: 256 * 1024 * 1024 }); if (process.env.HARVEST_DEBUG && r.status !== 0) console.error(a.join(" "), r.stderr); return r; };
+    const crlf = String(spawnSync("git", ["config", "--get", "core.autocrlf"], { cwd: wtPath, encoding: "utf8" }).stdout ?? "").trim() /* system config included: Git for Windows sets autocrlf there */, eol = /^(true|input|false)$/.test(crlf) ? ["-c", "core.autocrlf=" + crlf] : []; // a Windows checkout is CRLF on disk: without the repo's own autocrlf every file would show as rewritten
+    const g = (a) => { const r = spawnSync("git", [...eol, "-c", `core.attributesFile=${empty.split(sep).join("/")}`, "-c", "core.fsmonitor=false", "-c", `core.hooksPath=${hooks.split(sep).join("/")}`, ...a], { cwd: tmp, encoding: "utf8", env, maxBuffer: 256 * 1024 * 1024 }); if (process.env.HARVEST_DEBUG && r.status !== 0) console.error(a.join(" "), r.stderr); return r; };
     if (spawnSync("git", ["init", "-q", "--bare", gd], { cwd: tmp, env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).status !== 0) return null;
     if (g(["read-tree", base]).status !== 0 || g(["add", "-A", "--", ".", ...BYPRODUCT_EXCLUDES]).status !== 0) return null;
     const d = g(["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base]);
@@ -311,6 +312,29 @@ export function harvestPatch(wtPath, base, outFile) {
     mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, d.stdout);
     return outFile.split(sep).join("/");
   } catch (e) { if (process.env.HARVEST_DEBUG) console.error(e); return null; } finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
+}
+/** Fingerprint of a caller folder: HEAD plus the porcelain status. */
+export const cwdFingerprint = (cwd) => { const h = safeGit(cwd, ["rev-parse", "--verify", "HEAD"]), s = safeGit(cwd, ["status", "--porcelain", "-uall"]), d = safeGit(cwd, ["diff", "HEAD", "--binary", "--no-ext-diff"]); return h.status === 0 && s.status === 0 && d.status === 0 ? h.stdout.trim() + "|" + s.stdout + "|" + sha(d.stdout) : null; }; // the diff hash catches a second edit of a file that was already modified
+/** Apply a saved patch to the caller's folder. Refuses (nothing written) when the folder is not what the route started from, or the patch does not apply cleanly. */
+/** `git apply` with the user's own config (Git for Windows keeps core.autocrlf in the system file, and a CRLF checkout does not match an LF patch without it). apply runs no hook and no repo program. */
+const gitApply = (root, args) => spawnSync("git", ["apply", ...args], { cwd: root, encoding: "utf8" });
+export function applyPatchToCwd(cwd, patch, sig0) {
+  if (sig0 === null || sig0 === undefined) return { ok: false, reason: "--cwd was not a git work tree at the start" };
+  if (cwdFingerprint(cwd) !== sig0) return { ok: false, reason: "--cwd changed underneath (HEAD or files differ from the start of the route)" };
+  const top = safeGit(cwd, ["rev-parse", "--show-toplevel"]); if (top.status !== 0) return { ok: false, reason: "cannot find the repo root" };
+  const root = top.stdout.trim(), lines = (t) => String(t).split(/\r?\n/).filter(Boolean);
+  const chk = gitApply(root, ["--check", patch]); if (chk.status !== 0) return { ok: false, reason: "patch does not apply cleanly: " + (lines(chk.stderr)[0] ?? "") };
+  const ap = gitApply(root, [patch]); if (ap.status !== 0) return { ok: false, reason: "git apply failed: " + (lines(ap.stderr)[0] ?? "") };
+  return { ok: true, files: lines(gitApply(root, ["--numstat", patch]).stdout).map((l) => l.split("\t")[2]) };
+}
+/** Save the worktree's diff and, on a pass, apply it to the caller's --cwd (see applyPatchToCwd). Used by route (done) and by a reply that finishes a parked edit. */
+export function writeBack({ status, wt, base, home, cwd, sig0 }) {
+  const patch = base ? harvestPatch(wt.path, base, join(home || paseoHome(), "route-patches", wt.name + ".patch")) : null;
+  const info = { worktree: wt.path, ...(patch ? { patch } : {}) };
+  if (status !== "completed") return { ...info, writtenBackToCwd: false, applyNote: "not applied: the route did not pass (" + status + "); --cwd untouched" };
+  if (!patch) return { ...info, writtenBackToCwd: false, applyNote: "nothing to apply: the agent made no change" };
+  const res = applyPatchToCwd(cwd, patch, sig0);
+  return res.ok ? { ...info, writtenBackToCwd: true, files: res.files } : { ...info, writtenBackToCwd: false, applyNote: "not applied: " + res.reason + "; the patch is saved at " + patch };
 }
 export function headSha(cwd) {
   const inRepo = safeGit(cwd, ["rev-parse", "--is-inside-work-tree"]);
@@ -513,10 +537,11 @@ export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, di
   const r = withAnswer({ used: rec.provider, agentId, status: "completed", trace }, paseo, answerRetryMs);
   const q = mayAsk(rec.asks) ? parseAsk(r.answer) : null;
   if (q) { park({ ...rec, asks: rec.asks + 1 }, { dir, reaper, home: rec.home }); return { ...r, status: "asking", question: q, round: rec.asks + 1 }; }
-  if (!rec.gate) { if (!rec.keep) retireParked(paseo, rec); return r; }
+  const wbk = (res) => (rec.wt && rec.origCwd !== undefined ? { ...res, ...writeBack({ status: res.status, wt: rec.wt, base: rec.base, home: rec.home, cwd: rec.origCwd, sig0: rec.sig0 }) } : res);
+  if (!rec.gate) { const o2 = wbk(r); if (!rec.keep) retireParked(paseo, rec); return o2; }
   const g = callerGate({ gate: rec.gate, base: rec.base, maxLines: rec.maxLines }, agentId, paseo, gate, routes);
   trace.push({ provider: rec.provider, gate: g.status, ...(g.reasons.length ? { reasons: g.reasons } : {}), attempts: g.attempts });
-  const out = withAnswer({ used: rec.provider, agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo, answerRetryMs);
+  const out = wbk(withAnswer({ used: rec.provider, agentId, status: g.status === "PASS" ? "completed" : "gate-failed", gate: g, trace }, paseo, answerRetryMs));
   if (!rec.keep) retireParked(paseo, rec);
   return out;
 }
@@ -622,8 +647,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
   // The route-created worktree is archived by retire, and an agent that edited without committing loses its diff with it (09-11: CR-004 "gate PASS", worktree gone, branch route-1c96f76704 empty). Save the diff against the start commit first.
-  const savePatch = (wt) => { if (!wt || !o.base) return {}; const f = harvestPatch(wt.path, o.base, join(o.home || paseoHome(), "route-patches", wt.name + ".patch")); return f ? { patch: f } : {}; };
-  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path, ...savePatch(wt), writtenBackToCwd: false, editedIn: "worktree" } : { writtenBackToCwd: o.inPlace ? "in-place (opt-in)" : "no isolation: edited --cwd directly (no git repo to make a worktree from)", editedIn: "cwd" }) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
+  let cwdSig0 = null; // --cwd as the route found it: a pass is applied back only if it is still like this
+  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path, ...writeBack({ status: r.status, wt, base: o.base, home: o.home, cwd: o.cwd, sig0: cwdSig0 }), editedIn: "worktree" } : { writtenBackToCwd: o.inPlace ? "in-place (opt-in)" : "no isolation: edited --cwd directly (no git repo to make a worktree from)", editedIn: "cwd" }) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
@@ -680,6 +705,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.worktree) {
       // The task's start commit and gate request must exist BEFORE the agent can act, and must not come from state the agent can write at turn end. So the route creates the worktree itself, from the pinned base commit, and registers the request under its path before `run`: the hook finds it by the agent's cwd. No request = the hook fails closed.
       if (!o.base) o.base = headSha(o.cwd);
+      if (cwdSig0 === null) cwdSig0 = cwdFingerprint(o.cwd);
       if (!o.base || o.base === EMPTY_TREE) { trace.push({ provider: prov, error: "worktree task needs a git repo with at least one commit (the base commit is pinned at creation)" }); continue; }
       const c = createWorktree(paseo, o);
       if (c?.daemonBusy) { trace.push({ provider: prov, error: c.error }); break; } // the daemon, not this provider, is the bottleneck: the next provider would queue another create behind this one
@@ -687,7 +713,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       wt = { name: c.name, path: c.worktreePath }; track(null, wt);
       if (o.ledgerDir) recordHubWorktree(o.ledgerDir, c.worktreePath); // provably ours: the idle-workspace sweep may archive it (guards.mjs)
       args[2] = wt.path;
-      writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines });
+      writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base, { run: rid, readOnly: ro, maxLines: o.maxLines });
     }
     // an unsafe mode also runs in place when --cwd is a git work tree with nothing uncommitted (git can revert it); dirty or non-git stays on the provider default, with the reason
     // fail closed: full access in place only with the explicit --in-place flag AND a clean git work tree; .git and paths outside cwd are not protected then
@@ -702,7 +728,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
     const sig0 = ro && !o.privateRo ? gitSig(o.cwd) : null; // read-only: fingerprint of the work tree before the agent starts (null outside git)
-    if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines, sig: sig0, guardHash: ro ? sha(snapshot(o.cwd)) : null });
+    if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { run: rid, readOnly: ro, maxLines: o.maxLines, sig: sig0, guardHash: ro ? sha(snapshot(o.cwd)) : null });
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
     const guard = ro ? snapshot(o.cwd) : null;
@@ -762,7 +788,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const q = parseAsk(a.answer);
       if (q && j.agentId) {
         live.delete(j.agentId); if (wt) live.delete("wt:" + wt.name); wsOpen.delete(wsOf.get(j.agentId)); ledger(); // parked: its own reaper owns it now
-        park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, type: o.type, gate: o.gate, base: o.base, maxLines: o.maxLines, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
+        park({ agentId: j.agentId, provider: prov, cwd: wt?.path ?? o.cwd, origCwd: o.cwd, sig0: cwdSig0, type: o.type, gate: o.gate, base: o.base, maxLines: o.maxLines, wt, keep: !!o.keep, asks: 1, home: o.home, ...(guard !== null ? { ro: true, guardCwd: o.cwd, guardHash: sha(guard) } : {}) }, { home: o.home, reaper: o.reaper });
         return { ...a, status: "asking", question: q, round: 1, hint: `answer with: agent-hub reply ${j.agentId} "<text>" (a parked agent is stopped after ${PARK_SECONDS / 60} min with no reply)` };
       }
     }
