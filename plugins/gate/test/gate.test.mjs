@@ -375,14 +375,20 @@ test("symlinks in an ignored folder: target scanned once (pnpm-like), loops end,
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /symlink node_modules\/ext not scanned/);
 });
 
-test("a .pyc / __pycache__ file holding a token-shaped run is not a secret finding; the same bytes in a source file still are (HUBFIX3)", async () => {
+test("secret scan skips only real bytecode under a __pycache__ segment; look-alikes are still scanned (HUBFIX3)", async () => {
   const { scanFolder } = await import("../server/gate.mjs");
-  const d = mkdtempSync(join(tmpdir(), "gate-pyc-")); mkdirSync(join(d, "__pycache__"));
   const tok = "api_key" + "=" + "abcdefghijklmnopqrstuv9";
+  const d = mkdtempSync(join(tmpdir(), "gate-pyc-"));
+  mkdirSync(join(d, "__pycache__")); mkdirSync(join(d, "my__pycache__dir"));
   writeFileSync(join(d, "__pycache__", "m.cpython-313.pyc"), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(tok)]));
+  assert.deepEqual(scanFolder(d), [], "(1) real bytecode is not flagged");
+  writeFileSync(join(d, "notes__pycache__.txt"), tok);
+  assert.match(scanFolder(d).join(), /notes__pycache__\.txt/, "(2)");
   writeFileSync(join(d, "x.pyc"), tok);
-  assert.deepEqual(scanFolder(d), []);
-  writeFileSync(join(d, "real.txt"), tok);
-  assert.match(scanFolder(d).join(), /secret pattern.*real\.txt/);
+  assert.match(scanFolder(d).join(), /x\.pyc/, "(3) text .pyc");
+  writeFileSync(join(d, "__pycache__", "t.pyc"), tok);
+  assert.match(scanFolder(d).join(), /__pycache__\/t\.pyc/, "text file named .pyc under __pycache__ is flagged");
+  writeFileSync(join(d, "my__pycache__dir", "a.pyc"), Buffer.concat([Buffer.from([0]), Buffer.from(tok)]));
+  assert.match(scanFolder(d).join(), /my__pycache__dir\/a\.pyc/, "(4)");
   rmSync(d, { recursive: true, force: true });
 });
