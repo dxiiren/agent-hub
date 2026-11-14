@@ -126,3 +126,10 @@ test("issue 5: --status of a cut-off route runs the requested gate (a no-op edit
   writeRequest(st, d, 'node -e "process.exit(0)"', b, {});
   { const r3 = runStatus("A1", p, st, runGate, {}); assert.equal(r3.status, "completed", JSON.stringify(r3.gate)); }
 });
+test("read-only request: --status does not run the diff/ignored-file gate on the caller's tree", () => {
+  const d = repo(), b = head(d), st = mkdtempSync(join(tmpdir(), "st-"));
+  writeRequest(st, d, 'node -e "process.exit(1)"', b, { readOnly: true });
+  const p = (a) => (a[0] === "inspect" ? { Status: "idle", Cwd: d } : a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "logs" ? { text: "x\nok\n" } : {});
+  const r = runStatus("A1", p, st, runGate, {});
+  assert.equal(r.status, "completed"); assert.equal(r.gate, null);
+});

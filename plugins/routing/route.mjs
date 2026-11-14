@@ -622,7 +622,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       if (bad) { trace.push({ provider: prov, status: "error", error: bad + " (next provider tried)" }); retire(j.agentId, wt); continue; }
     }
     if (j.status === "completed") {
-      if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);
+      // read-only task: the provider's read-only mode forbids writes, so there is no diff to judge (the plugin hook marks it N/A too); the answer was checked above. Scanning the caller's own tree (node_modules, ignored files) would only fail a task that changed nothing.
+      if (!o.gate || ro) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
       const g = callerGate({ ...o, knownCwd: args[2], deadlineMs: t0 + lim * 1000 }, j.agentId, paseo, gate, routes);
       // the plugin hook may have re-prompted already (its attempts live in the plugin store, keyed by agent id)
@@ -741,7 +742,7 @@ export function runStatus(id, paseo, dir = gateDir(), gate = runGate, routes = {
   // A route cut off before its caller-side gate ran leaves the request unclaimed and no gate state: "completed, gate null" would accept a no-op edit. Run the requested gate now.
   const cwd = i.Cwd ? (agentCwd(paseo, id) ?? i.Cwd) : null;
   const req = !g && done && cwd ? peekRequest(dir, cwd) : null;
-  if (req && req.cmd) {
+  if (req && req.cmd && !req.readOnly) {
     const r = judgeNoDiff(gate(cwd, gateOpts(routes, cwd, req.cmd, req.base, req.maxLines)), cwd);
     out = { ...out, status: r.status === "PASS" ? "completed" : "gate-failed", gate: { status: r.status, reasons: r.reasons ?? [], attempts: 0, ranBy: "status" } };
   }

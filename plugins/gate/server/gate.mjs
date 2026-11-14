@@ -245,10 +245,12 @@ export function runGate(cwd, opts = {}) {
     flushScan(budget, reasons);
     for (const d of nestedGit(cwd, reasons)) reasons.push(...scanFolder(join(cwd, d), budget, 0, d + "/"));
     try {
-      for (const f of git(cwd, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]).split(String.fromCharCode(0)).filter(Boolean)) {
+      // --directory: an ignored folder (node_modules) is ONE entry, not 50 MB of file names that overflowed git()'s buffer; it is then walked by scanFolder under the same budget and deadline, so a huge one fails closed with the honest "too large to scan" reason
+      for (const f of git(cwd, ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"]).split(String.fromCharCode(0)).filter(Boolean)) {
         if (f.startsWith(".git/")) continue;
-        const r = []; scanFile(join(cwd, f), f, budget, r);
-        reasons.push(...r.map((x) => x.replace("secret pattern in ", "secret pattern in ignored file ")));
+        const r = f.endsWith("/") ? scanFolder(join(cwd, f), budget, 0, f) : (() => { const o = []; scanFile(join(cwd, f), f, budget, o); return o; })();
+        const rr = r.map((x) => x.replace("secret pattern in ", "secret pattern in ignored file "));
+        reasons.push(...rr.slice(0, 5), ...(rr.length > 5 ? ["scan incomplete: " + (rr.length - 5) + " more findings in " + f] : [])); // a 100k-file folder must not return 100k reasons
       }
       { const r = []; flushScan(budget, r); reasons.push(...r.map((x) => x.replace("secret pattern in ", "secret pattern in ignored file "))); }
     } catch { reasons.push("scan incomplete: could not list ignored files"); }

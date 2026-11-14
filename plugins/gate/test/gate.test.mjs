@@ -354,3 +354,11 @@ test("round 9: every token-shaped secret is found wrapped over lines (LF and CRL
   for (const l of ["akia" + "ABCDEFGHIJKLMNOP", "Db_Pass" + "word=" + "hunter2hunter2hunter2" + CRLF, "BEARER Zx9kLm2pQrStUvWxYz0123456789abcd", pem[1].toLowerCase()]) assert.ok(hasSecret(l), JSON.stringify(l).slice(0, 30));
   for (const l of ["risk- averse analysis of something long" + LF + "more words", "Ask a question" + CRLF + "about a task-management tool", "eyJ" + LF + "short"]) assert.ok(!bufHasSecret(Buffer.from(l)), l.slice(0, 20));
 });
+test("big ignored folder: listed as one entry (no buffer overflow), a hidden secret in it is still caught, a clean one passes", () => {
+  const d = repo(); writeFileSync(join(d, ".gitignore"), "node_modules/\n"); sh(d, "add", "."); sh(d, "-c", "user.name=t", "-c", "user.email=t@t.t", "commit", "-qm", "ig");
+  mkdirSync(join(d, "node_modules", "p"), { recursive: true });
+  for (let i = 0; i < 3000; i++) writeFileSync(join(d, "node_modules", "p", "x".repeat(150) + i + ".js"), "x\n"); // >450 KB of names, one entry with --directory
+  assert.deepEqual(runGate(d, { cmd: OK }).reasons, []);
+  writeFileSync(join(d, "node_modules", "p", "hid.js"), 'api_key = "' + "z9".repeat(15) + '"\n');
+  assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern in ignored file node_modules\/p\/hid\.js/);
+});
