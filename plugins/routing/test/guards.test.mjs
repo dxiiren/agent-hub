@@ -334,3 +334,11 @@ test("archiveIdleLocalWorkspaces: duplicates of one owned cwd shrink to one; non
   assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/dup", status: "closed", created: "1 minute ago" }]), dry: true }), ["b", "c"]);
   assert.deepEqual(await archiveIdleLocalWorkspaces({ run: mk([{ cwd: "C:/x/dup", status: "running", created: "1 minute ago" }]), dry: true }), []);
 });
+
+test("alive: EPERM means a reused pid owned by another account (svchost), not our route -> dead; ESRCH dead; ok alive", async () => {
+  const { alive } = await import("../guards.mjs");
+  const k = (code) => () => { if (code) throw Object.assign(new Error(code), { code }); };
+  assert.equal(alive(1, k("EPERM")), false);
+  assert.equal(alive(1, k("ESRCH")), false);
+  assert.equal(alive(1, k(null)), true);
+});

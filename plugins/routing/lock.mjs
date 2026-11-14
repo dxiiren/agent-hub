@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 
 const als = new AsyncLocalStorage();
 export const STALE_MS = 10 * 60 * 1000;
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; } };
+export const alive = (pid, kill = process.kill) => { try { kill(pid, 0); return true; } catch { return false; } }; // EPERM = reused pid of another account, not our process
 
 function tryTake(lf) {
   mkdirSync(dirname(lf), { recursive: true }); // a fresh home has no folder yet
