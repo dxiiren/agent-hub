@@ -596,7 +596,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
     const guard = ro ? snapshot(o.cwd) : null;
     let ws = null; if (!o.worktree && !o.keep) { let g = null; try { g = o.ledgerDir ? acquireEntry({ dir: join(o.ledgerDir, "wtcreate"), max: 2, waitMs: createTimeoutS() * 1000 }) : { release() {} }; } catch { g = { release() {} }; } // same 2-at-once gate as worktree creates; never resent (a retry only queues a duplicate behind the stuck one: 16:37-16:47 09-11, 60 in flight)
-      let c = null; if (g) { try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } }
+      // 14-11: reuse the local workspace this cwd already has (25 duplicates of one folder filled the 20-workspace cap); a reused one is not ours to archive, the idle-local sweep drops it later
+      const have = (() => { const r = paseo(["workspace", "ls", "--json"]); const key = (p) => String(p ?? "").split("\\").join("/").toLowerCase().replace(/\/+$/, ""); return Array.isArray(r) ? r.find((x) => x.workspaceId && x.isolation === "local" && key(x.cwd) === key(o.cwd)) : null; })();
+      if (have) { args.push("--workspace", have.workspaceId); g?.release(); } else {
+      let c = null; if (g) { try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } } }
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
     let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
     live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
@@ -607,7 +610,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     }
     if (ro && j.status === "permission") j = grantReads(paseo, j, left(), { cwd: o.cwd, allow: routes.readAllow }, 8, left);
     const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes, denied: j.denied }) } : {};
-    const slow = (!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? ""));
+    // 14-11: the create call itself timed out (no agent id): say so, and stop the chain, the next provider would queue another create behind the stuck one on the same busy daemon
+    const createTimedOut = !j.agentId && /^(CREATE_TIMEOUT|no answer in )/.test(String(j.error ?? ""));
+    if (createTimedOut && !/^CREATE_TIMEOUT/.test(String(j.error))) j = { ...j, error: `CREATE_TIMEOUT: the daemon did not create the agent within ${startLimitS(routes)} s (saturated daemon, not a slow provider); nothing was retried on another provider. Check \`paseo ls\` and the laptop load, retry, or raise AGENT_HUB_START_TIMEOUT.` };
+    const slow = !createTimedOut && ((!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? "")));
     if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
     trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: plainError(j.error) } : hint), ...why });
@@ -652,6 +658,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // a read-only agent stopped on a refused read may still have written an answer: keep it (the refusal stays in the trace) in case no entry completes
     if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
     if (j.agentId || wt) retire(j.agentId, wt); // a timed-out agent must not keep running while the next entry works
+    if (createTimedOut) { setMarker(o.marker, null); break; } // see createTimedOut above
     setMarker(o.marker, null); // a failed attempt gives its slot back at once: the next entry, a parallel route, or the end of this one never sees it held
   }
   } finally { drain(); ACTIVE.delete(drain); }
@@ -825,6 +832,12 @@ function main(argv) {
       try { console.error("route: " + capErr.split(";")[0] + ": archiving idle workspaces, then retrying the check"); spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "reaper.mjs"), "--heal-cap", ...(home ? ["--home", home] : [])], { timeout: 240_000, windowsHide: true, stdio: "ignore" }); capErr = workspaceCapError(withRetry(cliPaseo(home)), cap); } catch { /* keep the refusal */ }
     }
     if (capErr) { console.error("route: " + capErr); return 1; } }
+  // 14-11: one session fired 11 parallel routes and all 11 timed out at 600 s (38 credits, 0 files). At most AGENT_HUB_SESSION_MAX (default 2) routes per session run at once; the rest queue on disk (no daemon traffic) for AGENT_HUB_SESSION_WAIT_S (default 300 s), then are refused with this message.
+  const sessId = opt("--session") ?? sessionFromEnv(process.env);
+  const sessGate = (() => { const max = process.env.AGENT_HUB_SESSION_MAX === undefined ? 2 : Number(process.env.AGENT_HUB_SESSION_MAX); if (!sessId || !Number.isFinite(max)) return { release() {} };
+    try { return acquireEntry({ dir: join(runDir(), "session-" + String(sessId).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 60)), max, waitMs: (Number(process.env.AGENT_HUB_SESSION_WAIT_S) || 300) * 1000, onWait: (n, m) => console.error(`route: session ${sessId} already has ${n}/${m} routes running: queued here (AGENT_HUB_SESSION_MAX raises it); start fewer parallel calls`) }); } catch { return { release() {} }; } })();
+  if (sessGate === null) { console.error(`route: session ${sessId} has ${process.env.AGENT_HUB_SESSION_MAX ?? 2} routes running and none finished within the wait; nothing was started. Run fewer parallel routes per session (AGENT_HUB_SESSION_MAX, AGENT_HUB_SESSION_WAIT_S).`); return 1; }
+  process.on("exit", () => sessGate.release());
   const entry = (() => { try { return acquireEntry({ dir: runDir(), max: maxInFlight(routes0), onWait: (n, m) => console.error(`route: ${n}/${m} routes already in flight: queued here (no daemon traffic) until a slot frees`) }); } catch { return { release() {}, waitedMs: 0 }; } })();
   if (entry === null) { console.error("route: gave up waiting 30 min for a free hub slot (maxInFlight in routes.local.json, env AGENT_HUB_MAX_INFLIGHT); nothing was started"); return 1; }
   process.on("exit", () => entry.release()); // every exit path, including process.exit(130) from a signal
