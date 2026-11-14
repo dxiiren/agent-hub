@@ -27,6 +27,7 @@ export function grantMcp({ names, allow = [], readOnly = false }) {
 export const MCP_ENV = "HUB_MCP";
 /** Hub-owned allowlist: config/hub.local.json "mcpAllow" (git-ignored). [] when absent or unreadable. */
 export function loadMcpAllow(file = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "hub.local.json")) {
+  if (process.env.AGENT_HUB_NO_LOCAL === "1") return []; // hermetic runs read no local config (an empty allowlist only ever refuses)
   try { const a = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")).mcpAllow; return Array.isArray(a) ? a : []; } catch { return []; }
 }
 /** Launcher side: names from env -> { servers, preamble } or { refused }. */
