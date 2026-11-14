@@ -3,7 +3,7 @@
 // --settings after ours and the last one wins, so a plain extra --settings flag is silently dropped).
 // The rules apply only in a read-only permission mode (plan, default): code-edit tasks run in bypassPermissions and keep every tool.
 // A PreToolUse hook (plugins/routing/claude-readhook.mjs) limits Read/Grep/Glob to the task cwd plus routes.readAllow, like readguard does for Qwen.
-// In that case project and local settings are also dropped (--setting-sources=user), so a project .claude allow rule cannot re-enable a tool; deny rules win over user allows anyway.
+// In that case the run is also --restricted (HUBFIX4, 15-11): no user, project or local settings, no CLAUDE.md, no installed plugins or plugin hooks. The old `--setting-sources user` still loaded the owner's plugins: a "ponytail" SessionStart hook made Haiku end every summary with a "Skipped: ..." footer and a plan-mode write. Only the hub's own --settings (rules + read hook) apply; --add-dir keeps routes.readAllow readable (--restricted confines file tools to cwd + add-dir).
 // Usage: claude-wrap.mjs <claude-binary> <mcp-config> <rules.json> [claude args...]
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -30,18 +30,19 @@ export function mergeSettings(args, rules, hook) {
 }
 
 /** Final claude args for this launch. */
-export function buildArgs(rest, rules, mcp) {
+export function buildArgs(rest, rules, mcp, allowDirs = []) {
   if (rest[0] === "--version") return rest;
   const base = ["--strict-mcp-config", "--mcp-config", mcp];
   if (!READONLY_MODES.includes(modeOf(rest))) return [...base, ...rest];
   const noProject = []; // every --setting-sources form is dropped, then one `user` is appended: project/local allow rules and hooks cannot return
-  for (let i = 0; i < rest.length; i++) { if (rest[i] === "--setting-sources") i++; else if (!rest[i].startsWith("--setting-sources=")) noProject.push(rest[i]); }
-  return [...base, ...mergeSettings(noProject, rules, hookEntry()), "--setting-sources", "user"];
+  for (let i = 0; i < rest.length; i++) { if (rest[i] === "--setting-sources") i++; else if (!rest[i].startsWith("--setting-sources=") && !/^--(allow-)?dangerously-skip-permissions$/.test(rest[i])) noProject.push(rest[i]); } // Paseo always adds --allow-dangerously-skip-permissions, which --restricted refuses (HUBFIX4: "bypassPermissions not supported in restricted mode"); a read-only task must never be allowed to skip permissions anyway
+  return [...base, ...mergeSettings(noProject, rules, hookEntry()), "--restricted", ...allowDirs.flatMap((d) => ["--add-dir", d])];
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const [bin, mcp, rulesFile, ...rest] = process.argv.slice(2);
-  const finalArgs = buildArgs(rest, JSON.parse(readFileSync(rulesFile, "utf8")), mcp);
+  let allowDirs = []; try { const { loadRoutes } = await import("../plugins/routing/route.mjs"); allowDirs = (loadRoutes().readAllow ?? []).filter((d) => typeof d === "string" && d); } catch { /* no routes file: cwd only */ }
+  const finalArgs = buildArgs(rest, JSON.parse(readFileSync(rulesFile, "utf8")), mcp, allowDirs);
   // test hook: print the launch instead of starting claude (a Windows .cmd stand-in cannot be spawned without a shell)
   if (process.env.AGENT_HUB_WRAP_DRYRUN === "1") { console.log(JSON.stringify({ bin, args: finalArgs })); process.exit(0); }
   const c = spawn(bin, finalArgs, { stdio: "inherit" });

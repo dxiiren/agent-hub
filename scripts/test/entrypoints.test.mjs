@@ -13,7 +13,7 @@ const WIN = process.platform === 'win32';
 const rules = () => { const d = mkdtempSync(join(tmpdir(), 'wrap-')); const f = join(d, 'rules.json'); writeFileSync(f, JSON.stringify({ permissions: { deny: ['Bash'], allow: [] } })); return f; };
 const wrap = (rest, env = {}) => spawnSync(process.execPath, [WRAP, 'claude-bin', 'mcp.json', rules(), ...rest], { encoding: 'utf8', env: { ...process.env, ...env } });
 
-test('claude-wrap entry point: plan mode gets read-only settings, hook and user-only sources; bypass is untouched', () => {
+test('claude-wrap entry point: plan mode gets read-only settings, hook and --restricted; bypass is untouched', () => {
   const r = wrap(['--permission-mode', 'plan', '--setting-sources', 'project', '--settings', '{"x":1}', '-p', 'hi'], { AGENT_HUB_WRAP_DRYRUN: '1' });
   assert.equal(r.status, 0, r.stderr);
   const { bin, args } = JSON.parse(r.stdout);
@@ -21,7 +21,7 @@ test('claude-wrap entry point: plan mode gets read-only settings, hook and user-
   const s = JSON.parse(args[args.indexOf('--settings') + 1]);
   assert.deepEqual(s.permissions.deny, ['Bash']); assert.equal(s.x, 1);
   assert.ok(JSON.stringify(s.hooks.PreToolUse).includes('claude-readhook.mjs'));
-  assert.equal(args[args.indexOf('--setting-sources') + 1], 'user');
+  assert.ok(args.includes('--restricted')); assert.ok(!args.includes('--setting-sources'));
   assert.ok(!args.includes('project'));
   const b = JSON.parse(wrap(['--permission-mode', 'bypassPermissions', '-p', 'hi'], { AGENT_HUB_WRAP_DRYRUN: '1' }).stdout).args;
   assert.ok(!b.includes('--settings') && !b.includes('--setting-sources'));
@@ -32,7 +32,7 @@ test('claude-wrap entry point spawns the real binary and passes its exit code (P
   const d = mkdtempSync(join(tmpdir(), 'fc-')); const fake = join(d, 'claude');
   writeFileSync(fake, '#!/bin/sh\necho "$@"\nexit 3\n', { mode: 0o755 });
   const r = spawnSync(process.execPath, [WRAP, fake, 'mcp.json', rules(), '--permission-mode', 'plan'], { encoding: 'utf8' });
-  assert.equal(r.status, 3); assert.match(r.stdout, /--setting-sources user/);
+  assert.equal(r.status, 3); assert.match(r.stdout, /--restricted/);
 });
 
 test('deploy/usage/pollers/pollers.py compiles', () => {

@@ -482,7 +482,10 @@ test("claude read-only mode is plan or default, and the read-only settings deny 
   const ro = buildArgs(["--permission-mode", "plan", "--setting-sources=user,project,local", "--settings", '{"fastMode":false}'], tpl, "m.json");
   const m = JSON.parse(ro[ro.lastIndexOf("--settings") + 1]);
   assert.ok(["Bash", "Edit", "Write"].every((t) => m.permissions.deny.includes(t)));
-  assert.deepEqual(ro.slice(-2), ["--setting-sources", "user"]); assert.ok(!ro.some((a) => /project|local/.test(String(a)) && String(a).startsWith("--setting-sources")));
+  assert.ok(ro.includes("--restricted"), "no user/project/local settings, CLAUDE.md or plugins (HUBFIX4: ponytail footer)"); assert.ok(!ro.some((a) => String(a).startsWith("--setting-sources")));
+  assert.deepEqual(buildArgs(["--permission-mode", "plan"], tpl, "m.json", ["C:/x"]).slice(-3), ["--restricted", "--add-dir", "C:/x"], "readAllow roots stay readable");
+  const sk = buildArgs(["--permission-mode", "plan", "--allow-dangerously-skip-permissions", "--dangerously-skip-permissions"], tpl, "m.json");
+  assert.ok(sk.includes("--restricted") && !sk.some((a) => /dangerously-skip/.test(a)), "Paseo adds --allow-dangerously-skip-permissions; --restricted refuses it, and a read-only task must not have it");
   const edit = buildArgs(["--permission-mode", "bypassPermissions", "--setting-sources=user,project,local"], tpl, "m.json");
   assert.ok(!edit.includes("--settings") && edit.includes("--setting-sources=user,project,local"), "edit tasks keep every tool");
 });
@@ -528,7 +531,7 @@ test("claude read-only launch carries the hook; bypass (code-edit) does not; tem
   for (const mode of ["plan", "default"]) {
     const args = buildArgs(["--permission-mode", mode, "--setting-sources", "user,project,local", "--settings", '{"disableAllHooks":true,"hooks":{"PreToolUse":[{"matcher":"X","hooks":[]}]}}'], tpl, "m.json");
     const mm = JSON.parse(args[args.lastIndexOf("--settings") + 1]);
-    assert.equal(mm.disableAllHooks, false); assert.deepEqual(args.slice(-2), ["--setting-sources", "user"]); assert.equal(args.filter((x) => x.startsWith("--setting-sources")).length, 1, "two-argument form stripped");
+    assert.equal(mm.disableAllHooks, false); assert.ok(args.includes("--restricted")); assert.equal(args.filter((x) => x.startsWith("--setting-sources")).length, 0, "every --setting-sources form stripped");
     const m = mm;
     assert.equal(m.hooks.PreToolUse[0].matcher, he.matcher); assert.equal(m.hooks.PreToolUse.length, 2, "Paseo's own hooks kept");
     assert.equal(m.permissions.allow, undefined);

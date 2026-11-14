@@ -25,3 +25,5 @@ Agent Hub routes tasks to agent providers through a local Paseo daemon. Human do
 - **What never gets committed:** real hosts, IPs, company or personal names, emails, personal paths, tokens, `config/*.local.json`, `.mcp.json`. Use placeholders (`<OFFICE_QWEN_URL>`, `example.test`). `npm run scan` enforces it.
 - Help text lives in `scripts/help.mjs`; keep it in sync with README's cheat-sheet and `.docs/05-reference/commands.md` when a command changes.
 - Commits: Conventional Commits, stage only your files, no co-author or generated-by trailers, never `--no-verify`.
+
+- Read-only routes (summarise, review): do not write into --cwd while the route runs (the read-only guard fails it and names the changed path); write call output elsewhere. A read answer is the model's: the hub rejects empty, plan-only, footer-only and listing-only answers but cannot guarantee a long list (e.g. every task id) is complete; check counts yourself.

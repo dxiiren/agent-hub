@@ -188,6 +188,17 @@ export function lastAnswer(full, cap = ANSWER_CAP, assistant = null) {
   let end = ls.length; while (end > 0 && (!ls[end - 1].trim() || TAG.test(ls[end - 1]))) end--; // tool lines printed after the final message
   let start = end; while (start > 0 && !TAG.test(ls[start - 1])) start--;
   let run = trimEnd(ls.slice(start, end));
+  const userBlock = start > 0 && /^\[User\]/.test(ls[start - 1]); // the last untagged run belongs to a [User] message (a re-prompt), so it is not an answer
+  if ((!run.length || userBlock) && assistant !== null) { // HUBFIX4: the turn ended on tool lines or a re-prompt (a cross-talk "failed the gate", then Read/Write/ExitPlanMode): the answer is the previous assistant run, never the re-prompt and never just the last paragraph of it
+    let e = userBlock ? start - 1 : end;
+    while (e > 0) {
+      let s2 = e; while (s2 > 0 && !TAG.test(ls[s2 - 1])) s2--;
+      const opener = s2 > 0 ? ls[s2 - 1] : "";
+      const r2 = trimEnd(ls.slice(s2, e));
+      if (r2.some((l) => l.trim()) && !/^\[(User|Thought)\]/.test(opener)) { const al2 = new Set(lines(assistant).map((l) => l.trimEnd())); if (r2.filter((l) => l.trim()).every((l) => al2.has(l.trimEnd()))) { run = r2; break; } }
+      e = s2 > 0 ? s2 - 1 : 0;
+    }
+  }
   if (assistant !== null) {
     const al = trimEnd(lines(assistant));
     let n = 0; while (n < run.length && n < al.length && run[run.length - 1 - n].trimEnd() === al[al.length - 1 - n].trimEnd()) n++;
@@ -229,12 +240,19 @@ export function listReadable(cwd, max = 60) {
 export const withFileList = (prompt, cwd) => { const l = cwd ? listReadable(cwd) : []; return l.length ? `${prompt}
 
 (Files you can open with your Read tool, one call per file, folders cannot be read: ${l.join(", ")})` : prompt; };
+/** One line of a bare file/directory listing: optional bullet or tree glyphs, then a single path-like token (has an extension or ends in a slash), optional size. Never a sentence (no spaces inside the token). */
+const isListingLine = (l) => /^(?:[-*+]\s+|[|`\x5c +\u2500-\u257f-]+)?`?[\w.@~:\/\x5c-]+(?:\.[A-Za-z0-9]{1,8}|[\/\x5c])`?(?:\s+\(?\d+\s*(?:B|KB|MB|bytes|lines)\)?)?$/.test(l);
 /** Why a completed read-only answer is not usable, or "". The answer IS the product of summarise/review, so an empty one or a short refusal ("I cannot complete this task. I am Qwen Code...") falls through to the next chain entry like an error does. */
 export function unusableAnswer(text) {
   const t = String(text ?? "").trim();
   if (!t) return "the agent completed with an empty answer";
   if (t.length < 600 && /^(i cannot|i can't|i am unable|i'm unable|i am sorry|i'm sorry|sorry,|i am qwen code|as an ai)/i.test(t)) return `the agent refused: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
   if (t.length < 1500 && /(couldn'?t|could not|can'?t|cannot|unable to|wasn'?t able to|not able to) (read|open|access|list)\b[^.]{0,80}\b(folder|director|files?|path)|read-only (task|hook)[^.]{0,60}(refus|denied|not allowed|blocked)|(refused|blocked|denied) by (a |the )?(PreToolUse )?hook/i.test(t)) return `the agent could not read its inputs: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
+  // HUBFIX4: a footer or a plan sentence is not a summary or a review. Real strings: "Skipped: I did not check for hidden characters ... Risk: none ..." (a plugin footer), "Plan mode is on, so I only read the file ... Lazy note: ...", "I'll review the diff...".
+  if (t.length < 500 && /^(skipped|lazy note|not checked|risk|plan mode is on|i only read|note)\b/i.test(t)) return `the answer is only a status footer: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
+  if (t.length < 300 && /^(i'?ll|i will|let me|i'm going to|i am going to|first,? i'?ll|now i'?ll|okay,? i'?ll)\b/i.test(t) && !/^\s*([-*]|\d+[.)])\s/m.test(t) && !/`/.test(t)) return `the answer is only a plan sentence: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
+  // HUBFIX4: a bare file/directory listing is not prose (prdraft 15-11: the first kang and nbq calls returned the folder listing instead of the PR description). Every non-empty line is a path-like token (extension, slash, or tree glyphs) and there is no sentence.
+  { const ls = t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean); if (ls.length >= 2 && ls.every(isListingLine)) return `the answer is only a file or directory listing: ${ls.slice(0, 4).join(", ").slice(0, 120)}`; }
   return "";
 }
 /** Paseo prints these when an agent has no transcript yet; they are UI text, never an answer. */
@@ -264,6 +282,8 @@ export function normCwd(p, platform = process.platform) {
 /** A relative path option is resolved against the CALLER's folder before it is sent: the daemon would otherwise resolve it against its own (an agent once ran in C:\Windows\System32 for --cwd .). Dash-led and empty values stay as they are for inputError. */
 export function absPath(p) { return typeof p !== "string" || !p || p.startsWith("-") || path.isAbsolute(p) ? p : path.resolve(p); }
 
+/** HUBFIX4: an edit type with neither --new-workspace nor --in-place, in a git repo with at least one commit, gets a throwaway worktree. */
+export const wantsAutoWorktree = (type, routes, rest, cwd) => !readOnlyType(type, routes) && !rest.includes("--in-place") && !rest.includes("--new-workspace") && (() => { const h = headSha(cwd); return !!h && h !== EMPTY_TREE; })();
 /** The commit a task starts from; the gate diffs against it. Null only outside a git repo; a repo with no commits yet (unborn HEAD) gets the empty-tree hash so the gate diffs and scans everything. */
 /** Every git call on a folder an agent can write runs with repo config that could execute code switched off (fsmonitor, hooks) and no system config. Empty hooks dir = an empty folder under the temp dir. */
 export function safeGit(cwd, args) {
@@ -273,6 +293,8 @@ export function safeGit(cwd, args) {
 /**
  * Diff of an agent's worktree against its start commit, written to outFile (returns the path, or null when nothing changed). Nothing the agent can write is trusted: git runs on a SCRATCH git dir (empty config, no hooks, objects borrowed read-only through GIT_ALTERNATE_OBJECT_DIRECTORIES), so a filter / textconv / ext-diff driver planted in the worktree's .gitattributes or the repo config is never defined there and cannot run, and `git add` never touches the agent's own index or config.
  */
+/** Gate / test-run by-products never belong in a patch (HUBFIX4: a pytest gate leaves __pycache__ and .pytest_cache; a repo with no .gitignore would carry the .pyc into the patch). */
+export const BYPRODUCT_EXCLUDES = ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"].map((d) => `:(exclude,glob)**/${d}/**`).concat([":(exclude,glob)**/*.pyc"]);
 export function harvestPatch(wtPath, base, outFile) {
   let tmp = null;
   try {
@@ -283,7 +305,7 @@ export function harvestPatch(wtPath, base, outFile) {
     const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: empty, GIT_ATTR_NOSYSTEM: "1", GIT_DIR: gd, GIT_WORK_TREE: wtPath, GIT_INDEX_FILE: join(tmp, "index"), GIT_ALTERNATE_OBJECT_DIRECTORIES: join(common.stdout.trim(), "objects") };
     const g = (a) => { const r = spawnSync("git", ["-c", `core.attributesFile=${empty.split(sep).join("/")}`, "-c", "core.fsmonitor=false", "-c", `core.hooksPath=${hooks.split(sep).join("/")}`, ...a], { cwd: tmp, encoding: "utf8", env, maxBuffer: 256 * 1024 * 1024 }); if (process.env.HARVEST_DEBUG && r.status !== 0) console.error(a.join(" "), r.stderr); return r; };
     if (spawnSync("git", ["init", "-q", "--bare", gd], { cwd: tmp, env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).status !== 0) return null;
-    if (g(["read-tree", base]).status !== 0 || g(["add", "-A"]).status !== 0) return null;
+    if (g(["read-tree", base]).status !== 0 || g(["add", "-A", "--", ".", ...BYPRODUCT_EXCLUDES]).status !== 0) return null;
     const d = g(["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base]);
     if (d.status !== 0 || !d.stdout) return null;
     mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, d.stdout);
@@ -340,6 +362,14 @@ export function snapshot(dir, max = 5000) {
   walk(dir); return out.sort().join(String.fromCharCode(10));
 }
 
+/** HUBFIX4: which paths differ between two snapshot() strings (added, removed or re-written), first `max`, so a failed-readonly-changed error names the file instead of only the folder. */
+export function changedPaths(before, after, max = 5) {
+  const m = (t) => new Map(String(t ?? "").split(String.fromCharCode(10)).filter(Boolean).map((l) => { const i = l.lastIndexOf("|"); return [l.slice(0, i), l.slice(i + 1)]; }));
+  const a = m(before), b = m(after); const out = [];
+  for (const [k, v] of b) if (!a.has(k)) out.push(k + " (added)"); else if (a.get(k) !== v) out.push(k + " (modified)");
+  for (const k of a.keys()) if (!b.has(k)) out.push(k + " (removed)");
+  return out.sort().slice(0, max);
+}
 /** HUBFIX3: a read-only route runs in its own hub-owned copy of the task folder (node_modules skipped), so another writer in the original can no longer trip the read-only guard; a change inside the copy still fails the route. null when the folder is too big to copy (the route then runs in place as before). */
 /** HUBFIX3: a read-only route runs in its own hub-owned copy of the task folder (node_modules skipped), so another writer in the original can no longer trip the read-only guard; a change inside the copy still fails the route. null when the folder is too big to copy (the route then runs in place as before). */
 /** A symlink in the copy whose target is outside the copy would let the agent read or write the original: remove it. */
@@ -593,7 +623,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
   // The route-created worktree is archived by retire, and an agent that edited without committing loses its diff with it (09-11: CR-004 "gate PASS", worktree gone, branch route-1c96f76704 empty). Save the diff against the start commit first.
   const savePatch = (wt) => { if (!wt || !o.base) return {}; const f = harvestPatch(wt.path, o.base, join(o.home || paseoHome(), "route-patches", wt.name + ".patch")); return f ? { patch: f } : {}; };
-  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path, ...savePatch(wt) } : {}) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
+  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path, ...savePatch(wt), writtenBackToCwd: false, editedIn: "worktree" } : { writtenBackToCwd: o.inPlace ? "in-place (opt-in)" : "no isolation: edited --cwd directly (no git repo to make a worktree from)", editedIn: "cwd" }) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
@@ -714,7 +744,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
         const until = limitUntil(msg, (o.now ?? Date.now)()); tryWriteState(limitsFile(o), { ...readLimits(o), [base(prov)]: until });
         t.error = `${msg} (${base(prov)}: usage limit until ${new Date(until).toISOString()}, skipped from now on)`; } }
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
-      trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
+      const ch = changedPaths(guard, snapshot(o.cwd));
+      trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed${ch.length ? ` (changed: ${ch.join(", ")}; do not write into --cwd while a read-only route runs, write call output elsewhere)` : ""}` });
       return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);
     }
     if (j.status === "completed" && sig0?.endsWith(OVERRUN)) {
@@ -930,7 +961,7 @@ function main(argv) {
   }
   const [type, prompt0, ...rest] = argv; let prompt = prompt0;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
-  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--private-copy] [--max-lines N] [--file PATH ...]  |  route.mjs --status <agentId>'); return 2; }
+  if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--private-copy] [--max-lines N] [--file PATH ...]  |  route.mjs --status <agentId>'); console.error('read-only types (summarise, review): do not write into --cwd while the route runs (the guard fails it and names the changed path); write call output elsewhere'); return 2; }
   const providerArg = pinBare(opt("--provider"), (m) => console.error(m));
   const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
   let cwd = absPath(normCwd(opt("--cwd") ?? process.cwd()));
@@ -983,12 +1014,15 @@ function main(argv) {
   const pcache = { file: providerCacheFile(process.env.PASEO_HOME) };
   const pstate = providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache);
   { const bail = () => { for (const d of [...ACTIVE]) { try { d(); } catch { /* best effort */ } } }; process.on("exit", bail); for (const sg of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sg, () => process.exit(130)); } // Ctrl-C / kill: the exit handler archives what this route started
+  // HUBFIX4 (D2): an edit task with neither --new-workspace worktree nor --in-place ran IN the caller's folder on providers whose default mode can write (qoder, qwen): the smoke test changed calc.py in --cwd and left __pycache__ there. The documented safe mode is the throwaway worktree, so it is the default for edit types in a git repo with a commit; nothing is written back to --cwd (the result names the worktree, branch and patch).
+  const autoWorktree = wantsAutoWorktree(type, routes, rest, cwd);
+  if (autoWorktree) console.error("route: edit task without --new-workspace/--in-place: using a throwaway worktree (the result names the worktree, branch and patch; nothing is written back to --cwd; pass --in-place to edit --cwd directly)");
   const unmark = markActive(routes, providerArg, undefined, pstate, laptopNow());
   let res; const slotWaitUntil = Date.now() + (Number(process.env.AGENT_HUB_SLOT_WAIT_MIN) || 25) * 60_000;
   // every provider skipped only because its slots are held by other routes: queue here and retry, never exit 1 with nothing started
   const allFull = (r) => !r.used && Array.isArray(r.trace) && r.trace.length > 0 && r.trace.every((t) => /^(slots full|busy \d+\/)/.test(t.skip ?? ""));
   try { for (;;) { res = runRoute({
-    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: providerArg, cwd, privateRo, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
+    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: providerArg, cwd, privateRo, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree" || autoWorktree, inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), mcp: mcpNames, deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }
