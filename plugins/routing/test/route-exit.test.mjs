@@ -15,3 +15,22 @@ test("completed with an empty answer is not success; a real answer is 0; parked 
   assert.equal(routeExitCode({ used: "p", status: "completed", answer: "", gate: { status: "PASS" } }), 0, "a gated edit may end with no prose");
   assert.equal(routeExitCode({ status: "asking" }), 3);
 });
+
+import { inlineFiles } from "../route.mjs";
+test("read-only --file inputs are inlined into the prompt (no shell needed); over the cap the rest is named and shell is said to be refused (HUBFIX3)", () => {
+  const read = (p) => ({ a: "alpha line\nneedle 42\n", b: "x".repeat(50) }[p]);
+  const p = inlineFiles("Where is the needle?", [{ name: "a.txt", path: "a" }], 1000, read);
+  assert.match(p, /=== FILE a\.txt ===\nalpha line\nneedle 42/); assert.match(p, /shell commands are refused/);
+  const q = inlineFiles("q", [{ name: "a.txt", path: "a" }, { name: "b.txt", path: "b" }], 30, read);
+  assert.match(q, /Not inlined \(over the size cap\): b\.txt/); assert.ok(!q.includes("xxxx"));
+  assert.equal(inlineFiles("plain", [], 10, read), "plain");
+});
+
+import { grantReads } from "../route.mjs";
+test("a refused shell command does not end the route: the agent carries on; the 3rd refusal ends it with a reason (HUBFIX3)", () => {
+  const mk = (waits) => { const log = []; let w = 0; return { log, paseo: (a) => { log.push(a[0]); if (a[0] === "pending") return [{ agentId: "A", id: "p" + log.length, name: "run_shell_command", kind: "execute", command: "grep x f" }]; if (a[0] === "wait") return waits[w++]; return {}; } }; };
+  const a = mk([{ status: "idle" }]); assert.equal(grantReads(a.paseo, { agentId: "A", status: "permission" }, 60, { cwd: "C:/x" }).status, "completed");
+  assert.ok(a.log.includes("permit"), "the refusal was sent");
+  const b = mk([{ status: "permission" }, { status: "permission" }, { status: "permission" }]); const r = grantReads(b.paseo, { agentId: "A", status: "permission" }, 60, { cwd: "C:/x" });
+  assert.match(r.denied, /refused 3 times/);
+});

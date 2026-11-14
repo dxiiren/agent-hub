@@ -151,6 +151,7 @@ export const readOnlyMode = (prov, routes = {}) => {
 };
 /** Resolve a read-only agent stopped on `permission`. Its pending requests are judged as ONE batch (readguard.mjs): every request a plain local read of a path inside ctx.cwd / ctx.allow (realpath, no dotfiles, no credentials, no protected folders) => allow all and wait again; any other => deny all and the status stays `permission`. A request with no path is denied. */
 export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8, left = () => timeoutS) {
+  let refused = 0;
   for (let i = 0; i < max && j.status === "permission" && j.agentId; i++) {
     const pend = paseo(["pending"]);
     const mine = (Array.isArray(pend) ? pend : []).filter((p) => p.agentId === j.agentId);
@@ -158,6 +159,13 @@ export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8, left = () => t
     const roots = [ctx.cwd, ...(ctx.allow ?? [])].filter(Boolean);
     const v = batchAllowed(mine, roots);
     for (const p of mine) paseo(["permit", v.ok ? "allow" : "deny", j.agentId, p.id]);
+    if (!v.ok && mine.every((p) => p.kind === "execute" || /shell|bash|command/i.test(String(p.name ?? "")))) { // HUBFIX3: the refusal text goes back to the agent, which may carry on with its own read tools; only a 3rd refusal ends the route (with the reason)
+      refused++; if (refused >= 3) return { ...j, denied: v.why + " (refused " + refused + " times)" };
+      const w2 = paseo(["wait", j.agentId, "--timeout", String(left())]);
+      if (w2?.status === "idle") return { agentId: j.agentId, status: "completed" };
+      if (w2?.status === "permission") { j = { agentId: j.agentId, status: "permission", denied: v.why }; continue; }
+      return { ...j, denied: v.why };
+    }
     if (!v.ok) return { ...j, denied: v.why };
     const w = paseo(["wait", j.agentId, "--timeout", String(left())]);
     j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
@@ -817,6 +825,24 @@ export function checkFileInputs(files, { roots = [process.cwd()], env = process.
   return { ok };
 }
 
+/** HUBFIX3 (qwenbench 3b: 0 of 3 read-only routes on a 372 KB input, the agent kept reaching for a shell command and every shell command is refused). A read-only route with --file gets the already-checked
+ * files (sensitive-name, secret scan and size checks of checkFileInputs ran first) INLINED into the prompt up to a cap, so the agent needs no search command at all; past the cap it is told to use its read tools and that shell is refused.
+ * No shell-command judging was added: removing the need beat adding a validator. */
+export const INLINE_CAP = 600_000;
+export function inlineFiles(prompt, files, cap = INLINE_CAP, read = (f) => readFileSync(f, "utf8")) {
+  let used = 0; const parts = [], left = [];
+  for (const f of files) { const t = read(f.path); if (used + t.length <= cap) { used += t.length; parts.push(`=== FILE ${f.name} ===
+${t}
+=== END ${f.name} ===`); } else left.push(f.name); }
+  const note = left.length ? `
+Not inlined (over the size cap): ${left.join(", ")}: read them with your own read tool; shell commands are refused on this task.` : "";
+  return parts.length || left.length ? `${prompt}
+
+The input file contents follow, inlined by the hub. Answer from them; shell commands are refused here.${note}
+
+${parts.join(String.fromCharCode(10).repeat(2))}` : prompt;
+}
+
 /** `route --status <agentId>`: what a route that was cut off (caller timeout, Ctrl-C) would have returned: the agent's status, the plugin's gate state and its last answer. */
 export function runStatus(id, paseo, dir = gateDir(), gate = runGate, routes = {}) {
   if (!AGENT_ID_RE.test(id ?? "")) return { error: "not an agent id: " + String(id).slice(0, 60) };
@@ -867,7 +893,7 @@ function main(argv) {
   if (!res.used && !res.status && (res.trace ?? []).every((t) => t.skip || t.error)) console.error(`route: no provider took this ${type} task (see trace). summarise/review run only on providers with an enforced read guard (a Qwen Code endpoint or claude-clean): add one with agent-hub provider add <name> --kind qwen-code --url <base>/v1 --model <id> --routes ${type}. code-edit works with codex or claude and needs --new-workspace worktree.`);
     return res.status === "completed" ? 0 : res.status === "asking" ? 3 : 1;
   }
-  const [type, prompt, ...rest] = argv;
+  const [type, prompt0, ...rest] = argv; let prompt = prompt0;
   const opt = (n) => (rest.includes(n) ? rest[rest.indexOf(n) + 1] : undefined);
   if (!type || !prompt) { console.error('usage: route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--max-lines N] [--file PATH ...]  |  route.mjs --status <agentId>'); return 2; }
   const home = absPath(opt("--home") ?? process.env.PASEO_HOME);
@@ -882,6 +908,7 @@ function main(argv) {
     const chk = checkFileInputs(files, { roots: [process.cwd(), ...(loadRoutes().readAllow ?? [])] });
     if (chk.error) { console.error("route: " + chk.error); try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return 2; }
     for (const [i, c] of chk.ok.entries()) { mkdirSync(join(dir, String(i))); copyFileSync(c.real, join(dir, String(i), c.name)); } // original basename kept
+    prompt = inlineFiles(prompt, chk.ok.map((c, i) => ({ name: c.name, path: join(dir, String(i), c.name) })));
     process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } });
     cwd = dir.split(String.fromCharCode(92)).join("/");
   }
