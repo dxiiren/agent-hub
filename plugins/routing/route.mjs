@@ -515,7 +515,9 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (unnamed) { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } unnamed = false; }
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
-  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path } : {}) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
+  // The route-created worktree is archived by retire, and an agent that edited without committing loses its diff with it (09-11: CR-004 "gate PASS", worktree gone, branch route-1c96f76704 empty). Save the diff against the start commit first.
+  const savePatch = (wt) => { if (!wt || !o.base) return {}; try { safeGit(wt.path, ["add", "-A"]); const d = safeGit(wt.path, ["diff", "--cached", "--binary", o.base]); if (d.status !== 0 || !d.stdout) return {}; const dir = join(o.home || paseoHome(), "route-patches"); mkdirSync(dir, { recursive: true }); const f = join(dir, wt.name + ".patch"); writeFileSync(f, d.stdout); return { patch: f.split(sep).join("/") }; } catch { return {}; } };
+  const done = (r, wt) => { const info = readOnlyType(o.type, routes) ? {} : { ...gitInfo(wt?.path ?? o.cwd), ...(wt ? { worktree: wt.path, ...savePatch(wt) } : {}) }; retire(r.agentId, wt, true); return { ...r, ...info }; };
   let partial = null; let ramLeftMs;
   // providers the daemon really has: a route entry for an id nobody configured is skipped, never sent to the daemon (null = list unavailable: no filtering)
   const state = o.providerState !== undefined ? o.providerState : providerState(paseo); // provider id -> enabled (null = list unavailable: no filtering)
