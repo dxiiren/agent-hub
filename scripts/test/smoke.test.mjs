@@ -129,7 +129,7 @@ test('CLI entry points load and answer: gen.mjs, hub.mjs, route.mjs, office.mjs,
 });
 
 // Registry guard: a new .mjs under deploy/ or plugins/ must either import cleanly (a library) or be added to the process list.
-const ENTRY = new Set(['deploy/laptop/laptop-agent.mjs', 'deploy/laptop/laptop-reaper.mjs', 'deploy/office/office-agent.mjs', 'deploy/shared/gen.mjs', 'plugins/routing/route.mjs', 'plugins/usage-otel/bin/paseo_run_split.mjs']);
+const ENTRY = new Set(['deploy/laptop/laptop-agent.mjs', 'deploy/laptop/laptop-reaper.mjs', 'deploy/office/office-agent.mjs', 'deploy/shared/gen.mjs', 'deploy/shared/acp-grant.mjs', 'plugins/routing/route.mjs', 'plugins/usage-otel/bin/paseo_run_split.mjs']);
 const mjsFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.name === 'node_modules' || e.name === 'test' ? [] : e.isDirectory() ? mjsFiles(join(dir, e.name)) : e.name.endsWith('.mjs') ? [join(dir, e.name)] : []));
 test('every other .mjs under deploy/ and plugins/ imports without error (a new process script must join ENTRY and get its own test)', () => {
   const libs = [...mjsFiles(f('deploy')), ...mjsFiles(f('plugins'))].filter((p) => !ENTRY.has(relative(ROOT, p).replaceAll('\\', '/')));
@@ -182,4 +182,10 @@ await new DaemonClient().createAgent({ initialPrompt: 'THE-PROMPT', labels: { se
   assert.equal(code, 0, err);
   const calls = readFileSync(log, 'utf8').trim().split(/\r?\n/);
   assert.equal(calls[0].startsWith('create prompt=NONE'), true, calls[0]); assert.equal(calls[1], 'send AGENT-1234-FAKE THE-PROMPT');
+});
+
+test('acp-grant: no agent = usage + exit 2; an unknown HUB_MCP name = refused + exit 2 before any agent starts', () => {
+  let r = node([f('deploy/shared/acp-grant.mjs')]); assert.equal(r.status, 2); assert.match(r.stderr, /usage: acp-grant/);
+  r = node([f('deploy/shared/acp-grant.mjs'), process.execPath, '-e', '0'], { env: { ...process.env, HUB_MCP: 'no-such-server' } });
+  assert.equal(r.status, 2); assert.match(r.stderr, /not on the hub allowlist/);
 });

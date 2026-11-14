@@ -2,7 +2,7 @@
 // Routing wrapper (decision 41): task type -> ordered provider/model chain; the caller may override;
 // a provider at its slot limit is skipped and a failed or timed-out one falls to the next entry.
 // shortcut: wrapper, not a daemon hook. agent.create.before has no labels and cannot spawn a replacement; move to a plugin if the hook grows.
-// Usage: route.mjs reply <agentId> "<text>" | route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep]
+// Usage: route.mjs reply <agentId> "<text>" | route.mjs --resolve <alias> | route.mjs <type> "<prompt>" [--provider P/M] [--cwd D] [--gate CMD] [--mode M] [--new-workspace worktree|--in-place] [--session ID] [--dev D] [--client C] [--home H] [--keep] [--mcp NAME[,NAME]]
 import { modelNotAllowed } from "./allow.mjs";
 import { outsideHours } from "./hours.mjs";
 import { spawn, spawnSync } from "node:child_process";
@@ -19,6 +19,7 @@ import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mj
 import { batchAllowed, pathAllowed } from "./readguard.mjs";
 import { own } from "./jsonfile.mjs";
 import { endpointSkip } from "./endpoint.mjs";
+import { grantMcp, loadMcpAllow, MCP_ENV } from "./mcp-grant.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
 import { acquireEntry, maxInFlight } from "./entry-gate.mjs";
 import { recordHubWorktree, spoolCleanup, workspaceCapError } from "./guards.mjs";
@@ -504,6 +505,8 @@ export function permissionHint({ o, mode, ro, wt, paseo, agentId, gate = runGate
 export const modeError = (mode, routes = {}) => (mode === undefined || mode === null || knownModes(routes).has(mode) ? null : `unknown --mode "${mode}": use one of ${[...knownModes(routes)].filter((m) => !m.startsWith("http")).sort().join(", ")} (read-only task types always run read-only whatever --mode says)`);
 /** Drain functions of the routes running in this process: main()'s exit/signal handler runs them. */
 export const ACTIVE = new Set();
+/** Providers whose launcher (deploy/shared/acp-grant.mjs, deploy/office/office-agent.mjs) honours the HUB_MCP grant. */
+const MCP_LANES = /^(qoder|qwen)/;
 export function runRoute(o, paseo, routes, gate = runGate) {
   const bad = inputError(o) ?? modeError(o.mode, routes); if (bad) return { used: null, status: "error", trace: [{ error: bad }] };
   // a credential in the task or the gate command is refused before anything is created or sent (same scanner as reply and the diff gate; fails closed when the scanner is missing)
@@ -585,7 +588,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     { const until = Number(readFails(o)[base(prov)]); if (until > (o.now ?? Date.now)()) { trace.push({ provider: prov, skip: `${base(prov)} failed to start a moment ago: skipped for ${Math.ceil((until - (o.now ?? Date.now)()) / 1000)} s` }); continue; } }
     { const dn = o.endpointDown?.(base(prov)); if (dn) { trace.push({ provider: prov, skip: dn }); continue; } } // a known-down endpoint is skipped at once, not retried for minutes
     { const oh = outsideHours(routes, entry, (o.now ?? Date.now)()); if (oh) { trace.push({ provider: prov, skip: oh }); continue; } } // chain entry with a time window (routes.hours)
-    { const na = modelNotAllowed(routes, prov); if (na) { trace.push({ provider: prov, skip: na }); continue; } } // Routing & slots model allow-list
+    { const na = modelNotAllowed(routes, prov); if (na) { trace.push({ provider: prov, skip: na }); continue; } }
+    if (o.mcp && !MCP_LANES.test(base(prov))) { trace.push({ provider: prov, skip: `--mcp: ${base(prov)} has no hub MCP grant launcher (only Qoder and Qwen Code lanes do); skipped` }); continue; } // Routing & slots model allow-list
     const rows = lsCached();
     const busy = (Array.isArray(rows) ? rows : []).filter((a) => String(a.status).toLowerCase() === "running" && a.provider === base(prov)).length;
     if (busy >= (own(slots, base(prov)) ?? 99)) { trace.push({ provider: prov, skip: `busy ${busy}/${own(slots, base(prov))}` }); continue; }
@@ -642,6 +646,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     else if (mode === "bypassPermissions" && !ro) { trace.push({ provider: prov, skip: "claude default mode asks before every write, and bypassPermissions is dropped outside a worktree (decision 21): it cannot edit here; use --in-place or --new-workspace worktree" }); continue; } // HUBFIX3: scaf-1 burned 116 s on Haiku that could only ask "[ASK] wait for Write?"
     else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: ` + (!o.inPlace ?"use --in-place to edit this worktree directly, or --new-workspace worktree" : `--in-place needs a clean git work tree (--cwd ${inPlaceWhy}); commit or stash first, or use --new-workspace worktree`) });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
+    if (o.mcp) { const g = grantMcp({ names: o.mcp, allow: o.mcpAllow ?? loadMcpAllow(), readOnly: ro }); if (g.refused) { trace.push({ provider: prov, error: g.refused }); break; } args.push("--env", `${MCP_ENV}=${g.servers.map((x) => x.name).join(",")}`); } // names only: the provider launcher re-resolves them against the hub allowlist
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
     const sig0 = ro ? gitSig(o.cwd) : null; // read-only: fingerprint of the work tree before the agent starts (null outside git)
@@ -913,6 +918,8 @@ function main(argv) {
     cwd = dir.split(String.fromCharCode(92)).join("/");
   }
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
+  const mcpNames = opt("--mcp");
+  if (mcpNames !== undefined) { const g = grantMcp({ names: mcpNames, allow: loadMcpAllow(), readOnly: readOnlyType(type, loadRoutes()) }); if (g.refused) { console.error("route: " + g.refused); return 2; } }
   const early = inputError({ type, provider: opt("--provider"), cwd, home, mode: opt("--mode"), session: opt("--session") ?? sessionFromEnv(process.env), dev, client: opt("--client") ?? process.env.AGENT_HUB_CLIENT });
   if (early) { console.error("route: " + early); return 2; }
   if (!(opt("--session") ?? sessionFromEnv(process.env))) console.error("route: note: no session id (CLAUDE_CODE_SESSION_ID is not set in this shell, e.g. a PowerShell tool), so this task is counted under no session; pass --session <id> or set AGENT_HUB_SESSION to see it in `agent-hub usage --session <id>`.");
@@ -950,7 +957,7 @@ function main(argv) {
   try { for (;;) { res = runRoute({
     providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
-    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
+    client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), mcp: mcpNames, deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }
   try { appendLedger(ledgerLine(res, { type, session: opt("--session") ?? sessionFromEnv(process.env), startedMs: ROUTE_T0 }), ledgerFile(process.env.PASEO_HOME || undefined)); } catch { /* the ledger never fails a route */ }
   console.log(JSON.stringify(res));

@@ -1054,3 +1054,13 @@ test("a daemon that is down is a transient error with a retry line (HUBFIX3)", a
   const j = flattenError({ error: { code: "DAEMON_NOT_RUNNING", message: "Cannot connect to daemon" } });
   assert.equal(transient(j), true); assert.match(j.error, /retry the route in 1 min/);
 });
+
+test("--mcp: names go to the provider as HUB_MCP env only; lanes without a grant launcher are skipped; read-only types refused", () => {
+  const allow = [{ name: "swing", command: "node", args: ["s.js"] }];
+  const p = fake({ run: () => ({ status: "completed", agentId: "A1" }) });
+  const r = runRoute({ ...o, mcp: "swing", mcpAllow: allow }, p, routes);
+  assert.equal(r.used, "qwen/b"); // codex/a has no grant launcher
+  const run = p.calls.find((c) => c[0] === "run"); assert.deepEqual(run.slice(run.indexOf("--env"), run.indexOf("--env") + 2), ["--env", "HUB_MCP=swing"]);
+  const bad = runRoute({ ...o, mcp: "evil", mcpAllow: allow }, fake({ run: () => ({ status: "completed", agentId: "A2" }) }), routes);
+  assert.ok(!bad.used && JSON.stringify(bad.trace).includes("not on the hub allowlist"));
+});

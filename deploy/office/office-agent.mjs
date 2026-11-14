@@ -5,6 +5,9 @@
 import { spawnSafe } from '../../plugins/routing/spawn-safe.mjs';
 import { safeUrl, servedModel, endpointDown, qwenEnv, takeReadOnlyFlag, startAuthProxy, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
+import { grantFromEnv } from '../../plugins/routing/mcp-grant.mjs';
+import { runDir } from '../../plugins/routing/runstate.mjs';
+import { join } from 'node:path';
 
 const legacyReadOnly = takeReadOnlyFlag(process.argv);
 const [bin, upstream0, fallback] = process.argv.slice(2);
@@ -22,6 +25,8 @@ if (down) { process.stderr.write(down + String.fromCharCode(10)); proxy?.close()
 const model = await servedModel(base, { fallback, f: authF });
 const spawnQwen = (readOnly) => spawnSafe(bin, ['--acp', '--auth-type', 'openai', '--openai-base-url', base, '--openai-api-key', proxy ? proxy.secret : 'none', '--model', model],
   { stdio: ['pipe', 'pipe', 'inherit'], env: scrubKeyEnv(qwenEnv(process.env, readOnly)) });
-const { done } = modeProxy({ spawnAgent: spawnQwen, initialReadOnly: legacyReadOnly });
+const mcp = grantFromEnv(process.env); // HUB_MCP = server NAMES only (set by `route --mcp`), resolved against the hub's own allowlist
+if (mcp.refused) { process.stderr.write('office-agent: ' + mcp.refused + String.fromCharCode(10)); proxy?.close(); process.exit(2); }
+const { done } = modeProxy({ spawnAgent: spawnQwen, initialReadOnly: legacyReadOnly, mcp, toolLog: join(runDir(), `toolcalls-qwen-${process.pid}.jsonl`) });
 done.then((c) => { proxy?.close(); process.exitCode = c; }); // no process.exit: exiting with the proxy server mid-close trips a libuv assertion on Windows
 }
