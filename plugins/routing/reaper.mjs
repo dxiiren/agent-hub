@@ -21,12 +21,15 @@ export const DIRECT_MAX_S = Number(process.env.AGENT_HUB_DIRECT_MAX_S) || 3 * 36
 export const REAP_AFTER_S = 20 * 60, REAP_EVERY_MS = 5 * 60_000;
 
 /** async paseo(args) -> parsed JSON or {error}. */
+/** The paseo CLI prints a JSON error to STDERR and exits non-zero: read it from there, else every "not found" looked like a failure and no cleanup job ever completed (HUBFIX3). */
+export function parseCliResult(e, out, err) {
+  const text = String(out ?? "").search(/[[{]/) >= 0 ? String(out) : String(err ?? "");
+  try { return flattenError(JSON.parse(text.slice(text.search(/[[{]/)))); } catch { return { error: String(err || e?.message || out || "no output").slice(0, 300) }; }
+}
 export function asyncPaseo(home, env = process.env, timeout = 300_000) {
   const [cmd, ...pre] = paseoCommand(env);
   return (args) => new Promise((res) => {
-    execFile(cmd, [...pre, ...cliArgs(args, home, true)], { env, timeout, killSignal: "SIGKILL", windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e, out) => {
-      try { res(flattenError(JSON.parse(String(out).slice(String(out).search(/[[{]/))))); } catch { res({ error: String(e?.message ?? out ?? "no output").slice(0, 300) }); }
-    });
+    execFile(cmd, [...pre, ...cliArgs(args, home, true)], { env, timeout, killSignal: "SIGKILL", windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e, out, err) => res(parseCliResult(e, out, err)));
   });
 }
 
