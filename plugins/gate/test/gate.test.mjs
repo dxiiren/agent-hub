@@ -387,3 +387,12 @@ test("the gate command runs with PYTHONDONTWRITEBYTECODE=1: a python test run le
   const d = repo(); writeFileSync(join(d, "m.py"), "X = 1"); writeFileSync(join(d, "t.py"), "import m");
   const r = runGate(d, { cmd: "python t.py", base: undefined }); assert.ok(!existsSync(join(d, "__pycache__")), r.reasons.join());
 });
+
+test("no pyc exemption: a file under a __pycache__ folder, a __pycache__y lookalike and a stray .pyc outside the allowed paths all FAIL the allow-list (HUBFIX3)", () => {
+  const d = mkdtempSync(join(tmpdir(), "pyc2-")); const g = (...a) => execFileSync("git", a, { cwd: d });
+  g("init", "-q"); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i");
+  mkdirSync(join(d, "src")); mkdirSync(join(d, "x", "__pycache__y"), { recursive: true }); mkdirSync(join(d, "__pycache__"));
+  writeFileSync(join(d, "src", "ok.py"), "a=1\n"); writeFileSync(join(d, "__pycache__", "m.txt"), "hi"); writeFileSync(join(d, "x", "__pycache__y", "tool.py"), "b=2\n"); writeFileSync(join(d, "anything.pyc"), "hi");
+  const r = runGate(d, { cmd: OK, allow: "^src/" }).reasons.join();
+  for (const p of ["__pycache__/m.txt", "x/__pycache__y/tool.py", "anything.pyc"]) assert.ok(r.includes(p) && r.startsWith("path not allowed:"), p + " :: " + r);
+});

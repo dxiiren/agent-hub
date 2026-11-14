@@ -172,7 +172,6 @@ export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = 
   return out;
 }
 
-const isPyc = (f) => f.includes("__pycache__") || f.endsWith(".pyc"); // exempt only from the allow-list; forbid applies to every path
 /** HUBFIX3 rev 3: the scan skips NOTHING (two exemptions, a content sniff and a git-ignore check, were withdrawn: an agent could steer both).
  * The qwenbench 08 false positive is fixed at its cause: the gate command runs with PYTHONDONTWRITEBYTECODE=1 so python never writes a __pycache__. */
 export const GATE_ENV = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
@@ -282,7 +281,7 @@ export function runGate(cwd, opts = {}) {
     const nul = String.fromCharCode(0);
     const names = (extra) => git(cwd, ["diff", "--no-ext-diff", "--no-textconv", ...extra, "--name-only", "-z", ref]).split(nul).filter(Boolean);
     raw = names([]);
-    files = raw.filter((f) => !isPyc(f));
+    files = raw;
     // second view: git status must not list a path the diff does not (a path git cannot handle, e.g. too long, would otherwise PASS with files:0)
     const seen = new Set(raw);
     for (const p of statusPaths(cwd)) if (!seen.has(p) && !p.endsWith("/")) reasons.push("scan incomplete: git status lists " + p + " but git diff does not (git views disagree)");
