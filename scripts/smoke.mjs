@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { paseoCommand } from "../plugins/routing/route.mjs";
 
 const route = join(dirname(fileURLToPath(import.meta.url)), "..", "plugins", "routing", "route.mjs");
 const sid = process.argv.includes("--session") ? process.argv[process.argv.indexOf("--session") + 1] : `smoke-${process.pid}`;
@@ -32,11 +33,13 @@ step("gated edit", "code-edit-easy", "In m.py add a function is_even(n) returnin
 
 // cleanup: our folder, and any agent or workspace still pointing at it
 const t0 = Date.now();
-const paseo = (a) => { const r = spawnSync("paseo", [...a, "--json"], { encoding: "utf8", timeout: 60000, shell: process.platform === "win32" }); try { return JSON.parse(r.stdout); } catch { return []; } };
+const [pcmd, ...ppre] = paseoCommand(process.env); // the hub's own launcher: no shell
+const run = (a, t = 60000) => spawnSync(pcmd, [...ppre, ...a], { encoding: "utf8", timeout: t, windowsHide: true });
+const paseo = (a) => { try { return JSON.parse(run([...a, "--json"]).stdout); } catch { return []; } };
 const norm = (p) => String(p).split("\\").join("/").toLowerCase();
-for (const w of paseo(["workspace", "ls"])) if (norm(w.cwd).startsWith(norm(dir))) spawnSync("paseo", ["workspace", "archive", w.workspaceId], { timeout: 60000, shell: process.platform === "win32" });
+for (const w of paseo(["workspace", "ls"])) if (norm(w.cwd).startsWith(norm(dir))) run(["workspace", "archive", w.workspaceId]);
 const left = paseo(["ls", "-a", "-g"]).filter((a) => norm(a.cwd ?? "").includes(norm(dir).split("/").pop()) && /running|idle/i.test(String(a.status)));
-for (const a of left) spawnSync("paseo", ["stop", a.id], { timeout: 60000, shell: process.platform === "win32" });
+for (const a of left) run(["stop", a.id]);
 rmSync(dir, { recursive: true, force: true });
 console.log(`${left.length ? "WARN" : "PASS"}  cleanup                ${String(Math.round((Date.now() - t0) / 1000)).padStart(4)} s  ${left.length ? left.length + " agent(s) of this smoke were still alive and were stopped" : "folder, workspace and agents removed"}`);
 const total = results.reduce((s, r) => s + r.secs, 0);
