@@ -826,9 +826,9 @@ export function checkFileInputs(files, { roots = [process.cwd()], env = process.
 }
 
 /** HUBFIX3 (qwenbench 3b: 0 of 3 read-only routes on a 372 KB input, the agent kept reaching for a shell command and every shell command is refused). A read-only route with --file gets the already-checked
- * files (sensitive-name, secret scan and size checks of checkFileInputs ran first) INLINED into the prompt up to a cap, so the agent needs no search command at all; past the cap it is told to use its read tools and that shell is refused.
+ * files (sensitive-name, secret scan and size checks of checkFileInputs ran first) INLINED into the prompt up to a small cap (the prompt is a command-line argument), so a small input needs no search command at all; past the cap it is told to use its read tools and that shell is refused.
  * No shell-command judging was added: removing the need beat adding a validator. */
-export const INLINE_CAP = 600_000;
+export const INLINE_CAP = 12_000; // the prompt travels as a command-line argument (Windows limit 32 KB, shim 8 KB): bigger inputs stay files that the agent reads with its own tools
 export function inlineFiles(prompt, files, cap = INLINE_CAP, read = (f) => readFileSync(f, "utf8")) {
   let used = 0; const parts = [], left = [];
   for (const f of files) { const t = read(f.path); if (used + t.length <= cap) { used += t.length; parts.push(`=== FILE ${f.name} ===

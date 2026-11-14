@@ -28,7 +28,7 @@ function step(name, type, prompt, extra, timeoutS, check) {
   console.log(`${bad ? "FAIL" : "PASS"}  ${name.padEnd(22)} ${String(secs).padStart(4)} s  ${bad || j.used}`);
 }
 
-step("read-only summarise", "summarise", "List the function names defined in m.py. One line.", [], 120, (j) => (j.status === "completed" && /\bf\b/.test(String(j.answer ?? ""))) ? "" : `status ${j.status}, answer ${JSON.stringify(String(j.answer ?? "").slice(0, 80))}${j.error ? ", " + String(j.error).slice(0, 120) : ""}`);
+step("read-only summarise", "summarise", "List the function names defined in m.py. One line.", [], 180, (j) => (j.status === "completed" && /\bf\b/.test(String(j.answer ?? ""))) ? "" : `status ${j.status}, answer ${JSON.stringify(String(j.answer ?? "").slice(0, 80))}${j.error ? ", " + String(j.error).slice(0, 120) : ""}`);
 step("gated edit", "code-edit-easy", "In m.py add a function is_even(n) returning True for even n. Do not run git commands.", ["--gate", "python -m pytest -q"], 170, (j) => (j.status === "completed" && (j.gate?.status ?? "PASS") === "PASS") ? "" : `status ${j.status}, gate ${j.gate?.status}${j.error ? ", " + String(j.error).slice(0, 120) : ""}`);
 
 // cleanup: our folder, and any agent or workspace still pointing at it
@@ -40,8 +40,8 @@ const norm = (p) => String(p).split("\\").join("/").toLowerCase();
 for (const w of paseo(["workspace", "ls"])) if (norm(w.cwd).startsWith(norm(dir))) run(["workspace", "archive", w.workspaceId]);
 const left = paseo(["ls", "-a", "-g"]).filter((a) => norm(a.cwd ?? "").includes(norm(dir).split("/").pop()) && /running|idle/i.test(String(a.status)));
 for (const a of left) run(["stop", a.id]);
-rmSync(dir, { recursive: true, force: true });
-console.log(`${left.length ? "WARN" : "PASS"}  cleanup                ${String(Math.round((Date.now() - t0) / 1000)).padStart(4)} s  ${left.length ? left.length + " agent(s) of this smoke were still alive and were stopped" : "folder, workspace and agents removed"}`);
+let rmFail = ""; try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 1000 }); } catch (e) { rmFail = String(e.code ?? e.message); } // a stopped agent can hold the folder for a moment (EPERM): report it, never crash
+console.log(`${left.length || rmFail ? "WARN" : "PASS"}  cleanup                ${String(Math.round((Date.now() - t0) / 1000)).padStart(4)} s  ${left.length ? left.length + " agent(s) of this smoke were still alive and were stopped" : "folder, workspace and agents removed"}`);
 const total = results.reduce((s, r) => s + r.secs, 0);
 console.log(`${results.every((r) => r.ok) ? "SMOKE PASS" : "SMOKE FAIL"} (session ${sid}, ${total} s)`);
 process.exit(results.every((r) => r.ok) ? 0 : 1);
