@@ -857,15 +857,15 @@ export function checkFileInputs(files, { roots = [process.cwd()], env = process.
  * No shell-command judging was added: removing the need beat adding a validator. */
 export const INLINE_CAP = 12_000; // the prompt travels as a command-line argument (Windows limit 32 KB, shim 8 KB): bigger inputs stay files that the agent reads with its own tools
 export function inlineFiles(prompt, files, cap = INLINE_CAP, read = (f) => readFileSync(f, "utf8")) {
-  let used = 0; const parts = [], left = [];
-  for (const f of files) { const t = read(f.path); if (used + t.length <= cap) { used += t.length; parts.push(`=== FILE ${f.name} ===
+  // HUBREAD: past the cap the old code said "read it with your own tool" and the route ended "completed" with that preamble as the answer (0 of 5 correct on a 195 KB file). Now it refuses with the real numbers.
+  const texts = files.map((f) => ({ f, t: read(f.path) })); const total = texts.reduce((n, x) => n + Buffer.byteLength(x.t), 0);
+  if (total > cap) throw new Error(`input too large for this lane: ${total} bytes, limit ${cap} bytes (--file inputs are inlined into the prompt, which travels as a command-line argument; the 2 MB check only guards the file itself). Cut the file down (grep/head/split) and route the pieces.`);
+  const parts = texts.map(({ f, t }) => `=== FILE ${f.name} ===
 ${t}
-=== END ${f.name} ===`); } else left.push(f.name); }
-  const note = left.length ? `
-Not inlined (over the size cap): ${left.join(", ")}: read them with your own read tool; shell commands are refused on this task.` : "";
-  return parts.length || left.length ? `${prompt}
+=== END ${f.name} ===`);
+  return parts.length ? `${prompt}
 
-The input file contents follow, inlined by the hub. Answer from them; shell commands are refused here.${note}
+The input file contents follow, inlined by the hub. Answer from them; shell commands are refused here.
 
 ${parts.join(String.fromCharCode(10).repeat(2))}` : prompt;
 }
@@ -935,7 +935,7 @@ function main(argv) {
     const chk = checkFileInputs(files, { roots: [process.cwd(), ...(loadRoutes().readAllow ?? [])] });
     if (chk.error) { console.error("route: " + chk.error); try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return 2; }
     for (const [i, c] of chk.ok.entries()) { mkdirSync(join(dir, String(i))); copyFileSync(c.real, join(dir, String(i), c.name)); } // original basename kept
-    prompt = inlineFiles(prompt, chk.ok.map((c, i) => ({ name: c.name, path: join(dir, String(i), c.name) })));
+    try { prompt = inlineFiles(prompt, chk.ok.map((c, i) => ({ name: c.name, path: join(dir, String(i), c.name) }))); } catch (e) { console.error("route: " + e.message); try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return 2; }
     process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } });
     cwd = dir.split(String.fromCharCode(92)).join("/");
   }

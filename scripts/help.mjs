@@ -23,6 +23,7 @@ types: code-edit, code-edit-easy, test-scaffold (edit files; use --new-workspace
        summarise, review (read-only; need a provider added with --routes summarise|review)
 --max-lines N: allow a diff of up to N lines for this call (default 400; split the task instead when you can).
 --file PATH: read-only types only; copies each file into a private folder used as the task's cwd, so inputs may live anywhere (no --cwd then).
+         The contents are inlined into the prompt: the total must be at most 12000 bytes (INLINE_CAP; the prompt is a command-line argument), else the call is refused with "input too large for this lane: N bytes, limit M". The 2 MB check only guards the file itself.
          Without it, summarise/review refuse files outside --cwd and fail if anything in --cwd changes during the call: pass a snapshot dir.
 an edit task whose gate sees no changed file fails ("no diff produced"); read-only tasks are not diff-gated (gate status N/A).
 output: one JSON line {used, agentId, status, gate, trace, answer}; exit 0 = completed,

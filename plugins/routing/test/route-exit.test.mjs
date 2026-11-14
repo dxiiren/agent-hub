@@ -19,12 +19,11 @@ test("completed with an empty answer is not success; a real answer is 0; parked 
 });
 
 import { inlineFiles } from "../route.mjs";
-test("read-only --file inputs are inlined into the prompt (no shell needed); over the cap the rest is named and shell is said to be refused (HUBFIX3)", () => {
+test("read-only --file inputs are inlined into the prompt (no shell needed); over the cap the call fails with the real numbers, never a preamble-only answer (HUBREAD)", () => {
   const read = (p) => ({ a: "alpha line\nneedle 42\n", b: "x".repeat(50) }[p]);
   const p = inlineFiles("Where is the needle?", [{ name: "a.txt", path: "a" }], 1000, read);
   assert.match(p, /=== FILE a\.txt ===\nalpha line\nneedle 42/); assert.match(p, /shell commands are refused/);
-  const q = inlineFiles("q", [{ name: "a.txt", path: "a" }, { name: "b.txt", path: "b" }], 30, read);
-  assert.match(q, /Not inlined \(over the size cap\): b\.txt/); assert.ok(!q.includes("xxxx"));
+  assert.throws(() => inlineFiles("q", [{ name: "a.txt", path: "a" }, { name: "b.txt", path: "b" }], 30, read), /input too large for this lane: 71 bytes, limit 30 bytes/);
   assert.equal(inlineFiles("plain", [], 10, read), "plain");
 });
 
