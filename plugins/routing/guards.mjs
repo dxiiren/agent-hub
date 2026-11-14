@@ -210,7 +210,8 @@ export async function drainSpool({ runDir, run, archiveAgent, concurrency = 2 })
 }
 
 // ---- 3. stuck-route watchdog
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; } };
+// EPERM = the pid was reused by another account's process (14-11: a dead route's pid became an svchost and held HUB-HEALTH at FAIL); our routes always run as us.
+export const alive = (pid, kill = process.kill) => { try { kill(pid, 0); return true; } catch { return false; } };
 /**
  * A slot whose route is alive but whose agents made no progress for `stuckS` (agent UpdatedAt) - or that has no agent at all and is older than `stuckS` - is released: slot file removed, the route's own agents
  * (from its ledger agents-<pid>.json, i.e. hub-created only) archived by id, and the route process ended by its exact pid. Never touches an agent that is not in a route ledger.
