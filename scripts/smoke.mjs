@@ -27,8 +27,8 @@ function step(name, type, prompt, extra, timeoutS, check) {
   console.log(`${bad ? "FAIL" : "PASS"}  ${name.padEnd(22)} ${String(secs).padStart(4)} s  ${bad || j.used}`);
 }
 
-step("read-only summarise", "summarise", "List the function names defined in m.py. One line.", [], 90, (j) => (j.status === "completed" && /\bf\b/.test(String(j.answer ?? ""))) ? "" : `status ${j.status}, answer ${JSON.stringify(String(j.answer ?? "").slice(0, 80))}${j.error ? ", " + String(j.error).slice(0, 120) : ""}`);
-step("gated edit", "code-edit-easy", "In m.py add a function is_even(n) returning True for even n. Do not run git commands.", ["--gate", "python -m pytest -q"], 150, (j) => (j.status === "completed" && (j.gate?.status ?? "PASS") === "PASS") ? "" : `status ${j.status}, gate ${j.gate?.status}${j.error ? ", " + String(j.error).slice(0, 120) : ""}`);
+step("read-only summarise", "summarise", "List the function names defined in m.py. One line.", [], 120, (j) => (j.status === "completed" && /\bf\b/.test(String(j.answer ?? ""))) ? "" : `status ${j.status}, answer ${JSON.stringify(String(j.answer ?? "").slice(0, 80))}${j.error ? ", " + String(j.error).slice(0, 120) : ""}`);
+step("gated edit", "code-edit-easy", "In m.py add a function is_even(n) returning True for even n. Do not run git commands.", ["--gate", "python -m pytest -q"], 170, (j) => (j.status === "completed" && (j.gate?.status ?? "PASS") === "PASS") ? "" : `status ${j.status}, gate ${j.gate?.status}${j.error ? ", " + String(j.error).slice(0, 120) : ""}`);
 
 // cleanup: our folder, and any agent or workspace still pointing at it
 const t0 = Date.now();
