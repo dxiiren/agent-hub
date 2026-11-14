@@ -8,12 +8,12 @@ import { existsSync, lstatSync, realpathSync, readFileSync, readdirSync, rmdirSy
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath as toPath } from "node:url";
 import os from "node:os";
-import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
+import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit, flattenError } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
 import { sweepDead } from "./entry-gate.mjs";
 import { spawnSyncSafe } from "./spawn-safe.mjs";
-import { PERMANENT, healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline, archivePermanentDuplicates, reprobeErrorProviders } from "./guards.mjs";
+import { PERMANENT, healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, spoolStats, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline, archivePermanentDuplicates, reprobeErrorProviders } from "./guards.mjs";
 
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
 export const RUN_MARGIN_S = Number(process.env.AGENT_HUB_REAP_MARGIN_S) || 5 * 60; // the env override is for the throwaway-hub proof
@@ -25,7 +25,7 @@ export function asyncPaseo(home, env = process.env, timeout = 300_000) {
   const [cmd, ...pre] = paseoCommand(env);
   return (args) => new Promise((res) => {
     execFile(cmd, [...pre, ...cliArgs(args, home, true)], { env, timeout, killSignal: "SIGKILL", windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e, out) => {
-      try { res(JSON.parse(String(out).slice(String(out).search(/[[{]/)))); } catch { res({ error: String(e?.message ?? out ?? "no output").slice(0, 300) }); }
+      try { res(flattenError(JSON.parse(String(out).slice(String(out).search(/[[{]/))))); } catch { res({ error: String(e?.message ?? out ?? "no output").slice(0, 300) }); }
     });
   });
 }
@@ -43,6 +43,9 @@ export async function archiveAgent(run, id) {
   if (r?.error && !/not found|archived/i.test(String(r.error))) r = await run(["archive", id, "--force"]);
   return !r?.error || /not found|archived/i.test(String(r.error));
 }
+
+/** Stop (not archive) an agent: frees its provider process and RAM at once; archive is the slow daemon call. */
+export async function stopAgent(run, id) { const r = await run(["stop", id]); return !r?.error || /not found|archived|not running|already/i.test(String(r.error)); }
 
 const pidDead = (pid) => { try { process.kill(pid, 0); return false; } catch (e) { return e?.code === "ESRCH"; } };
 
@@ -192,7 +195,7 @@ export async function reapOnce({ run, env = process.env, home = env.PASEO_HOME, 
   let ghosts = { archived: [] }; if (opts.ghosts !== false) { try { ghosts = await reapGhostWorkspaces({ run, home, dry: opts.dry }); } catch { /* next pass */ } }
   let folders = { removed: [] }; if (opts.ghosts !== false) { try { folders = await reapWorktreeFolders({ run, home, dry: opts.dry }); } catch { /* next pass */ } }
   let spooled = [], stuck = []; // guards.mjs: off-slot cleanup of finished routes, and slots held by routes whose agents went silent
-  if (!opts.dry) { try { spooled = await drainSpool({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } try { stuck = await reapStuckRoutes({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } }
+  if (!opts.dry) { try { spooled = await drainSpool({ runDir: runDir(), run, archiveAgent, stopAgent }); } catch { /* next pass */ } try { stuck = await reapStuckRoutes({ runDir: runDir(), run, archiveAgent }); } catch { /* next pass */ } }
   let dupes = []; if (!opts.dry && opts.dupes !== false) { try { dupes = (await archivePermanentDuplicates({ run, home })).archived; } catch { /* next pass */ } } // duplicate records of a permanent folder (the folder is never touched)
   return { dead, ...fin, ghosts: ghosts.archived, folders: folders.removed, dupes, ...(ghosts.failed ? { ghostsFailed: ghosts.failed } : {}), spooled, stuck };
 }
@@ -229,7 +232,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     try { for (const d of readdirSync(rd)) if (d.startsWith("session-")) sweepDead(join(rd, d, "inflight")); } catch { /* none */ }
     const r = await reapDeadRoutes({ run, dry: false }); console.log(JSON.stringify({ watched: pid, reaped: r })); process.exit(0);
   }
-  if (a.includes("--spool")) { const done = await drainSpool({ runDir: runDir(), run, archiveAgent }); console.log(JSON.stringify({ spooled: done })); process.exit(0); } // detached worker started by a finished route
+  if (a.includes("--spool")) { // HUBFIX3: keep draining until the spool is empty (a failed job used to wait for the NEXT finished route); at most 10 min, 15 s apart
+    const all = []; const t0 = Date.now(); for (;;) { all.push(...await drainSpool({ runDir: runDir(), run, archiveAgent, stopAgent })); if (!spoolStats(runDir()).count || Date.now() - t0 > 600_000) break; await new Promise((r) => setTimeout(r, 15_000)); }
+    console.log(JSON.stringify({ spooled: all, left: spoolStats(runDir()).count })); process.exit(0); } // detached worker started by a finished route
   if (a.includes("--prune-offline")) { // daemon STOPPED: drop archived records (backup first) so boot-time git reconciliation has nothing to scan
     const home = opt("--home") ?? process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"); const port = process.env.AGENT_HUB_PORT ?? "6767"; const up = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(3000) }).then(() => true, () => false);
     if (up) { console.log(JSON.stringify({ refused: "daemon answers on port " + port + ": prune only while it is stopped" })); process.exit(0); }

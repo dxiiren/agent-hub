@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reprobeErrorProviders, archivePermanentDuplicates, archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, projectsLine, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { reprobeErrorProviders, archivePermanentDuplicates, archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, projectsLine, spoolStats, spoolLine, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 process.env.AGENT_HUB_PERMANENT_WS = "/desktop/code/keep-me"; // the permanent-folder list is configuration, never tracked code
 import { runRoute as runRouteReal } from "../route.mjs";
 const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test and needs gitleaks on PATH; a route test must not depend on the machine
@@ -349,4 +349,26 @@ test("projectsLine warns above the threshold or when a project folder is gone, a
   assert.equal(projectsLine(ps(10), { exists: () => true }).warn, false);
   const big = projectsLine(ps(101), { exists: () => true }); assert.equal(big.warn, true); assert.match(big.line, /101.*above 100/);
   const gone = projectsLine(ps(5), { exists: (p) => p !== "/x/3" }); assert.equal(gone.warn, true); assert.match(gone.line, /1 with no folder/);
+});
+
+test("drainSpool stops every spooled agent BEFORE the slow archive, and spoolStats/spoolLine flag stale jobs (HUBFIX3)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "spool-h3-"));
+  spoolCleanup(dir, { agentId: "A1", workspaceId: null, wt: null }); spoolCleanup(dir, { agentId: "A2", workspaceId: null, wt: null });
+  const st = spoolStats(dir); assert.equal(st.count, 2); assert.equal(st.stale, 0); assert.equal(spoolLine(st).level, "ok");
+  const old = spoolStats(dir, Date.now() + 400_000); assert.equal(old.stale, 2); assert.equal(spoolLine(old).level, "warn");
+  assert.equal(spoolLine({ count: 25, stale: 0, oldestS: 1 }).level, "fail");
+  const order = [];
+  const done = await drainSpool({ runDir: dir, run: async () => ({}), stopAgent: async (_r, id) => { order.push("stop:" + id); }, archiveAgent: async (_r, id) => { order.push("arch:" + id); return true; } });
+  assert.equal(done.length, 2); assert.equal(spoolStats(dir).count, 0);
+  assert.ok(order.slice(0, 2).every((x) => x.startsWith("stop:")) && order.slice(2).every((x) => x.startsWith("arch:")), order.join(","));
+});
+
+test("gitQueueFromLog/gitQueueLine and leakedIdleAgents read the daemon log and agent list (HUBFIX3)", async () => {
+  const { gitQueueFromLog, gitQueueLine, leakedIdleAgents } = await import("../guards.mjs"); const { ageSeconds } = await import("../cleanup.mjs");
+  const log = '{"msg":"x"}\n{"msg":"ws_runtime_metrics","git":{"commands":{"pending":3,"peakPending":40,"queueWaitMs":{"p50Ms":7200}}}}\n{"msg":"ws_runtime_metrics","git":{"commands":{"pending":1,"peakPending":40,"queueWaitMs":{"p50Ms":900}}}}\n';
+  const q = gitQueueFromLog(log); assert.deepEqual(q, { pending: 1, peak: 40, p50Ms: 900 }); assert.equal(gitQueueLine(q).level, "ok");
+  assert.equal(gitQueueLine({ pending: 9, peak: 9, p50Ms: 7200 }).level, "warn"); assert.equal(gitQueueLine({ pending: 9, peak: 9, p50Ms: 40000 }).level, "fail"); assert.equal(gitQueueFromLog("nothing"), null);
+  assert.equal(ageSeconds("4 minutes ago"), 240);
+  const ids = leakedIdleAgents([{ id: "a", status: "idle", created: "9 minutes ago" }, { id: "b", status: "idle", created: "1 minutes ago" }, { id: "c", status: "running", created: "2 hours ago" }, { id: "d", status: "idle", created: "3 hours ago" }], { parked: (id) => id === "d" }).map((x) => x.id);
+  assert.deepEqual(ids, ["a"]);
 });

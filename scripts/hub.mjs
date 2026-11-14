@@ -14,7 +14,7 @@ import { writeJsonKeepEol, readJsonStrict } from '../plugins/routing/jsonfile.mj
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, openSync, readSync, closeSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -219,6 +219,17 @@ async function doctor(deep) {
     const h = healthLine({ inflight: slotsHeld(runDir()), max: maxInFlight(loadRoutes()), done30m: doneInWindow(join(paseoHome(), 'usage', 'usage.jsonl')), workspaces: wsn, creating: stuckCreating(runDir()) });
     row(h.ok, h.line);
   } catch (e) { row(false, 'HUB-HEALTH', `could not be computed: ${String(e.message).slice(0, 120)}`); }
+  try { // HUBFIX3: what any session must see at once: stale cleanup jobs, idle agents of finished routes, git queue wait
+    const g = await import('../plugins/routing/guards.mjs'); const { runDir, paseoHome } = await import('../plugins/routing/runstate.mjs');
+    const sl = g.spoolLine(g.spoolStats(runDir())); if (sl.level === 'ok') ok(sl.line); else if (sl.level === 'fail') row(false, 'cleanup spool', sl.line); else console.log('WARN  ' + sl.line);
+    let agents = []; try { agents = JSON.parse(paseo(['ls', '-a', '-g', '--json']).stdout || '[]'); } catch { /* unreadable: none */ }
+    const idle = g.leakedIdleAgents(agents); let mb = 0;
+    if (idle.length) { try { const o = spawnSync('powershell', ['-NoProfile', '-Command', "(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'qodercli' } | Measure-Object WorkingSetSize -Sum).Sum"], { encoding: 'utf8', timeout: 15000 }); mb = Math.round(Number(String(o.stdout).trim() || 0) / 1048576); } catch { /* MB unknown */ } }
+    const il = `idle agents of finished routes: ${idle.length}${idle.length ? ` (Qoder processes hold ${mb} MB; may include an agent you left idle on purpose)` : ''}`;
+    if (idle.length > 3) console.log('WARN  ' + il + '; they are archived by the spool drain, or run: node plugins/routing/reaper.mjs --once'); else ok(il);
+    let txt = ''; try { const f = join(paseoHome(), 'daemon.log'); const sz = statSync(f).size; const fd = openSync(f, 'r'); const buf = Buffer.alloc(Math.min(sz, 400000)); readSync(fd, buf, 0, buf.length, Math.max(0, sz - buf.length)); closeSync(fd); txt = buf.toString('utf8'); } catch { /* no log */ }
+    const gq = g.gitQueueLine(g.gitQueueFromLog(txt)); if (gq.level === 'ok') ok(gq.line); else if (gq.level === 'fail') row(false, 'daemon git queue', gq.line); else console.log('WARN  ' + gq.line);
+  } catch (e) { console.log(`WARN  hub leak checks not read: ${String(e.message).slice(0, 100)}`); }
   try { // HUBFIX3: the number of registered projects is what keeps the daemon's git queue long
     const { projectsLine } = await import('../plugins/routing/guards.mjs');
     const pl = projectsLine(JSON.parse(paseo(['project', 'ls', '--json']).stdout || '[]'), { max: Number(process.env.AGENT_HUB_PROJECT_WARN) || undefined, exists: existsSync });

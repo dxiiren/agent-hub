@@ -1035,3 +1035,22 @@ test("r5: a non-local resource wait is bounded (resourceWait) and then the next 
   const r = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", limitsDir: mkdtempSync(join(tmpdir(), "lim-")), freeMem: () => 0.1, laptop: () => ({ freeGb: 0.1, cpuPct: 1 }), sleep: (ms) => { slept += ms; }, providerState: new Map([["claude-clean", true], ["qwen", true]]) }, mkPaseo(runs), { resourceWait: "10s", slots: { "claude-clean": 2, qwen: 1 }, readOnlyEnforced: ALL, readOnlyModes: { "claude-clean": "plan", qwen: "read-only" }, routes: { review: ["claude-clean", "qwen"] } });
   assert.ok(slept <= 10_000, "slept " + slept); assert.equal(r.used, null); assert.equal(runs.length, 0);
 });
+
+test("a provider pin may carry @ (qoder/DeepSeek-Flash@latest) and still refuses shell characters (HUBFIX3)", async () => {
+  const { runRoute } = await import("../route.mjs");
+  const bad = runRoute({ type: "review", prompt: "p", cwd: privDir(), session: "s", provider: "qoder/x;rm" }, () => ({}), { routes: { review: ["qwen-code"] } });
+  assert.match(String(bad.error ?? bad.trace?.[0]?.error ?? ""), /invalid provider/);
+});
+
+test("flattenError turns the CLI's {error:{code,message}} into one string so not-found/archived checks match (HUBFIX3)", async () => {
+  const { flattenError } = await import("../route.mjs");
+  const j = flattenError({ error: { code: "AGENT_NOT_FOUND", message: "Agent not found: x" } });
+  assert.equal(j.error, "AGENT_NOT_FOUND: Agent not found: x"); assert.match(j.error, /not found|archived/i);
+  assert.deepEqual(flattenError([1]), [1]); assert.deepEqual(flattenError({ id: 1 }), { id: 1 }); assert.equal(flattenError({ error: "plain" }).error, "plain");
+});
+
+test("a daemon that is down is a transient error with a retry line (HUBFIX3)", async () => {
+  const { flattenError, transient } = await import("../route.mjs");
+  const j = flattenError({ error: { code: "DAEMON_NOT_RUNNING", message: "Cannot connect to daemon" } });
+  assert.equal(transient(j), true); assert.match(j.error, /retry the route in 1 min/);
+});

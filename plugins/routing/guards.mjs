@@ -193,9 +193,12 @@ export function spoolCleanup(runDir, job) {
   writeFileSync(f, JSON.stringify({ ...job, at: Date.now() })); return f;
 }
 /** Archive what the spooled jobs name (agent, then its worktree + workspace). A failed job stays for the next pass. -> ids done. */
-export async function drainSpool({ runDir, run, archiveAgent, concurrency = 2 }) {
+export async function drainSpool({ runDir, run, archiveAgent, concurrency = 2, stopAgent = null, stopConcurrency = 4 }) {
   const d = spoolDir(runDir); let files = []; try { files = readdirSync(d).filter((f) => f.endsWith(".json")); } catch { return []; }
   const done = []; let i = 0;
+  // HUBFIX3 phase 1: STOP every spooled agent first (fast, frees its provider process and RAM at once); the slow daemon archive (40-55 s each) follows in phase 2
+  if (stopAgent) { let k = 0; const ids = []; for (const f of files) { try { const j = JSON.parse(readFileSync(join(d, f), "utf8")); if (j.agentId) ids.push(j.agentId); } catch { /* bad job: phase 2 drops it */ } }
+    await Promise.all(Array.from({ length: Math.min(stopConcurrency, ids.length) }, async () => { while (k < ids.length) { try { await stopAgent(run, ids[k++]); } catch { /* the archive below retries */ } } })); }
   await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, async () => {
     while (i < files.length) {
       const f = join(d, files[i++]); let job; try { job = JSON.parse(readFileSync(f, "utf8")); } catch { rmSync(f, { force: true }); continue; }
@@ -299,4 +302,26 @@ export function projectsLine(projects, { max = PROJECT_WARN, exists = (p) => tru
   const n = projects.length, gone = projects.filter((p) => p?.path && !exists(p.path)).length;
   const warn = n > max || gone > 0;
   return { warn, line: `registered Paseo projects: ${n} (${gone} with no folder on disk)${warn ? `: above ${max} or dangling projects slow every daemon git call; list them with \`paseo project ls\` and remove dead ones with \`paseo project delete <id>\` (restore: \`paseo project create <path>\`)` : ""}` };
+}
+
+/** Pending cleanup jobs: how many and how old the oldest is (HUBFIX3: doctor shows it; a job older than STALE_SPOOL_S means no drain ran). */
+export const STALE_SPOOL_S = 300;
+export function spoolStats(runDir, now = Date.now()) {
+  const d = spoolDir(runDir); let files = []; try { files = readdirSync(d).filter((f) => f.endsWith(".json")); } catch { return { count: 0, oldestS: 0, stale: 0 }; }
+  let oldest = 0, stale = 0;
+  for (const f of files) { let at = now; try { at = JSON.parse(readFileSync(join(d, f), "utf8")).at ?? statSync(join(d, f)).mtimeMs; } catch { try { at = statSync(join(d, f)).mtimeMs; } catch { /* gone */ } } const age = Math.round((now - at) / 1000); oldest = Math.max(oldest, age); if (age > STALE_SPOOL_S) stale++; }
+  return { count: files.length, oldestS: oldest, stale };
+}
+/** One line for doctor: WARN when any job is stale, FAIL at 20 or more pending. */
+export function spoolLine(st) { const level = st.count >= 20 ? "fail" : st.stale > 0 ? "warn" : "ok"; return { level, line: `cleanup spool: ${st.count} pending, ${st.stale} older than ${STALE_SPOOL_S} s (oldest ${st.oldestS} s)${level === "ok" ? "" : "; drain now: node plugins/routing/reaper.mjs --spool"}` }; }
+
+/** Last git-queue numbers from the daemon log text (ws_runtime_metrics): { pending, peak, p50Ms } or null. WARN at 5 s median wait, FAIL at 30 s. */
+export function gitQueueFromLog(text) {
+  let last = null; for (const l of String(text).split("\n")) { if (!l.includes("ws_runtime_metrics")) continue; try { const d = JSON.parse(l); if (d.msg === "ws_runtime_metrics" && d.git) last = d.git; } catch { /* partial line */ } }
+  if (!last) return null; const c = last.commands ?? last; return { pending: c.pending ?? 0, peak: c.peakPending ?? 0, p50Ms: c.queueWaitMs?.p50Ms ?? 0 };
+}
+export const gitQueueLine = (q) => q ? { level: q.p50Ms >= 30000 ? "fail" : q.p50Ms >= 5000 ? "warn" : "ok", line: `daemon git queue: ${q.pending} pending now (peak ${q.peak}), median wait ${Math.round(q.p50Ms / 100) / 10} s` } : { level: "ok", line: "daemon git queue: no metrics in the log yet" };
+/** Idle agents older than graceS that nobody parked: a finished route's agent still holds its provider process (Qoder 500-900 MB). `paseo ls` gives no labels, so this can include an interactive agent of yours: doctor words it as a WARN, never kills. */
+export function leakedIdleAgents(agents, { graceS = 300, parked = () => false } = {}) {
+  return (Array.isArray(agents) ? agents : []).filter((a) => String(a.status).toLowerCase() === "idle" && ageSeconds(a.created) > graceS && !parked(a.id));
 }

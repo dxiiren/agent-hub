@@ -80,12 +80,14 @@ export function cliPaseo(home, env = process.env, spawn = spawnSync) {
     if (create && r.error?.code === "ETIMEDOUT") return { error: `CREATE_TIMEOUT: the daemon did not create the agent within ${createTimeoutS(env)} s (saturated daemon or a provider that stalls at initialize; upstream Paseo, not a worktree bug). Check \`paseo ls\` and the laptop load, then retry; raise AGENT_HUB_CREATE_TIMEOUT_S if the host is just slow.` };
     const out = r.stdout || "";
     if (text) return r.status === 0 ? { text: out } : { error: `exit=${r.status} ` + String(r.stderr || out).slice(0, 300) };
-    try { return JSON.parse(out.slice(out.search(/[[{]/))); } catch { const t = String(r.stderr || out || "no output"); return { error: `exit=${r.status} ` + (t.length > 500 ? t.slice(0, 300) + " ... " + t.slice(-200) : t) }; }
+    try { return flattenError(JSON.parse(out.slice(out.search(/[[{]/)))); } catch { const t = String(r.stderr || out || "no output"); return { error: `exit=${r.status} ` + (t.length > 500 ? t.slice(0, 300) + " ... " + t.slice(-200) : t) }; }
   };
 }
 
+/** The Paseo CLI answers a failure as {"error":{"code":"AGENT_NOT_FOUND","message":"..."}}: an object. Every "not found|archived" check in the hub tests a STRING, so [object Object] never matched and cleanup jobs for agents that were already gone stayed in the spool forever (HUBFIX3: 17 jobs, one 43 s worktree call each, per pass). -> {error: "CODE: message"}. */
+export function flattenError(j) { return j && typeof j === "object" && !Array.isArray(j) && j.error && typeof j.error === "object" ? { ...j, error: (`${j.error.code ?? "ERROR"}: ${j.error.message ?? ""}`.slice(0, 400)) + (j.error.code === "DAEMON_NOT_RUNNING" ? " -- the Paseo daemon is down or restarting (a restart takes about 1 min): retry the route in 1 min; do not start it yourself" : "") } : j; }
 /** Paseo's 1.5 s status probe fails while the daemon is busy (upstream #6584): retry the call, nothing was started. */
-export const transient = (j) => !j?.agentId && !/^CREATE_TIMEOUT|exited before initialization/.test(String(j?.error ?? "")) && j?.status !== "completed" && /DAEMON_UNREACHABLE|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
+export const transient = (j) => !j?.agentId && !/^CREATE_TIMEOUT|exited before initialization/.test(String(j?.error ?? "")) && j?.status !== "completed" && /DAEMON_UNREACHABLE|DAEMON_NOT_RUNNING|unreachable|ECONNREFUSED|ECONNRESET|timed? ?out|connection timed out|top-level await|^exit=(?!0)\d+|^exit=null/i.test(String(j?.error ?? ""));
 /** A failed agent create arrives as "exit=1 Created workspace wks_... Tip: ... { error: { code: AGENT_CREATE_FAILED, message: ... } }": keep only the reason, in one plain line. */
 export function plainError(e) {
   const t = String(e ?? ""); if (!/AGENT_CREATE_FAILED/.test(t)) return e;
@@ -460,7 +462,7 @@ export function runReply(agentId, text, paseo, routes = {}, { gate = runGate, di
 /** Allow-lists for every CLI/MCP value that becomes a paseo argument, a label or a path. Free text (prompt, reply text, --gate command) is the task itself and is not listed here. */
 const ALLOW = {
   type: /^[a-z][a-z0-9-]{0,31}$/,
-  provider: /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/,
+  provider: /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,79}$/,
   label: /^[A-Za-z0-9][A-Za-z0-9._@:-]{0,63}$/, // session, dev, client
   mode: /^[A-Za-z0-9][A-Za-z0-9:/._#-]{0,119}$/,
 };
@@ -628,6 +630,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (mode && (o.worktree || !unsafeMode(mode) || inPlaceWhy === "")) args.push("--mode", mode);
     // --in-place on a dirty tree: refuse the whole route at once (a run without edit rights only confuses the model; every provider would hit the same)
     else if (mode && o.inPlace && inPlaceWhy) { trace.push({ provider: prov, error: `--in-place refused: the work tree is not clean (${inPlaceWhy}); commit or stash first, or use --new-workspace worktree` }); break; }
+    else if (mode === "bypassPermissions" && !ro) { trace.push({ provider: prov, skip: "claude default mode asks before every write, and bypassPermissions is dropped outside a worktree (decision 21): it cannot edit here; use --in-place or --new-workspace worktree" }); continue; } // HUBFIX3: scaf-1 burned 116 s on Haiku that could only ask "[ASK] wait for Write?"
     else if (mode) trace.push({ provider: prov, note: `mode ${mode} dropped: ` + (!o.inPlace ?"use --in-place to edit this worktree directly, or --new-workspace worktree" : `--in-place needs a clean git work tree (--cwd ${inPlaceWhy}); commit or stash first, or use --new-workspace worktree`) });
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
