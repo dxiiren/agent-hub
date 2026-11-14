@@ -23,7 +23,6 @@ const LOCAL_FIELDS = [
   { id: 'ctx', label: `Context size (default ${LOCAL_DEFAULTS.ctx})`, type: 'number', help: 'Tokens; must fit the GPU memory with the model' },
   { id: 'device', label: `GPU device (default ${LOCAL_DEFAULTS.device})`, type: 'text', help: 'llama-server --device name; CUDA* devices are checked with nvidia-smi before start' },
   { id: 'idleMin', label: `Stop after idle minutes (default ${LOCAL_DEFAULTS.idleMin})`, type: 'number', help: 'The server is stopped, freeing GPU memory and RAM, after this long without a task' },
-  { id: 'heavyLock', label: 'Do not start while this file pattern exists (optional)', type: 'path', help: 'e.g. /tmp/heavy-run-*.lock; one * wildcard in the file name' },
 ];
 export const LOCAL_FIELD_IDS = LOCAL_FIELDS.map((f) => f.id).filter((x) => x !== 'model');
 

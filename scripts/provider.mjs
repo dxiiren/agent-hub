@@ -31,7 +31,7 @@ export function localSpec(a) {
   const v = Object.fromEntries(LOCAL_FIELD_IDS.map((id) => [id, String(a[id] ?? '').trim() || LOCAL_DEFAULTS[id] || undefined]));
   const bad = (m) => { throw new Error(m); };
   for (const id of ['bin', 'modelFile']) if (!v[id]) bad(`--${id} is required for the local-llama kind`);
-  for (const id of ['bin', 'modelFile', 'heavyLock']) if (v[id] && /["\u0000-\u001f]/.test(v[id])) bad(`--${id} must be a plain path (no quotes or control characters)`);
+  for (const id of ['bin', 'modelFile']) if (v[id] && /["\u0000-\u001f]/.test(v[id])) bad(`--${id} must be a plain path (no quotes or control characters)`);
   if (!/^\d+$/.test(v.port) || +v.port < 1 || +v.port > 65535) bad('--port must be a number from 1 to 65535');
   if (!/^\d+$/.test(v.ctx) || +v.ctx < 256) bad('--ctx must be a whole number of tokens (at least 256)');
   if (!/^[A-Za-z0-9_.:-]+$/.test(v.device)) bad('--device must be a llama-server device name such as CUDA0');
@@ -90,7 +90,7 @@ export function entries(name, spec, qwenBin, repo = REPO, hubDir, baseCommand) {
   if (k.local) { // hub-managed llama-server: the launcher reads these (deploy/laptop/laptop-agent.mjs); nothing is started until the first prompt
     const label = spec.label || displayName(k.label.split(' (')[0], spec.url);
     return { [name]: { extends: 'acp', label, command: [process.execPath, join(repo, 'deploy', 'laptop', 'laptop-agent.mjs')],
-      env: { LLAMA_SERVER_BIN: spec.bin, LAPTOP_MODEL_PATH: spec.modelFile, QWEN_BIN: qwenBin, LAPTOP_PORT: spec.port, LAPTOP_ALIAS: spec.model, LAPTOP_CTX: spec.ctx, LAPTOP_DEVICE: spec.device, LAPTOP_IDLE_MIN: spec.idleMin, ...(spec.heavyLock ? { HEAVY_LOCK_GLOB: spec.heavyLock } : {}) } } };
+      env: { LLAMA_SERVER_BIN: spec.bin, LAPTOP_MODEL_PATH: spec.modelFile, QWEN_BIN: qwenBin, LAPTOP_PORT: spec.port, LAPTOP_ALIAS: spec.model, LAPTOP_CTX: spec.ctx, LAPTOP_DEVICE: spec.device, LAPTOP_IDLE_MIN: spec.idleMin } } };
   }
   const env = spec.key ? { [KEY_ENV]: spec.key } : undefined;
   const label = spec.label || displayName(k.label.split(' (')[0], spec.url);
@@ -355,7 +355,7 @@ function migrateLocalLlamaLocked(p, { undo, env = process.env } = {}) {
   if (!hit.length) return { changed: false };
   const pre = Object.fromEntries(FILES.map((x) => [x, bytes(p[x])]));
   for (const [n, sp] of hit) {
-    const spec = { type: 'local-llama', url: sp.url, model: sp.model, ...localSpec({ bin, modelFile, port, heavyLock: local.heavyLockGlob }), ...(sp.label ? { label: sp.label } : {}) };
+    const spec = { type: 'local-llama', url: sp.url, model: sp.model, ...localSpec({ bin, modelFile, port }), ...(sp.label ? { label: sp.label } : {}) };
     local.extraProviders[n] = spec; prov[n] = entries(n, spec, prov[n].command[2], REPO)[n];
   }
   wr(p.local, local); wr(p.paseo, cfg);

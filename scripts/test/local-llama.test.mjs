@@ -24,7 +24,7 @@ const which = () => '/opt/qwen';
 test('kind schema: own provider with slots and read-only mode, path/number fields, no endpoint to list models from', async () => {
   const k = kindOf('local-llama');
   assert.ok(k.own && k.slots && k.twin && k.local);
-  assert.deepEqual(LOCAL_FIELD_IDS, ['bin', 'modelFile', 'port', 'ctx', 'device', 'idleMin', 'heavyLock']);
+  assert.deepEqual(LOCAL_FIELD_IDS, ['bin', 'modelFile', 'port', 'ctx', 'device', 'idleMin']);
   assert.deepEqual(k.fields.filter((f) => f.required).map((f) => f.id), ['bin', 'modelFile', 'model']);
   assert.deepEqual(await discover('local-llama', {}), []);
   assert.ok(describe(box().p).kinds.some((x) => x.type === 'local-llama'), 'the Settings form and catalog draw it from the schema');

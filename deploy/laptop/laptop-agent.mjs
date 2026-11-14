@@ -2,14 +2,14 @@
 // started only when the first prompt arrives, so Paseo's status probe (initialize only) never loads the model.
 // Refuses with exit 3 and the reason on stderr so the router falls back to the office model.
 //   node laptop-agent.mjs --check        pre-flight only (used by `just doctor`)
-// Env: LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH, QWEN_BIN (required); HEAVY_LOCK_GLOB, LAPTOP_PORT (8089), LAPTOP_CTX (65536: Qwen Code passed 4/10 hard edits at 64k against 1/10 at 32k; 7.5 GB of the 8 GB card),
+// Env: LLAMA_SERVER_BIN, LAPTOP_MODEL_PATH, QWEN_BIN (required); LAPTOP_PORT (8089), LAPTOP_CTX (65536: Qwen Code passed 4/10 hard edits at 64k against 1/10 at 32k; 7.5 GB of the 8 GB card),
 //      LAPTOP_MIN_FREE_GB (3), LAPTOP_ALIAS (qwen35-9b), LAPTOP_DEVICE (CUDA0; a non-CUDA device skips the NVIDIA guard), LAPTOP_IDLE_MIN (15, read by the reaper).
 // Normally started by a provider of kind `local-llama` (scripts/provider-kinds.mjs), which sets this env.
 import { spawnSafe } from '../../plugins/routing/spawn-safe.mjs';
-import { closeSync, existsSync, lstatSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, openSync, statSync, unlinkSync } from 'node:fs';
 import { freemem } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { firstId, qwenEnv, takeReadOnlyFlag, scrubKeyEnv } from '../../plugins/routing/office.mjs';
 import { modeProxy } from '../../plugins/routing/acp-proxy.mjs';
 import { runDir, laptopPort } from '../../plugins/routing/runstate.mjs';
@@ -36,14 +36,9 @@ const gpu = NV ? smi() : { ok: true, usedMiB: 0, apps: [] };
 const used = gpu.usedMiB;
 if (!gpu.ok && !gpu.unknown) refuse('GPU missing -> provider disabled (nvidia-smi fails)');
 
-// "Paused" reasons (heavy-run lock, low free RAM) are not faults: Paseo's status probe (initialize + session/new) must see a healthy provider,
+// "Paused" reasons (low free RAM; heavy CPU/RAM lanes do not matter, the model is 100% on the GPU) are not faults: Paseo's status probe (initialize + session/new) must see a healthy provider,
 // so they are checked at --check (doctor) and again on the first prompt (the router then falls back), never before the ACP handshake.
 function pausedReason(serverUp) {
-  if (E.HEAVY_LOCK_GLOB) {
-    const dir = dirname(E.HEAVY_LOCK_GLOB);
-    const [pre, post = ''] = basename(E.HEAVY_LOCK_GLOB).split('*'); // one * wildcard is enough for heavy-run-*.lock
-    if (existsSync(dir) && readdirSync(dir).some((f) => f.startsWith(pre) && f.endsWith(post))) return 'heavy-run lock present';
-  }
   const free = freemem() / 2 ** 30, min = Number(E.LAPTOP_MIN_FREE_GB || 3);
   return !serverUp && free < min ? `free RAM ${free.toFixed(1)} GB < ${min}` : '';
 }

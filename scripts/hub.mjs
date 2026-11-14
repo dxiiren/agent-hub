@@ -8,7 +8,7 @@
 //   node scripts/hub.mjs update [--paseo]   update every CLI that is behind (Paseo only with --paseo; decision 38)
 // Env: AGENT_HUB_HOME (Paseo home, default ~/.paseo), AGENT_HUB_PORT (default 6767),
 //      AGENT_HUB_CLIENT_ROOT (redirect every client config into a temp dir, for tests),
-//      OFFICE_QWEN_URL / OFFICE_QWEN_MODEL / LLAMA_SERVER_BIN / LAPTOP_MODEL_PATH / HEAVY_LOCK_GLOB
+//      OFFICE_QWEN_URL / OFFICE_QWEN_MODEL / LLAMA_SERVER_BIN / LAPTOP_MODEL_PATH 
 //      (or the same keys in config/hub.local.json, git-ignored).
 import { writeJsonKeepEol, readJsonStrict } from '../plugins/routing/jsonfile.mjs';
 import { spawnSync } from 'node:child_process';
@@ -237,7 +237,7 @@ async function doctor(deep) {
   if (laptops.size) {
     const r = run(process.execPath, [join(REPO, 'deploy', 'laptop', 'laptop-agent.mjs'), '--check'], { env: { ...process.env, ...(provsAll[[...laptops][0]].env) } });
     if (r.status === 3) { refused = out(r); console.log(`WARN  laptop: ${refused.replace(/^LAPTOP-REFUSED: /, "")} (correct behaviour, not a failure)`); }
-    else row(r.status === 0, 'laptop pre-flight (GPU visible, no heavy-run lock, free RAM >= 3 GB)', out(r).split(String.fromCharCode(10)).pop());
+    else row(r.status === 0, 'laptop pre-flight (GPU visible, free RAM >= 3 GB)', out(r).split(String.fromCharCode(10)).pop());
   }
   for (const id of want) {
     if (laptops.has(id) && refused) continue;

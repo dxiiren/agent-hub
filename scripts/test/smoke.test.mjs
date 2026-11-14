@@ -40,7 +40,7 @@ const runAsync = (args, env, ms = 20000) => new Promise((res) => {
 });
 
 function laptopEnv(t, port, extra = {}) {
-  return { ...process.env, QWEN_BIN: fakeBin(t), LLAMA_SERVER_BIN: fakeBin(t, 'llama-server'), LAPTOP_MODEL_PATH: join(t, 'qwen35-9b.gguf'), LAPTOP_PORT: String(port), LAPTOP_WATCHDOG_MS: '100', HEAVY_LOCK_GLOB: '', ...extra };
+  return { ...process.env, QWEN_BIN: fakeBin(t), LLAMA_SERVER_BIN: fakeBin(t, 'llama-server'), LAPTOP_MODEL_PATH: join(t, 'qwen35-9b.gguf'), LAPTOP_PORT: String(port), LAPTOP_WATCHDOG_MS: '100', ...extra };
 }
 
 test('laptop-agent: a session/prompt runs the whole runtime path (in-flight marker, watchdog ticks, reply passes through)', async () => {
@@ -70,6 +70,13 @@ test('laptop-agent: a session/prompt runs the whole runtime path (in-flight mark
 test('laptop-agent --check: pre-flight passes with the stubbed GPU and prints the summary', () => {
   const t = mkdtempSync(join(tmpdir(), 'smoke-check-'));
   const r = node(['--import', STUB, f('deploy/laptop/laptop-agent.mjs'), '--check'], { env: laptopEnv(t, 1, { LAPTOP_MIN_FREE_GB: '0' }) });
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /laptop pre-flight ok/); clean(r, 'check');
+});
+
+test('laptop-agent --check: a heavy-run lock (even one named by a stale HEAVY_LOCK_GLOB) does not pause the provider', () => {
+  const t = mkdtempSync(join(tmpdir(), 'smoke-heavy-'));
+  writeFileSync(join(t, 'heavy-run-test.lock'), 'x');
+  const r = node(['--import', STUB, f('deploy/laptop/laptop-agent.mjs'), '--check'], { env: laptopEnv(t, 1, { LAPTOP_MIN_FREE_GB: '0', HEAVY_LOCK_GLOB: join(t, 'heavy-run-*.lock') }) });
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /laptop pre-flight ok/); clean(r, 'check');
 });
 

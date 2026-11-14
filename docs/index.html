@@ -326,7 +326,6 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Every launch runs these checks in order. A failure exits with code <code>3</code> and a one-line reason on stderr, which the router sees as a failed provider and moves on to the next entry.</p>
 <ol>
 <li><b>GPU present.</b> The NVIDIA display adapter must report PnP status <code>OK</code> (after a sleep the card can sit at <code>Unknown</code> or vanish), and <code>nvidia-smi</code> must answer. Otherwise: <code>GPU missing -&gt; provider disabled</code>.</li>
-<li><b>Heavy-run lock.</b> If a file matching <code>HEAVY_LOCK_GLOB</code> (one <code>*</code> wildcard) exists, other heavy work owns the machine. Otherwise: <code>heavy-run lock present</code>.</li>
 <li><b>Free RAM.</b> At least 3 GB (<code>LAPTOP_MIN_FREE_GB</code>), checked only when the server is not already up.</li>
 </ol>
 <p><code>--check</code> runs only this stage; <code>just doctor</code> uses it and prints a <code>WARN</code> (not a failure) when the guard correctly refuses.</p>
