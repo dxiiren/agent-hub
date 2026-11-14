@@ -288,7 +288,7 @@ async function doctor(deep) {
         if (aid) retire(aid);
         r = paseo(['run', '--label', DOCTOR_LABEL, '--provider', model[id] || id, '--cwd', dir, '--wait-timeout', '240s', '--json', '--', 'Reply with exactly the word OK and do nothing else.']);
         j = {}; try { j = JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))); } catch { /* keep raw */ }
-        aid = j.agentId || j.id; if (aid) made.add(aid);
+        aid = j.agentId || j.id; if (aid) { made.add(aid); try { (await import('../plugins/routing/owned.mjs')).markOwned(aid, { kind: 'doctor', caller: 'agent-hub-doctor' }); } catch { /* the by-id retire below is the primary path */ } }
         const reply = aid ? paseo(['logs', aid]).stdout || '' : '';
         good = j.status === 'completed' && reply.split(String.fromCharCode(10)).some((l) => l.trim() === 'OK'); // the agent's own line, not the prompt echo
         if (!good && aid) { const { agentLastError, classifyFailure } = await import('./doctor-classify.mjs'); if (classifyFailure(agentLastError(HOME, aid)).kind !== 'real') break; } // a quota or expired login does not change on the next try

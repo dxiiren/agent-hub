@@ -4,6 +4,7 @@ import { cleanup, parseAge, ageSeconds, DOCTOR_LABEL, cleanAgentModelIds } from 
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { markOwned } from "../owned.mjs";
 
 const fake = (byLabel, all = []) => { const calls = []; const p = (a) => { calls.push(a); if (a[0] === "ls") return a[1] === "--label" ? byLabel[a[2]] ?? [] : all; return {}; }; return { p, calls }; };
 
@@ -13,8 +14,9 @@ test("parseAge and ageSeconds", () => {
 });
 
 test("--mine archives only finished agents with an agent-hub label, never running ones", () => {
-  const { p, calls } = fake({ "route/type=code-edit": [{ id: "a1", status: "idle", created: "1 hours ago" }, { id: "a2", status: "running", created: "1 hours ago" }], [DOCTOR_LABEL]: [{ id: "d1", status: "error", created: "2 minutes ago" }] }, [{ id: "other", status: "idle", created: "9 days ago" }]);
-  const r = cleanup({ paseo: p, routes: { routes: { "code-edit": [] } } });
+  const owned = mkdtempSync(join(tmpdir(), "owned-")); markOwned("a1", { kind: "route", type: "code-edit" }, owned); markOwned("a2", { kind: "route", type: "code-edit" }, owned); markOwned("d1", { kind: "doctor" }, owned);
+  const { p, calls } = fake({}, [{ id: "a1", status: "idle", created: "1 hours ago" }, { id: "a2", status: "running", created: "1 hours ago" }, { id: "d1", status: "error", created: "2 minutes ago" }, { id: "other", status: "idle", created: "9 days ago" }]);
+  const r = cleanup({ paseo: p, routes: { routes: { "code-edit": [] } }, owned });
   assert.deepEqual(r.archived.sort(), ["a1", "d1"]);
   assert.ok(calls.some((c) => c[0] === "archive" && c[1] === "a1"));
   assert.ok(!calls.some((c) => c[1] === "other" || c[1] === "a2"));

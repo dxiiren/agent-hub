@@ -211,6 +211,16 @@ def write_direct_marker(agent_id):
         json.dump({"ts": int(time.time() * 1000)}, f)
 
 
+def write_owned(agent_id, meta):
+    """Hub-owned record by agent id (<gate>/owned/<id>.json, read by the reaper and the usage plugin): labels are forgeable by any agent, this file is not. Best effort: no record = the reaper leaves the agent alone."""
+    try:
+        d = os.path.join(gate_dir(), "owned"); os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, agent_id + ".json"), "w") as f:
+            json.dump(dict(meta, kind="direct", ts=int(time.time() * 1000)), f)
+    except OSError:
+        pass
+
+
 def remove_direct_marker(agent_id):
     try:
         os.remove(os.path.join(gate_dir(), "direct", agent_id + ".json"))
@@ -218,7 +228,7 @@ def remove_direct_marker(agent_id):
         pass
 
 
-def handshake(hs, stop, seen, limit=180):
+def handshake(hs, stop, seen, limit=180, meta=None):
     """Background: wait for the shim's <hs>.id (the agent exists, unprompted), write that id's marker, then release the prompt with <hs>.go."""
     end = time.time() + limit
     while not stop.is_set() and time.time() < end:
@@ -226,6 +236,7 @@ def handshake(hs, stop, seen, limit=180):
             with open(hs + ".id", encoding="utf-8") as f:
                 aid = f.read().strip()
             write_direct_marker(aid)
+            write_owned(aid, meta or {})
             seen.append(aid)
             open(hs + ".go", "w").close()
             return
@@ -281,7 +292,7 @@ def main(argv):
         hb = heartbeat(mk)
         ok = False; seen = []; stop = threading.Event()
         try:
-            threading.Thread(target=handshake, args=(hs, stop, seen), daemon=True).start()
+            threading.Thread(target=handshake, args=(hs, stop, seen, 180, {"session": sid, "dev": dev, "caller": client}), daemon=True).start()
             try:
                 rc = subprocess.run(argv2 + [args[0]] + lab + args[1:], env=dict(os.environ, AGENT_HUB_DIRECT_SESSION=sid, AGENT_HUB_DIRECT_PID=str(os.getpid()), AGENT_HUB_DIRECT_HANDSHAKE=hs)).returncode  # paseo agents are archived via `paseo archive <id>`, never killed by name
             finally:

@@ -12,6 +12,7 @@ import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit, flattenError
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
 import { sweepDead } from "./entry-gate.mjs";
+import { ownedDir, readOwned, ghostOf } from "./owned.mjs";
 import { spawnSyncSafe } from "./spawn-safe.mjs";
 import { PERMANENT, healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, spoolStats, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline, archivePermanentDuplicates, reprobeErrorProviders } from "./guards.mjs";
 
@@ -53,13 +54,13 @@ export async function stopAgent(run, id) { const r = await run(["stop", id]); re
 const pidDead = (pid) => { try { process.kill(pid, 0); return false; } catch (e) { return e?.code === "ESRCH"; } };
 
 /** Agents of route processes that died without cleaning up. Returns the agent ids archived. */
-export async function reapDeadRoutes({ run, dir = runDir(), dead = pidDead, dry = false, concurrency = 6 }) {
+export async function reapDeadRoutes({ run, dir = runDir(), dead = pidDead, dry = false, concurrency = 6, owned = ownedDir() }) {
   const done = [];
   for (const f of listState(dir, /^agents-\d+\.json$/)) {
     const rec = readStateJson(join(dir, f));
     if (!rec || !Number.isInteger(rec.pid) || !dead(rec.pid)) continue;
     const ids = (rec.agents ?? []).map((a) => a.id).filter(Boolean);
-    for (const rid of rec.runs ?? []) { const l = await run(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(l) ? l : []) ids.push(a.id); } // an attempt that was still creating/waiting when the route died
+    for (const rid of rec.runs ?? []) { const l = await run(["ls", "--label", `route/run=${rid}`]); for (const a of ghostOf(l, { rid, cwds: [rec.cwd, ...(rec.agents ?? []).map((x) => x.wt?.path)], dir: owned })) ids.push(a.id); } // an attempt that was still creating/waiting when the route died
     if (!dry) {
       await pmap(ids, (id) => archiveAgent(run, id), concurrency);
       for (const w of rec.workspaces ?? []) await run(["workspace", "archive", w, "--json"]); // after its agents were archived above
@@ -75,16 +76,22 @@ export async function reapDeadRoutes({ run, dir = runDir(), dead = pidDead, dry 
  * Archive finished agents older than `olderThan` seconds. mine (default): only agent-hub-made ones (route/type=<type>, doctor); all: every finished agent of the daemon.
  * `parked(id)` true = a parked route agent (waiting for `agent-hub reply`), left alone. Returns { archived: [ids], skipped: n }.
  */
-export async function reapFinished({ run, routes = {}, all = false, olderThan = REAP_AFTER_S, dry = false, parked = () => false, concurrency = 6, errorAny = true }) {
+export async function reapFinished({ run, routes = {}, all = false, olderThan = REAP_AFTER_S, dry = false, parked = () => false, concurrency = 6, errorAny = true, owned = ownedDir() }) {
   const rows = async (a) => { const r = await run(a); return Array.isArray(r) ? r : []; };
-  const labels = all ? [null] : [...Object.keys(routes.routes ?? {}).map((t) => `route/type=${t}`), DOCTOR_LABEL];
-  const [keep, lists] = await Promise.all([rows(["ls", "--label", "route/keep=1"]), pmap(labels, (l) => rows(l ? ["ls", "--label", l] : ["ls"]), concurrency)]);
-  const keepIds = new Set(keep.map((a) => a.id));
-  const pool = new Map(), typeOf = new Map(); lists.forEach((l, i) => { for (const a of l) { pool.set(a.id, a); if (labels[i]?.startsWith("route/type=")) typeOf.set(a.id, labels[i].slice(11)); } });
-  // an agent in `error` made outside route.mjs (a driver's bare `paseo run`, no route/type label) holds its workspace and CLI forever (13-11: Qwen .122 agent in error): any error agent past olderThan is archived too
-  if (!all && errorAny) for (const a of await rows(["ls"])) if (/^error$/i.test(String(a.status ?? "")) && !pool.has(a.id)) pool.set(a.id, a);
-  // 13-11 (hubfix-0911): 16 qwen agents started by a driver (`agent-hub direct paseo`, label route=direct) sat "running" 3-4 h on a pending permission, held every slot and sent each chain to qoder; a route-made agent is bounded above, a direct one was not
-  const direct = new Set(); if (!all) for (const a of await rows(["ls", "--label", "route=direct"])) { const g = ageSeconds(a.created); if (/^running$/i.test(String(a.status ?? "")) && g !== Infinity && g > DIRECT_MAX_S && !keepIds.has(a.id)) direct.add(a.id); }
+  // mine: an agent is ours only when the hub's own record (by agent id, owned.mjs) says so; its type, keep flag and kind come from there, never from labels (any agent can rewrite any label)
+  const everyone = await rows(["ls"]);
+  const pool = new Map(), typeOf = new Map(), keepIds = new Set(), direct = new Set();
+  if (all) for (const a of everyone) pool.set(a.id, a);
+  else for (const a of everyone) {
+    const rec = readOwned(a.id, owned); if (!rec) continue;
+    pool.set(a.id, a);
+    if (rec.keep) keepIds.add(a.id);
+    if (rec.kind === "route" && rec.type) typeOf.set(a.id, rec.type);
+  }
+  // an agent in `error` made outside route.mjs (a driver's bare launch, no hub record) holds its workspace and CLI forever (13-11: Qwen .122 agent in error): any error agent past olderThan is archived too
+  if (!all && errorAny) for (const a of everyone) if (/^error$/i.test(String(a.status ?? "")) && !pool.has(a.id)) pool.set(a.id, a);
+  // 13-11 (hubfix-0911): 16 qwen agents started by a driver (`agent-hub direct paseo`) sat "running" 3-4 h on a pending permission, held every slot and sent each chain to qoder; a route-made agent is bounded above, a direct one was not
+  if (!all) for (const a of pool.values()) { if (readOwned(a.id, owned)?.kind !== "direct") continue; const g = ageSeconds(a.created); if (/^running$/i.test(String(a.status ?? "")) && g !== Infinity && g > DIRECT_MAX_S && !keepIds.has(a.id)) direct.add(a.id); }
   const victims = [...direct];
   for (const a of pool.values()) {
     if (direct.has(a.id)) continue;

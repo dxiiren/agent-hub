@@ -10,6 +10,7 @@ import { cliPaseo, withRetry, loadRoutes } from "./route.mjs";
 import { asyncPaseo, reapFinished, reapDeadRoutes } from "./reaper.mjs";
 import { archiveIdleLocalWorkspaces } from "./guards.mjs";
 import { cleanModelId } from "./acp-proxy.mjs";
+import { ownedDir, readOwned } from "./owned.mjs";
 
 export const DOCTOR_LABEL = "caller=agent-hub-doctor";
 const FINISHED = /^(idle|closed|error|completed|stopped|failed)$/i;
@@ -21,12 +22,11 @@ export function parseAge(s) { const m = /^(\d+)\s*([smhd])$/i.exec(String(s ?? "
 export function ageSeconds(created) { const m = /^(\d+)\s+(second|minute|hour|day|week)s?\s+ago$/i.exec(String(created ?? "").trim()); return m ? Number(m[1]) * UNIT[m[2].toLowerCase()] : /^(just now|now)$/i.test(String(created ?? "").trim()) ? 0 : Infinity; }
 
 /** paseo(args) -> parsed JSON. Returns { archived: [ids], skipped: n }. */
-export function cleanup({ paseo, olderThan = 0, all = false, routes = {}, dry = false }) {
+export function cleanup({ paseo, olderThan = 0, all = false, routes = {}, dry = false, owned = ownedDir() }) {
   const rows = (a) => { const r = paseo(a); return Array.isArray(r) ? r : []; };
-  const labels = all ? [] : [...Object.keys(routes.routes ?? {}).map((t) => `route/type=${t}`), DOCTOR_LABEL];
+  // mine: only agents the hub's own record (by agent id) lists; a label is forgeable by any agent, so it never selects who gets archived
   const pool = new Map();
-  if (all) for (const a of rows(["ls"])) pool.set(a.id, a);
-  else for (const l of labels) for (const a of rows(["ls", "--label", l])) pool.set(a.id, a);
+  for (const a of rows(["ls"])) if (all || readOwned(a.id, owned)) pool.set(a.id, a);
   const archived = []; let skipped = 0;
   for (const a of pool.values()) {
     const age = ageSeconds(a.created); // an unreadable age is never "old enough": a cleanup that asked for an age limit leaves such an agent alone

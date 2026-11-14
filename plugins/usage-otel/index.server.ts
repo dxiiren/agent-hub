@@ -1,5 +1,5 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { appendUsage, backfillUsage, emitOtlp, toRecord, usageDir } from "./server/usage.mjs";
+import { appendUsage, backfillUsage, emitOtlp, toRecord, usageDir, ownedRecord } from "./server/usage.mjs";
 import { mcpCall, hubPassword } from "./server/mcp.mjs";
 import { fillRecord, qoderCredits, qoderSession, qwenSession } from "./server/sidecar.mjs";
 import { join } from "node:path";
@@ -23,7 +23,7 @@ export default function contribute(server: PluginServerContext) {
   // One record for an agent: the hook books a finished turn with it, and the load-time backfill books a turn the hook missed. skipEmpty: a backfilled agent that never produced usage gets no zero record.
   async function book(id: string, provider: string, skipEmpty = false): Promise<boolean> {
     const st: any = await mcpCall(MCP, hubPassword(), "get_agent_status", { agentId: id });
-    const rec = toRecord({ ...st?.snapshot, id, provider: st?.snapshot?.provider ?? provider });
+    const rec = toRecord({ ...st?.snapshot, id, provider: st?.snapshot?.provider ?? provider }, new Date(), ownedRecord(id));
     const sid = st?.snapshot?.runtimeInfo?.sessionId;
     if (usesQwenCli(rec.provider, readJson(join(paseoHome(), "config.json")), readLocal())) fillRecord(rec, join(usageDir(), "cursor.json"), { tokens: qwenSession(sid) });
     else if (rec.provider.startsWith("qoder")) {

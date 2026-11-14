@@ -4,6 +4,12 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path";
 import os from "node:os";
 
+/** The hub-owned record for an agent id (written by the route side in <gate dir>/owned), or null. */
+export function ownedRecord(id, env = process.env) {
+  if (!/^[0-9A-Za-z][0-9A-Za-z_-]{0,63}$/.test(String(id))) return null;
+  try { return JSON.parse(readFileSync(join(env.AGENT_HUB_GATE_DIR ?? join(env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "gate"), "owned", id + ".json"), "utf8")); } catch { return null; }
+}
+
 /** Usage dir: AGENT_HUB_USAGE_DIR, else <PASEO_HOME or ~/.paseo>/usage. */
 export function usageDir(env = process.env) {
   return env.AGENT_HUB_USAGE_DIR ?? join(env.PASEO_HOME ?? join(os.homedir(), ".paseo"), "usage");
@@ -13,8 +19,9 @@ export function usageDir(env = process.env) {
  * Build the record from a get_agent_status snapshot.
  * Subagents roll up to the parent session: label `parent_session` wins over `session`.
  */
-export function toRecord(snap, now = new Date()) {
-  const labels = snap.labels ?? {};
+export function toRecord(snap, now = new Date(), owned = null) {
+  // attribution comes from the hub-owned record (by agent id) when it exists: any agent can rewrite any label (Paseo update_agent has no caller check). No record yet = the labels, so a forged label can only mislabel usage, never change a decision
+  const labels = owned ? { ...(snap.labels ?? {}), session: owned.session ?? "", dev: owned.dev ?? "", caller: owned.caller ?? "", "route/type": owned.type ?? (owned.kind === "direct" ? "direct" : ""), parent_session: undefined, claude_session: owned.claude_session } : snap.labels ?? {};
   const u = snap.lastUsage ?? {};
   const session = labels.parent_session || labels.session || "";
   return {
@@ -32,7 +39,7 @@ export function toRecord(snap, now = new Date()) {
     out: Number(u.outputTokens ?? 0),
     cached: Number(u.cachedInputTokens ?? 0),
     cost_usd: Number(u.totalCostUsd ?? 0),
-    credits: Number(u.credits ?? labels["usage/credits"] ?? 0),
+    credits: Number(u.credits ?? 0),
   };
 }
 

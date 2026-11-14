@@ -22,6 +22,7 @@ import { endpointSkip } from "./endpoint.mjs";
 import { grantMcp, loadMcpAllow, MCP_ENV } from "./mcp-grant.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
 import { acquireEntry, maxInFlight } from "./entry-gate.mjs";
+import { markOwned, ownedDir, ghostOf } from "./owned.mjs";
 import { recordHubWorktree, spoolCleanup, workspaceCapError } from "./guards.mjs";
 import { effectiveBudget, chainOrder, costGb, laptopNow, availableGb, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
@@ -618,7 +619,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   };
   // Every agent this route creates is tracked until it is archived. `archive --force` interrupts a running agent and ends its CLI process tree (verified on Windows; `stop` alone leaves the CLI alive), retried once, then stop + archive.
   const live = new Map(); // key -> { id, wt }: created and not yet retired
-  const rid = randomBytes(4).toString("hex"); let unnamed = false; // unnamed: a create call returned no agent id (timeout), found again by its route/run label
+  const rid = randomBytes(4).toString("hex"); let unnamed = false;
+  const ownDir = () => join(o.gateDir ?? gateDir(), "owned"); const ghostArg = () => ({ rid, cwds: [o.cwd, ...[...live.values()].map((v) => v.wt?.path)], dir: ownDir() }); // label lookups find only agents in this route's own folders that no hub record gives to another route (labels are forgeable by any agent) // unnamed: a create call returned no agent id (timeout), found again by its route/run label
   const ledger = () => { // survives a hard kill of this process (no handler can run then): the hub reaper archives these agents once this pid is dead
     if (!o.ledgerDir || o.keep) return;
     const f = join(o.ledgerDir, `agents-${process.pid}.json`);
@@ -643,7 +645,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   const drain = () => {
     if (o.keep) return;
     for (const v of [...live.values()]) { if (v.run) continue; try { retire(v.id, v.wt); } catch { /* keep going: the reaper retries */ } }
-    if (unnamed) { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } unnamed = false; }
+    if (unnamed) { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of ghostOf(r, ghostArg())) { try { archive(a.id); } catch { /* the reaper retries */ } } unnamed = false; }
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
   // The route-created worktree is archived by retire, and an agent that edited without committing loses its diff with it (09-11: CR-004 "gate PASS", worktree gone, branch route-1c96f76704 empty). Save the diff against the start commit first.
@@ -747,12 +749,12 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? withFileList(o.prompt, o.cwd) + READ_FIRST : withFileList(o.prompt, ro ? o.cwd : null)], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
       const to = isCreateTimeout(j); ctries.push({ try: k + 1, seconds: Math.round(((o.now ?? Date.now)() - tc) / 1000), ...(to ? { timedOut: true } : {}) });
       if (!to || k >= createRetries(routes) || left() < 60) break;
-      { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } }
+      { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of ghostOf(r, ghostArg())) { try { archive(a.id); } catch { /* the reaper retries */ } } }
       (o.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)))(createBackoffMs(k, routes));
     }
     if (pendingReq && j?.agentId) writeRequest(o.gateDir ?? gateDir(), j.agentId, pendingReq.cmd, pendingReq.base, pendingReq.extra);
     live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
-    if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
+    if (j?.agentId) { markOwned(j.agentId, { kind: "route", type: o.type, keep: !!o.keep, rid, session: o.session, dev: o.dev, caller: o.client, ...(labels.claude_session ? { claude_session: labels.claude_session } : {}) }, ownDir()); track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
     if (j.agentId && !j.error && !["completed", "permission", "error", "timeout"].includes(String(j.status))) { // the create call returned the agent id; its answer is awaited here (a terminal status from the create call itself needs no wait)
       const w = paseo(["wait", j.agentId, "--timeout", String(left())], { timeoutMs: (left() + 30) * 1000 });
       j = { agentId: j.agentId, status: w?.status === "idle" ? "completed" : (w?.status ?? "error"), ...(w?.error ? { error: w.error } : {}) };
