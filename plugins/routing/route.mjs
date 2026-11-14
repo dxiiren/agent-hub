@@ -12,6 +12,7 @@ import path, { basename, dirname, join, resolve, sep, relative, isAbsolute } fro
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest, peekRequest } from "../gate/server/store.mjs";
+import { appendLedger, ledgerLine, ledgerFile } from "./ledger.mjs";
 import { runGate, gateOpts, EMPTY_TREE, hasSecret, gitSig, OVERRUN } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
@@ -839,6 +840,7 @@ export function runStatus(id, paseo, dir = gateDir(), gate = runGate, routes = {
   return withAnswer(out, paseo);
 }
 
+const ROUTE_T0 = Date.now();
 function main(argv) {
   if (argv[0] === "--status") {
     const home = absPath(argv.includes("--home") ? argv[argv.indexOf("--home") + 1] : process.env.PASEO_HOME);
@@ -923,6 +925,7 @@ function main(argv) {
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }
+  try { appendLedger(ledgerLine(res, { type, session: opt("--session") ?? sessionFromEnv(process.env), startedMs: ROUTE_T0 }), ledgerFile(process.env.PASEO_HOME || undefined)); } catch { /* the ledger never fails a route */ }
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;
   if (bad) { console.error("route: " + bad); return 2; }

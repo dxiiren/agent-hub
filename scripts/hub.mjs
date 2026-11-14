@@ -342,6 +342,12 @@ else if (cmd === 'plugins') await plugins();
 else if (cmd === 'provider') process.exit(await (await import('./provider.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'routes') process.exit(await (await import('./routes.mjs')).main(process.argv.slice(3)));
 else if (cmd === 'update') (await import('./tools.mjs')).update(process.argv.includes('--paseo'));
+else if (cmd === 'reliability') {
+  const L = await import('../plugins/routing/ledger.mjs'); const { paseoHome } = await import('../plugins/routing/runstate.mjs'); const av = process.argv, opt = (k) => av.includes(k) ? av[av.indexOf(k) + 1] : undefined;
+  if (av.includes('--backfill')) console.log(JSON.stringify(L.backfillFromUsage(join(paseoHome(), 'usage', 'usage.jsonl'))));
+  const rs = L.reliability(L.readLedger(), { sinceMs: L.parseSince(opt('--since')), provider: opt('--provider') });
+  console.log(av.includes('--json') ? JSON.stringify(rs) : L.formatReliability(rs));
+}
 else if (cmd === 'doctor') await doctor(process.argv.includes('--deep'));
 else if (cmd === 'reap-laptop') { const r = await reapLaptop(process.argv.includes('--now')); console.log(r.length ? `stopped ${r.map((x) => `pid ${x.pid} (port ${x.port})`).join(', ')}` : 'no idle orphaned laptop llama-server'); const o = (await import('../plugins/routing/orphans.mjs')).reapAgentOrphans(); if (o.length) console.log(`stopped ${o.length} orphaned agent shell snapshot process(es): ${o.join(', ')}`); }
 else { console.log('usage: hub.mjs configure | unconfigure | provider add|list|remove | plugins | mcp add|remove | doctor [--deep] | update [--paseo]'); process.exit(2); }
