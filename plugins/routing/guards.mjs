@@ -3,6 +3,7 @@
 //   1 workspace cap (refuse new routes over WORKSPACE_CAP) + sweep of idle workspaces      2 cleanup spool: a route frees its slot when the agent answered; archive runs off-slot
 //   3 stuck-route watchdog (no agent progress for STUCK_S)                                  4 healthLine() for `agent-hub doctor`
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { held } from "./entry-gate.mjs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -259,7 +260,7 @@ export function stuckCreating(runDir, { now = Date.now, stuckS = STUCK_S, isAliv
 export function doneInWindow(usageFile, now = Date.now(), windowS = 30 * 60) {
   try { const ids = new Set(); for (const l of readFileSync(usageFile, "utf8").split("\n").slice(-4000)) { if (!l) continue; try { const j = JSON.parse(l); if (now - Date.parse(j.ts) <= windowS * 1000) ids.add(j.agent); } catch { /* torn line */ } } return ids.size; } catch { return 0; }
 }
-export const slotsHeld = (runDir) => { try { return readdirSync(join(runDir, "inflight")).filter((f) => /^slot-\d+\.json$/.test(f)).length; } catch { return 0; } };
+export const slotsHeld = (runDir) => held(join(runDir, "inflight"));
 
 /**
  * Archive idle workspaces straight in Paseo's registry file while the daemon is STOPPED (a daemon with ~90 active workspaces needed 12+ min to boot on 08-11, so it cannot be asked to archive them). Same rules as the live sweep

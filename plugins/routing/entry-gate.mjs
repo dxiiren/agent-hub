@@ -20,7 +20,7 @@ const defaultSleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4
 export function acquireEntry({ dir, max, waitMs = 30 * 60_000, sleep = defaultSleep, now = Date.now, jitter = () => 2000 + Math.random() * 2000, pid = process.pid, onWait = () => {} }) {
   if (!max) return { release() {}, waitedMs: 0, slot: null };
   const d = join(dir, "inflight"); mkdirSync(d, { recursive: true });
-  const t0 = now(); const me = { pid, at: t0 }; let announced = false;
+  const t0 = now(); const me = { pid, at: t0 }; let announced = false; sweepDead(d, now);
   for (;;) {
     let reclaimed = false;
     for (let n = 0; n < max; n++) {
@@ -38,4 +38,11 @@ export function acquireEntry({ dir, max, waitMs = 30 * 60_000, sleep = defaultSl
     sleep(jitter());
   }
 }
-export const held = (d) => { try { return readdirSync(d).filter((f) => /^slot-\d+\.json$/.test(f)).length; } catch { return 0; } };
+/** Remove every slot file in `d` whose owner is dead or over 3 h old (not only the one a scan happens to hit); returns how many. A torn (unparsable) file is left to its writer. */
+export function sweepDead(d, now = Date.now) {
+  let n = 0; let names = []; try { names = readdirSync(d).filter((f) => /^slot-\d+\.json$/.test(f)); } catch { return 0; }
+  for (const f of names) { try { const o = JSON.parse(readFileSync(join(d, f), "utf8")); if (!owned(o, now())) { rmSync(join(d, f), { force: true }); n++; } } catch { /* torn or gone */ } }
+  return n;
+}
+/** Live slot count: dead ones are swept first, so doctor and the wait message show the real number. */
+export const held = (d) => { sweepDead(d); try { return readdirSync(d).filter((f) => /^slot-\d+\.json$/.test(f)).length; } catch { return 0; } };

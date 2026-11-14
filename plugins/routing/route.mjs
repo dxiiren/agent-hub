@@ -196,11 +196,30 @@ export function stopReason(j, paseo) {
 }
 /** Appended to a read-only task on a small local model: the laptop 9B answered "k" and "apple" for a one-word file it never opened (no read call in the log), so the prompt says to open the file and not to answer from memory. */
 export const READ_FIRST = "\n\n(Open every file named above with your file-reading tool before you answer. Answer only from what it returns, never from memory. If a file cannot be read, say that in one sentence.)";
+/** Files a read-only agent may Read in `cwd` (what pathAllowed accepts, depth <= 3, at most `max`), as relative paths. Glob/Grep/LS are denied for it and Read of a folder fails, so without this list it cannot find the files (HUBFIX2, 11 of 20 summarise calls in the 14-11 pilot came back "could not read the folder"). */
+export function listReadable(cwd, max = 60) {
+  const out = [];
+  const walk = (dir, depth) => {
+    let names; try { names = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); } catch { return; }
+    for (const e of names) {
+      if (out.length >= max || e.name.startsWith(".") || e.name === "node_modules") continue;
+      const f = join(dir, e.name);
+      if (e.isDirectory()) { if (depth < 3) walk(f, depth + 1); } else if (e.isFile() && pathAllowed(f, [cwd]).ok) out.push(relative(cwd, f).split(sep).join("/"));
+    }
+  };
+  walk(cwd, 0);
+  return out;
+}
+/** Task text for a read-only agent: the prompt plus the readable file list (see listReadable). */
+export const withFileList = (prompt, cwd) => { const l = cwd ? listReadable(cwd) : []; return l.length ? `${prompt}
+
+(Files you can open with your Read tool, one call per file, folders cannot be read: ${l.join(", ")})` : prompt; };
 /** Why a completed read-only answer is not usable, or "". The answer IS the product of summarise/review, so an empty one or a short refusal ("I cannot complete this task. I am Qwen Code...") falls through to the next chain entry like an error does. */
 export function unusableAnswer(text) {
   const t = String(text ?? "").trim();
   if (!t) return "the agent completed with an empty answer";
   if (t.length < 600 && /^(i cannot|i can't|i am unable|i'm unable|i am sorry|i'm sorry|sorry,|i am qwen code|as an ai)/i.test(t)) return `the agent refused: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
+  if (t.length < 1500 && /(couldn'?t|could not|can'?t|cannot|unable to|wasn'?t able to|not able to) (read|open|access|list)[^.]{0,80}(folder|director|files?|path)|read-only (task|hook)[^.]{0,60}(refus|denied|not allowed|blocked)|(refused|blocked|denied) by (a |the )?(PreToolUse )?hook/i.test(t)) return `the agent could not read its inputs: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
   return "";
 }
 /** Paseo prints these when an agent has no transcript yet; they are UI text, never an answer. */
@@ -624,7 +643,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       if (have) { args.push("--workspace", have.workspaceId); g?.release(); } else {
       let c = null; if (g) { try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } } }
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
-    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? o.prompt + READ_FIRST : o.prompt], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
+    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? withFileList(o.prompt, o.cwd) + READ_FIRST : withFileList(o.prompt, ro ? o.cwd : null)], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
     live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
     if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
     if (j.agentId && !j.error && !["completed", "permission", "error", "timeout"].includes(String(j.status))) { // the create call returned the agent id; its answer is awaited here (a terminal status from the create call itself needs no wait)
@@ -867,6 +886,9 @@ function main(argv) {
   process.on("exit", () => sessGate.release());
   const entry = (() => { try { return acquireEntry({ dir: runDir(), max: maxInFlight(routes0), onWait: (n, m) => console.error(`route: ${n}/${m} routes already in flight: queued here (no daemon traffic) until a slot frees`) }); } catch { return { release() {}, waitedMs: 0 }; } })();
   if (entry === null) { console.error("route: gave up waiting 30 min for a free hub slot (maxInFlight in routes.local.json, env AGENT_HUB_MAX_INFLIGHT); nothing was started"); return 1; }
+  { // HUBFIX2: a caller's hard kill (the 600 s `timeout`) runs no exit handler here (route is synchronous), so a detached watchdog waits for this pid, stops it at --timeout, and reaps its agents, workspaces and slots at once instead of up to 5 min later
+    const tmo = opt("--timeout") === undefined ? 0 : toSeconds(opt("--timeout"));
+    try { spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "reaper.mjs"), "--watch", String(process.pid), ...(tmo ? ["--kill-after", String(tmo)] : []), ...(home ? ["--home", home] : [])], { detached: true, stdio: "ignore", windowsHide: true }).unref(); } catch { /* the 5-minute reaper still covers it */ } }
   process.on("exit", () => entry.release()); // every exit path, including process.exit(130) from a signal
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.random() * 2000); // stagger: many parallel routes must not hit the daemon in the same instant
   try { migrate(); } catch { /* best effort: an unreadable config is reported by the route itself */ } // idempotent: converts an older install's presets/twins and stale read-only modes before any task is routed

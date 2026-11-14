@@ -11,6 +11,7 @@ import os from "node:os";
 import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit } from "./route.mjs";
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
+import { sweepDead } from "./entry-gate.mjs";
 import { spawnSyncSafe } from "./spawn-safe.mjs";
 import { PERMANENT, healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline, archivePermanentDuplicates, reprobeErrorProviders } from "./guards.mjs";
 
@@ -221,6 +222,13 @@ import { parseAge } from "./cleanup.mjs";
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const a = process.argv.slice(2), opt = (n) => (a.includes(n) ? a[a.indexOf(n) + 1] : undefined);
   const run = asyncPaseo(opt("--home") ?? process.env.PASEO_HOME), olderThan = opt("--older-than") ? parseAge(opt("--older-than")) : REAP_AFTER_S, dry = a.includes("--dry-run");
+  if (a.includes("--watch")) { // detached watchdog started by route.mjs: route is synchronous, so a caller's hard kill (timeout) runs no handler; this process waits for the route pid, kills it after --kill-after seconds, then reaps what it left (agents, workspaces, slots)
+    const pid = Number(opt("--watch")), killAfter = Number(opt("--kill-after") ?? 0) * 1000, t0 = Date.now(); const alive = () => !pidDead(pid);
+    while (alive() && Date.now() - t0 < 3 * 3600_000) { if (killAfter && Date.now() - t0 >= killAfter) { try { process.kill(pid); } catch { /* gone */ } } await new Promise((r) => setTimeout(r, 2000)); }
+    await new Promise((r) => setTimeout(r, 1500)); const rd = runDir(); sweepDead(join(rd, "inflight"));
+    try { for (const d of readdirSync(rd)) if (d.startsWith("session-")) sweepDead(join(rd, d, "inflight")); } catch { /* none */ }
+    const r = await reapDeadRoutes({ run, dry: false }); console.log(JSON.stringify({ watched: pid, reaped: r })); process.exit(0);
+  }
   if (a.includes("--spool")) { const done = await drainSpool({ runDir: runDir(), run, archiveAgent }); console.log(JSON.stringify({ spooled: done })); process.exit(0); } // detached worker started by a finished route
   if (a.includes("--prune-offline")) { // daemon STOPPED: drop archived records (backup first) so boot-time git reconciliation has nothing to scan
     const home = opt("--home") ?? process.env.PASEO_HOME ?? join(os.homedir(), ".paseo"); const port = process.env.AGENT_HUB_PORT ?? "6767"; const up = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(3000) }).then(() => true, () => false);
