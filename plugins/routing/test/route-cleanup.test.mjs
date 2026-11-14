@@ -1,3 +1,4 @@
+import "./isolate-run-dir.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";

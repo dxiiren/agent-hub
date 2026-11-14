@@ -1,3 +1,4 @@
+import "./isolate-run-dir.mjs";
 // Caller/agent text must reach paseo verbatim as a positional: options go before "--", text after it, for every paseo call that carries text.
 import test from "node:test";
 import assert from "node:assert/strict";

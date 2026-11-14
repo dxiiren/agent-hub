@@ -219,6 +219,11 @@ async function doctor(deep) {
     const h = healthLine({ inflight: slotsHeld(runDir()), max: maxInFlight(loadRoutes()), done30m: doneInWindow(join(paseoHome(), 'usage', 'usage.jsonl')), workspaces: wsn, creating: stuckCreating(runDir()) });
     row(h.ok, h.line);
   } catch (e) { row(false, 'HUB-HEALTH', `could not be computed: ${String(e.message).slice(0, 120)}`); }
+  try { // HUBFIX3: the number of registered projects is what keeps the daemon's git queue long
+    const { projectsLine } = await import('../plugins/routing/guards.mjs');
+    const pl = projectsLine(JSON.parse(paseo(['project', 'ls', '--json']).stdout || '[]'), { max: Number(process.env.AGENT_HUB_PROJECT_WARN) || undefined, exists: existsSync });
+    if (pl.warn) console.log('WARN  ' + pl.line); else ok(pl.line);
+  } catch (e) { console.log(`WARN  project count not read: ${String(e.message).slice(0, 100)}`); }
   if (process.env.AGENT_HUB_NO_USAGE_STACK !== '1') { // the one usage UI: collector + Prometheus + Grafana must answer
     const { probeStack, usageModeFromFiles } = await import('./usage-stack.mjs');
     const mode = usageModeFromFiles();

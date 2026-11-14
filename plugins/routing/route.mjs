@@ -219,7 +219,7 @@ export function unusableAnswer(text) {
   const t = String(text ?? "").trim();
   if (!t) return "the agent completed with an empty answer";
   if (t.length < 600 && /^(i cannot|i can't|i am unable|i'm unable|i am sorry|i'm sorry|sorry,|i am qwen code|as an ai)/i.test(t)) return `the agent refused: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
-  if (t.length < 1500 && /(couldn'?t|could not|can'?t|cannot|unable to|wasn'?t able to|not able to) (read|open|access|list)[^.]{0,80}(folder|director|files?|path)|read-only (task|hook)[^.]{0,60}(refus|denied|not allowed|blocked)|(refused|blocked|denied) by (a |the )?(PreToolUse )?hook/i.test(t)) return `the agent could not read its inputs: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
+  if (t.length < 1500 && /(couldn'?t|could not|can'?t|cannot|unable to|wasn'?t able to|not able to) (read|open|access|list)\b[^.]{0,80}\b(folder|director|files?|path)|read-only (task|hook)[^.]{0,60}(refus|denied|not allowed|blocked)|(refused|blocked|denied) by (a |the )?(PreToolUse )?hook/i.test(t)) return `the agent could not read its inputs: ${t.replace(/\s+/g, " ").slice(0, 120)}`;
   return "";
 }
 /** Paseo prints these when an agent has no transcript yet; they are UI text, never an answer. */
@@ -637,13 +637,23 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
     const guard = ro ? snapshot(o.cwd) : null;
-    let ws = null; if (!o.worktree && !o.keep) { let g = null; try { g = o.ledgerDir ? acquireEntry({ dir: join(o.ledgerDir, "wtcreate"), max: 2, waitMs: createTimeoutS() * 1000 }) : { release() {} }; } catch { g = { release() {} }; } // same 2-at-once gate as worktree creates; never resent (a retry only queues a duplicate behind the stuck one: 16:37-16:47 09-11, 60 in flight)
+    let ws = null, wsCreateS = null; if (!o.worktree && !o.keep) { let g = null; try { g = o.ledgerDir ? acquireEntry({ dir: join(o.ledgerDir, "wtcreate"), max: 2, waitMs: createTimeoutS() * 1000 }) : { release() {} }; } catch { g = { release() {} }; } // same 2-at-once gate as worktree creates; never resent (a retry only queues a duplicate behind the stuck one: 16:37-16:47 09-11, 60 in flight)
       // 14-11: reuse the local workspace this cwd already has (25 duplicates of one folder filled the 20-workspace cap); a reused one is not ours to archive, the idle-local sweep drops it later
       const have = (() => { const r = paseo(["workspace", "ls", "--json"]); const key = (p) => String(p ?? "").split("\\").join("/").toLowerCase().replace(/\/+$/, ""); return Array.isArray(r) ? r.find((x) => x.workspaceId && x.isolation === "local" && key(x.cwd) === key(o.cwd)) : null; })();
       if (have) { args.push("--workspace", have.workspaceId); g?.release(); } else {
-      let c = null; if (g) { try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } } }
+      let c = null; if (g) { const tw = (o.now ?? Date.now)(); try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); wsCreateS = Math.round(((o.now ?? Date.now)() - tw) / 1000); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } } }
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
-    let j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? withFileList(o.prompt, o.cwd) + READ_FIRST : withFileList(o.prompt, ro ? o.cwd : null)], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
+    // HUBFIX3: a create that times out (saturated daemon) is retried with backoff, bounded (routes.createRetries, default 2); the half-made agent of a failed try is archived first. Still failing: the chain moves on. Each try and its seconds go in the trace (createTries).
+    const ctries = []; let j;
+    const isCreateTimeout = (x) => !x?.agentId && /^(CREATE_TIMEOUT|no answer in )/.test(String(x?.error ?? ""));
+    for (let k = 0; ; k++) {
+      const tc = (o.now ?? Date.now)();
+      j = paseo([...args, "--", ro && readOnlyMode(base(prov), routes) === "read-only" ? withFileList(o.prompt, o.cwd) + READ_FIRST : withFileList(o.prompt, ro ? o.cwd : null)], { timeoutMs: Math.min(left() + 30, startLimitS(routes)) * 1000 });
+      const to = isCreateTimeout(j); ctries.push({ try: k + 1, seconds: Math.round(((o.now ?? Date.now)() - tc) / 1000), ...(to ? { timedOut: true } : {}) });
+      if (!to || k >= createRetries(routes) || left() < 60) break;
+      { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } }
+      (o.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)))(createBackoffMs(k, routes));
+    }
     live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
     if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
     if (j.agentId && !j.error && !["completed", "permission", "error", "timeout"].includes(String(j.status))) { // the create call returned the agent id; its answer is awaited here (a terminal status from the create call itself needs no wait)
@@ -654,11 +664,11 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     const hint = j.status === "permission" ? { error: permissionHint({ o, mode, ro, wt, paseo, agentId: j.agentId, gate, routes, denied: j.denied }) } : {};
     // 14-11: the create call itself timed out (no agent id): say so, and stop the chain, the next provider would queue another create behind the stuck one on the same busy daemon
     const createTimedOut = !j.agentId && /^(CREATE_TIMEOUT|no answer in )/.test(String(j.error ?? ""));
-    if (createTimedOut && !/^CREATE_TIMEOUT/.test(String(j.error))) j = { ...j, error: `CREATE_TIMEOUT: the daemon did not create the agent within ${startLimitS(routes)} s (saturated daemon, not a slow provider); nothing was retried on another provider. Check \`paseo ls\` and the laptop load, retry, or raise AGENT_HUB_START_TIMEOUT.` };
+    if (createTimedOut && !/^CREATE_TIMEOUT/.test(String(j.error))) j = { ...j, error: `CREATE_TIMEOUT: the daemon did not create the agent within ${startLimitS(routes)} s (saturated daemon, not a slow provider); tried ${ctries.length} time(s) with backoff, all timed out; the next provider is tried. Check \`paseo ls\` and the laptop load, retry, or raise AGENT_HUB_START_TIMEOUT.` };
     const slow = !createTimedOut && ((!["completed", "permission", "error"].includes(j.status) && (o.now ?? Date.now)() - t0 >= (lim - 3) * 1000) || /^no answer in /.test(String(j.error ?? "")));
     if (slow) j = { ...j, error: `no answer in ${lim % 60 ? lim + " s" : lim / 60 + " min"}: this provider took too long, the next one is tried (routes.timeouts.${o.type} sets the limit)` };
     const why = j.status !== "completed" && !j.error && !hint.error ? { error: stopReason(j, paseo) } : {};
-    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: plainError(j.error) } : hint), ...why });
+    trace.push({ provider: prov, status: j.status ?? "error", ...(j.error ? { error: plainError(j.error) } : hint), ...why, ...(ctries.length > 1 ? { createTries: ctries } : {}), ...(wsCreateS !== null ? { workspaceCreateS: wsCreateS } : {}), agentCreateS: ctries.at(-1)?.seconds });
     if (j.status !== "completed" && j.status !== "permission" && START_FAIL_RE.test(String(trace.at(-1).error ?? "") + " " + String(j.error ?? ""))) { try { markStartFail(o, base(prov)); } catch { /* best effort */ } }
     { const t = trace.at(-1); const msg = t.error ?? "";
       if (j.status !== "completed" && j.status !== "permission" && LIMIT_RE.test(msg)) { // remember it: every later route skips this provider until the reset
@@ -704,7 +714,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // a read-only agent stopped on a refused read may still have written an answer: keep it (the refusal stays in the trace) in case no entry completes
     if (ro && j.status === "permission" && j.agentId) { const w = withAnswer({ agentId: j.agentId }, paseo, o.answerRetryMs); if (w.answer) partial = { provider: prov, agentId: j.agentId, answer: w.answer, refusedRead: true, ...(w.answerTruncated ? { answerTruncated: true } : {}) }; }
     if (j.agentId || wt) retire(j.agentId, wt); // a timed-out agent must not keep running while the next entry works
-    if (createTimedOut) { setMarker(o.marker, null); break; } // see createTimedOut above
+    if (createTimedOut) { archiveWs(ws); unnamed = true; } // HUBFIX3: out of retries here: free this try's workspace and ghost agent, then the next provider is tried
     setMarker(o.marker, null); // a failed attempt gives its slot back at once: the next entry, a parallel route, or the end of this one never sees it held
   }
   } finally { drain(); ACTIVE.delete(drain); }
@@ -736,6 +746,9 @@ export function cachedProviderLs(paseo, { file, ttlMs = 15_000, now = Date.now }
 }
 export const providerCacheFile = (home) => join(home || paseoHome(), "provider-ls-cache.json");
 /** Seconds a provider may take to START an agent (the create call returns the agent id) before the route drops it and tries the next one; routes.startTimeout overrides (default 90 s). The answer itself still gets the full attempt limit. */
+/** Extra tries after a create timeout (routes.createRetries or AGENT_HUB_CREATE_RETRIES, default 2) and the wait before try k+2: 5 s, 10 s, 20 s ... */
+export const createRetries = (routes, env = process.env) => { const n = Number(env.AGENT_HUB_CREATE_RETRIES ?? routes?.createRetries); return Number.isInteger(n) && n >= 0 ? n : 2; };
+export const createBackoffMs = (k, routes) => (Number(routes?.createBackoffMs) || 5000) * 2 ** k;
 export const startLimitS = (routes, env = process.env) => toSeconds(env.AGENT_HUB_START_TIMEOUT ?? routes?.startTimeout ?? "90s");
 /** Slots per provider with enabled flag, and the total the hub may use now (budget.mjs: configured slots of enabled providers, a disabled one's slots moved under the others' caps, limited by what the laptop can hold). `lap` = { freeGb, cpuPct }; `busy` = routes holding a slot. */
 export function slotInfo(routes, state, lap = {}, busy = 0) {

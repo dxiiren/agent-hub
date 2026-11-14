@@ -1,3 +1,4 @@
+import "./isolate-run-dir.mjs";
 // A route-created worktree is archived with its agent: the diff is saved first, and an agent-planted git filter must never run while doing it.
 import test from "node:test";
 import assert from "node:assert/strict";

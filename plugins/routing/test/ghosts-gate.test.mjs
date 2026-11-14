@@ -1,3 +1,4 @@
+import "./isolate-run-dir.mjs";
 // Hang fix 08-11: ghost workspaces are archived (a few per pass, stop on a busy daemon); the hub entry cap queues the rest; the gate no longer needs `paseo ls`.
 import test from "node:test";
 import assert from "node:assert/strict";

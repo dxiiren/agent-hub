@@ -292,3 +292,11 @@ export function pruneArchivedOffline({ file, keep = 50, backup = true, now = Dat
   const out = recs.filter((r) => !drop.has(r)); write(file, JSON.stringify(out, null, 2));
   return { before: recs.length, after: out.length };
 }
+
+/** Registered Paseo projects load the daemon's git queue (HUBFIX3: 135 projects, 4 with no folder, p50 queue wait 5-23 s). { warn, line }: warn above `max` projects or when any folder is gone. */
+export const PROJECT_WARN = 100;
+export function projectsLine(projects, { max = PROJECT_WARN, exists = (p) => true } = {}) {
+  const n = projects.length, gone = projects.filter((p) => p?.path && !exists(p.path)).length;
+  const warn = n > max || gone > 0;
+  return { warn, line: `registered Paseo projects: ${n} (${gone} with no folder on disk)${warn ? `: above ${max} or dangling projects slow every daemon git call; list them with \`paseo project ls\` and remove dead ones with \`paseo project delete <id>\` (restore: \`paseo project create <path>\`)` : ""}` };
+}

@@ -1,9 +1,10 @@
+import "./isolate-run-dir.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reprobeErrorProviders, archivePermanentDuplicates, archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
+import { reprobeErrorProviders, archivePermanentDuplicates, archiveWorkspacesAt, sweepRegistryOffline, recentlyTouched, recordHubWorktree, workspaceCapError, projectsLine, sweepIdleWorkspaces, archiveIdleLocalWorkspaces, spoolCleanup, drainSpool, reapStuckRoutes, healthLine, doneInWindow, slotsHeld, WORKSPACE_CAP } from "../guards.mjs";
 process.env.AGENT_HUB_PERMANENT_WS = "/desktop/code/keep-me"; // the permanent-folder list is configuration, never tracked code
 import { runRoute as runRouteReal } from "../route.mjs";
 const runRoute = (o, ...a) => runRouteReal({ scan: () => false, ...o }, ...a); // the secret scan has its own test and needs gitleaks on PATH; a route test must not depend on the machine
@@ -341,4 +342,11 @@ test("alive: EPERM means a reused pid owned by another account (svchost), not ou
   assert.equal(alive(1, k("EPERM")), false);
   assert.equal(alive(1, k("ESRCH")), false);
   assert.equal(alive(1, k(null)), true);
+});
+
+test("projectsLine warns above the threshold or when a project folder is gone, and stays quiet otherwise (HUBFIX3)", () => {
+  const ps = (n) => Array.from({ length: n }, (_, i) => ({ projectId: "p" + i, path: "/x/" + i }));
+  assert.equal(projectsLine(ps(10), { exists: () => true }).warn, false);
+  const big = projectsLine(ps(101), { exists: () => true }); assert.equal(big.warn, true); assert.match(big.line, /101.*above 100/);
+  const gone = projectsLine(ps(5), { exists: (p) => p !== "/x/3" }); assert.equal(gone.warn, true); assert.match(gone.line, /1 with no folder/);
 });
