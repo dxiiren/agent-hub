@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { callerGate, runStatus } from "../route.mjs";
 import { evaluate } from "../../gate/server/hook.mjs";
 import { writeRequest } from "../../gate/server/store.mjs";
-import { gateOpts, runGate } from "../../gate/server/gate.mjs";
+import { gateOpts, runGate, gitSig } from "../../gate/server/gate.mjs";
 
 const sh = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8" });
 function repo() {
@@ -126,10 +126,19 @@ test("issue 5: --status of a cut-off route runs the requested gate (a no-op edit
   writeRequest(st, d, 'node -e "process.exit(0)"', b, {});
   { const r3 = runStatus("A1", p, st, runGate, {}); assert.equal(r3.status, "completed", JSON.stringify(r3.gate)); }
 });
-test("read-only request: --status does not run the diff/ignored-file gate on the caller's tree", () => {
+test("read-only: --status runs only the command and the unchanged-tree check (no diff/ignored scan)", () => {
   const d = repo(), b = head(d), st = mkdtempSync(join(tmpdir(), "st-"));
-  writeRequest(st, d, 'node -e "process.exit(1)"', b, { readOnly: true });
   const p = (a) => (a[0] === "inspect" ? { Status: "idle", Cwd: d } : a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "logs" ? { text: "x\nok\n" } : {});
-  const r = runStatus("A1", p, st, runGate, {});
-  assert.equal(r.status, "completed"); assert.equal(r.gate, null);
+  writeRequest(st, d, null, b, { readOnly: true, sig: gitSig(d) });
+  const r = runStatus("A1", p, st, runGate, {}); assert.equal(r.status, "completed"); assert.equal(r.gate.status, "PASS");
+  writeFileSync(join(d, "new.txt"), "changed\n"); // the read-only task changed the tree
+  const r2 = runStatus("A1", p, st, runGate, {}); assert.equal(r2.status, "failed-readonly-changed"); assert.match(r2.gate.reasons.join(), /changed the work tree/);
+});
+test("read-only: callerGate with --gate passes on no change, fails on a change or a failing command", () => {
+  const d = repo(), b = head(d), sig = gitSig(d), p = (a) => (a[0] === "ls" ? [{ id: "A1", cwd: d }] : {});
+  const o = (gate) => ({ gate, base: b, ro: true, roSig: sig });
+  assert.equal(callerGate(o('node -e "process.exit(0)"'), "A1", p, runGate, {}).status, "PASS"); // no diff is not a failure here
+  assert.equal(callerGate(o('node -e "process.exit(1)"'), "A1", p, runGate, {}).status, "FAIL");
+  writeFileSync(join(d, "a.txt"), "z\n");
+  const r = callerGate(o('node -e "process.exit(0)"'), "A1", p, runGate, {}); assert.equal(r.status, "FAIL"); assert.match(r.reasons.join(), /changed the work tree/);
 });

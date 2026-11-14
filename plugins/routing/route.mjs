@@ -12,7 +12,7 @@ import path, { basename, dirname, join, resolve, sep, relative, isAbsolute } fro
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest, peekRequest } from "../gate/server/store.mjs";
-import { runGate, gateOpts, EMPTY_TREE, hasSecret } from "../gate/server/gate.mjs";
+import { runGate, gateOpts, EMPTY_TREE, hasSecret, gitSig } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
 import { batchAllowed, pathAllowed } from "./readguard.mjs";
@@ -303,10 +303,15 @@ export function callerGate(o, agentId, paseo, gate = runGate, routes = {}) {
   const cwd = cwdOf();
   if (!cwd) return { status: "FAIL", reasons: ["agent cwd unknown: gate not run"], attempts: 0 };
   // a gate that saw no change at all is not a PASS for an edit task: the agent produced nothing (the fake gates of older callers carry no counts, so they are unaffected)
-  const judge = (r) => judgeNoDiff(r, cwd);
+  // read-only task: "no diff" is the expected result; instead the work tree must be exactly as it was (o.roSig, taken before the agent started)
+  const judge = o.ro ? (r) => r : (r) => judgeNoDiff(r, cwd);
   // the secret scan is bounded too (a 1,800-file folder held a slot for 3+ min per gate, twice): at least 120 s, at most until the attempt deadline
-  const gopts = () => ({ ...gateOpts(routes, cwd, o.gate, o.base, o.maxLines), ...(o.deadlineMs ? { deadlineMs: Math.max(o.deadlineMs, (o.now ?? Date.now)() + 120_000) } : {}) });
+  const gopts = () => ({ ...gateOpts(routes, cwd, o.gate, o.base, o.maxLines), ...(o.ro ? { readOnly: true } : {}), ...(o.deadlineMs ? { deadlineMs: Math.max(o.deadlineMs, (o.now ?? Date.now)() + 120_000) } : {}) });
   let res = judge(gate(cwd, gopts()));
+  if (o.ro) { // no re-prompt for a read-only task: a changed tree or a failed command is the result
+    const reasons = [...(res.reasons ?? [])]; if (o.roSig && gitSig(cwd) !== o.roSig) reasons.push("read-only task changed the work tree in " + cwd);
+    return reasons.length ? { status: "FAIL", reasons, attempts: 1 } : { status: "PASS", reasons: [], attempts: 0 };
+  }
   if (res.status === "PASS") return { status: "PASS", reasons: [], attempts: 0 };
   if (routes.gateRetry === false) return { status: "FAIL", reasons: res.reasons, attempts: 1 };
   const fail = (why) => ({ status: "FAIL", reasons: [...res.reasons, why], attempts: 1 });
@@ -578,7 +583,8 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     for (const [k, v] of Object.entries(labels)) if (v) args.push("--label", `${k}=${v}`);
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
-    if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines });
+    const sig0 = ro ? gitSig(o.cwd) : null; // read-only: fingerprint of the work tree before the agent starts (null outside git)
+    if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines, sig: sig0 });
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
     const guard = ro ? snapshot(o.cwd) : null;
@@ -607,6 +613,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
       return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);
     }
+    if (j.status === "completed" && sig0 !== null && gitSig(o.cwd) !== sig0) { // git view of the same check (the snapshot above skips .git and node_modules)
+      trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed the git work tree in ${o.cwd}: failed` });
+      return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);
+    }
     if (j.status === "completed" && !o.noAsk && !ro) { // read-only types never park: text inside a summarised file could otherwise hold a slot for 10 min
      // talk-back: the agent ended with `[ASK] <question>`: park it (alive, no gate, no retire) until `agent-hub reply`
       const a = withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs);
@@ -622,10 +632,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       if (bad) { trace.push({ provider: prov, status: "error", error: bad + " (next provider tried)" }); retire(j.agentId, wt); continue; }
     }
     if (j.status === "completed") {
-      // read-only task: the provider's read-only mode forbids writes, so there is no diff to judge (the plugin hook marks it N/A too); the answer was checked above. Scanning the caller's own tree (node_modules, ignored files) would only fail a task that changed nothing.
-      if (!o.gate || ro) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);
+      // read-only task with --gate: callerGate runs the command and the nothing-changed check only (no diff or ignored-file scan of the caller's own tree)
+      if (!o.gate) return done(withAnswer({ used: prov, agentId: j.agentId, status: "completed", trace }, paseo, o.answerRetryMs), wt);
       // Caller-side gate: the plugin cannot match a request to a worktree it did not know at create time, so the caller runs the gate itself in the agent's real cwd.
-      const g = callerGate({ ...o, knownCwd: args[2], deadlineMs: t0 + lim * 1000 }, j.agentId, paseo, gate, routes);
+      const g = callerGate({ ...o, ro, roSig: sig0, knownCwd: args[2], deadlineMs: t0 + lim * 1000 }, j.agentId, paseo, gate, routes);
       // the plugin hook may have re-prompted already (its attempts live in the plugin store, keyed by agent id)
       const pluginAttempts = (() => { try { return Number(loadState(o.gateDir ?? gateDir())[j.agentId]?.attempts) || 0; } catch { return 0; } })();
       g.attempts += pluginAttempts;
@@ -742,7 +752,11 @@ export function runStatus(id, paseo, dir = gateDir(), gate = runGate, routes = {
   // A route cut off before its caller-side gate ran leaves the request unclaimed and no gate state: "completed, gate null" would accept a no-op edit. Run the requested gate now.
   const cwd = i.Cwd ? (agentCwd(paseo, id) ?? i.Cwd) : null;
   const req = !g && done && cwd ? peekRequest(dir, cwd) : null;
-  if (req && req.cmd && !req.readOnly) {
+  if (req && req.readOnly) { // read-only: the work tree must be unchanged (fingerprint taken at start), then the gate command if any; no diff/ignored-file scan
+    const reasons = []; if (req.sig && gitSig(cwd) !== req.sig) reasons.push("read-only task changed the work tree in " + cwd);
+    if (req.cmd) reasons.push(...(gate(cwd, { cmd: req.cmd, readOnly: true }).reasons ?? []));
+    out = { ...out, status: reasons.length ? "failed-readonly-changed" : "completed", gate: { status: reasons.length ? "FAIL" : "PASS", reasons, attempts: 0, ranBy: "status" } };
+  } else if (req && req.cmd) {
     const r = judgeNoDiff(gate(cwd, gateOpts(routes, cwd, req.cmd, req.base, req.maxLines)), cwd);
     out = { ...out, status: r.status === "PASS" ? "completed" : "gate-failed", gate: { status: r.status, reasons: r.reasons ?? [], attempts: 0, ranBy: "status" } };
   }

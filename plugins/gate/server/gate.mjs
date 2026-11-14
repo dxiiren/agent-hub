@@ -1,10 +1,10 @@
 // Gate core: pure functions, no Paseo imports, so the unit tests run under plain node.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, rmSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, rmSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 
 // Secret scanning is delegated to gitleaks (pinned version, rules = config/gitleaks.toml: the default rules plus a few of ours). No hand-written regexes here.
 export const GITLEAKS_VERSION = "8.30.1";
@@ -149,9 +149,18 @@ function scanFile(f, label, budget, out, deleted = new Set()) {
 export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = "") {
   const out = [];
   let ents = [];
+  // symlinks are followed by real path; a folder already scanned (or being scanned) is skipped, which also breaks loops. pnpm node_modules is mostly links into its own .pnpm store, so each target is read once.
+  try { const real = realpathSync(root); const seen = (budget.seen ??= new Set()); if (seen.has(real)) return out; seen.add(real); } catch { return ["scan incomplete: cannot resolve folder " + (rel || ".")]; }
   try { ents = readdirSync(root, { withFileTypes: true }); } catch { return ["scan incomplete: cannot read folder " + (rel || ".")]; }
   for (const e of ents) {
     const f = join(root, e.name), label = rel + e.name;
+    if (e.isSymbolicLink()) {
+      let st; try { st = statSync(f); } catch { out.push("scan incomplete: symlink " + label + " not scanned (broken or unreadable target)"); continue; }
+      if (st.isDirectory()) { if (depth >= MAX_DEPTH) { out.push("scan incomplete: " + label + " is deeper than " + MAX_DEPTH + " levels"); continue; } out.push(...scanFolder(f, budget, depth + 1, label + "/")); }
+      else if (st.isFile()) { let real = f; try { real = realpathSync(f); } catch { /* scan the link path */ } const seen = (budget.seenFiles ??= new Set()); if (!seen.has(real)) { seen.add(real); scanFile(f, label, budget, out); } }
+      else out.push("scan incomplete: symlink " + label + " not scanned (not a file or folder)");
+      continue;
+    }
     if (e.isDirectory()) {
       if (depth >= MAX_DEPTH) { out.push("scan incomplete: " + label + " is deeper than " + MAX_DEPTH + " levels"); continue; }
       out.push(...scanFolder(f, budget, depth + 1, label + "/")); continue;
@@ -192,6 +201,16 @@ export function gateOpts(routes, cwd, cmd, base = null, maxLines = null) {
   return { base, requireBase: true, cmd: cmd ?? row.cmd, maxLines: Number(maxLines ?? row.maxLines ?? 400), forbid: row.forbid ?? null, allow: row.allow ?? null };
 }
 
+/** Cheap "did anything change" fingerprint of a git work tree: git status (untracked included, ignored not) plus the diff against HEAD. null = not a git work tree / git failed. A read-only task must leave it unchanged. */
+export function gitSig(cwd) {
+  try {
+    const h = createHash("sha1");
+    h.update(git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]));
+    h.update(git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"]));
+    return h.digest("hex");
+  } catch { return null; }
+}
+
 /**
  * Run the gate in `cwd`.
  * opts: { cmd, maxLines = 400, forbid (RegExp source or null), allow (RegExp source or null) }
@@ -201,6 +220,11 @@ export function gateOpts(routes, cwd, cmd, base = null, maxLines = null) {
 export function runGate(cwd, opts = {}) {
   const { cmd, maxLines = 400, forbid = null, allow = null, base = null, requireBase = false } = opts;
   const reasons = [];
+  // read-only task: nothing may have changed (the caller compares gitSig before/after), so the diff, history and ignored-file scans have nothing to judge; only the gate command runs
+  if (opts.readOnly) {
+    if (cmd) { const r = spawnSync(cmd, { cwd, shell: true, encoding: "utf8", timeout: 120_000 }); if (r.status !== 0) reasons.push(`gate cmd exit ${r.status}: ` + (r.stderr || r.stdout || "").trim().slice(-300)); }
+    return { status: reasons.length ? "FAIL" : "PASS", noRepo: false, reasons, files: 0, changed: 0, ranCmd: Boolean(cmd), readOnly: true };
+  }
   let diff = "", hist = "", files = [], raw = [], deleted = new Set();
   const budget = { left: MAX_TOTAL, deadline: opts.deadlineMs ?? null };
   // not a git work tree: the diff rules cannot run, so fail closed unless a cmd gate exists and no path rules were asked for

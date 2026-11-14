@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -361,4 +361,16 @@ test("big ignored folder: listed as one entry (no buffer overflow), a hidden sec
   assert.deepEqual(runGate(d, { cmd: OK }).reasons, []);
   writeFileSync(join(d, "node_modules", "p", "hid.js"), 'api_key = "' + "z9".repeat(15) + '"\n');
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern in ignored file node_modules\/p\/hid\.js/);
+});
+test("symlinks in an ignored folder: target scanned once (pnpm-like), loops end, a secret behind a link is caught, a broken link fails closed", () => {
+  const d = repo(); writeFileSync(join(d, ".gitignore"), "node_modules/\n"); sh(d, "add", "."); sh(d, "-c", "user.name=t", "-c", "user.email=t@t.t", "commit", "-qm", "ig");
+  const store = join(d, "node_modules", ".store", "pkg"); mkdirSync(store, { recursive: true }); writeFileSync(join(store, "i.js"), "x\n");
+  for (let i = 0; i < 50; i++) symlinkSync(store, join(d, "node_modules", "l" + i), "junction"); // many links, one target
+  symlinkSync(join(d, "node_modules"), join(store, "loop"), "junction");
+  assert.deepEqual(runGate(d, { cmd: OK }).reasons, []);
+  const out = mkdtempSync(join(tmpdir(), "outside-")); writeFileSync(join(out, "s.js"), 'api_key = "' + "z9".repeat(15) + '"\n');
+  symlinkSync(out, join(d, "node_modules", "ext"), "junction"); // target outside the repo
+  assert.match(runGate(d, { cmd: OK }).reasons.join(), /secret pattern in ignored file node_modules\/ext\/s\.js/);
+  rmSync(out, { recursive: true });
+  assert.match(runGate(d, { cmd: OK }).reasons.join(), /symlink node_modules\/ext not scanned/);
 });
