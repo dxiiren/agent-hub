@@ -11,7 +11,7 @@ export const maxInFlight = (routes = {}, env = process.env) => {
   const v = Number(env.AGENT_HUB_MAX_INFLIGHT ?? routes.maxInFlight ?? DEFAULT_MAX_IN_FLIGHT);
   return Number.isFinite(v) && v >= 0 ? Math.floor(v) : DEFAULT_MAX_IN_FLIGHT;
 };
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; } };
+export const alive = (pid, kill = process.kill) => { try { kill(pid, 0); return true; } catch { return false; } }; // EPERM = reused pid of another account, not our process
 // no process-start-time check here: it costs a powershell call and this runs on every poll of every waiting route. Pid reuse is bounded by the 3 h age limit (a route lives 15-45 min).
 const owned = (o, now) => o && Number.isInteger(o.pid) && alive(o.pid) && now - (o.at ?? 0) < 3 * 3600_000;
 const defaultSleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
