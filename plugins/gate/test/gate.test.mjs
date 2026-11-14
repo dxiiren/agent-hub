@@ -374,3 +374,15 @@ test("symlinks in an ignored folder: target scanned once (pnpm-like), loops end,
   rmSync(out, { recursive: true });
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /symlink node_modules\/ext not scanned/);
 });
+
+test("a .pyc / __pycache__ file holding a token-shaped run is not a secret finding; the same bytes in a source file still are (HUBFIX3)", async () => {
+  const { scanFolder } = await import("../server/gate.mjs");
+  const d = mkdtempSync(join(tmpdir(), "gate-pyc-")); mkdirSync(join(d, "__pycache__"));
+  const tok = "api_key" + "=" + "abcdefghijklmnopqrstuv9";
+  writeFileSync(join(d, "__pycache__", "m.cpython-313.pyc"), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(tok)]));
+  writeFileSync(join(d, "x.pyc"), tok);
+  assert.deepEqual(scanFolder(d), []);
+  writeFileSync(join(d, "real.txt"), tok);
+  assert.match(scanFolder(d).join(), /secret pattern.*real\.txt/);
+  rmSync(d, { recursive: true, force: true });
+});
