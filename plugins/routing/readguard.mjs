@@ -44,7 +44,7 @@ export function pathAllowed(path, roots, env = process.env, home = os.homedir())
 }
 
 const SHELL_TOOLS = /^(execute|run_?shell_?command|bash|shell)$/i;
-const READ_CMDS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "head", "tail", "cat", "ls", "wc", "find", "type", "dir"]); // sort/uniq/cut/nl dropped: sort -o/--compress-program/-T and uniq write files
+const READ_CMDS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "head", "tail", "cat", "ls", "wc", "find", "type", "dir", "findstr"]); // sort/uniq/cut/nl dropped: sort -o/--compress-program/-T and uniq write files
 const STDIN_CMDS = new Set(["head", "tail", "wc"]); // after a pipe: flags and numbers only, no file
 const GREP_CMDS = new Set(["grep", "egrep", "fgrep", "rg"]);
 const META = /[;&<>`$(){}*?\[\]~!\\\n\r"']/; // no chaining, redirects, substitution, globs, quotes (a pattern needing them is refused, never guessed)
@@ -78,7 +78,8 @@ function tokenize(cmd) {
     if (ch === '"' || ch === "'") { q = ch; w = w ?? ""; continue; }
     if (ch === "|") { if (cmd[i + 1] === "|" || !segs[segs.length - 1].length && w === null) return null; push(); segs.push([]); continue; }
     if (/\s/.test(ch)) { push(); continue; }
-    if (META.test(ch)) return null;
+    if (ch === "\\" && /[^"'\s]/.test(cmd[i + 1] ?? "")) { w = (w ?? "") + ch; continue; } // a Windows path separator; never before a quote (bash would read it as a literal quote and desync the quoting), whitespace or the end
+    if (META.test(ch) || ch === "\\") return null;
     w = (w ?? "") + ch;
   }
   if (q) return null; push(); return segs.every((x) => x.length) ? segs : null;
@@ -91,7 +92,7 @@ export function commandAllowed(cmd, roots, env, home, cwd) {
   for (let i = 0; i < segs.length; i++) {
     const [c, ...args] = segs[i]; if (!c) return { ok: false, why: "empty pipe segment" };
     if (!READ_CMDS.has(c)) return { ok: false, why: `command ${c} is not a read command` };
-    if (i > 0 && !STDIN_CMDS.has(c) && !GREP_CMDS.has(c)) return { ok: false, why: `${c} after a pipe` };
+    if (i > 0 && !STDIN_CMDS.has(c) && !GREP_CMDS.has(c) && c !== "findstr") return { ok: false, why: `${c} after a pipe` };
     let rest;
     if (c === "sed") {
       if (!(args.length === 3 && args[0] === "-n" && /^\d+(,\d+)?p$/.test(args[1]))) return { ok: false, why: "sed only as: sed -n Np FILE" };
@@ -101,6 +102,10 @@ export function commandAllowed(cmd, roots, env, home, cwd) {
       for (; k < args.length; k += 2) { const re = FIND_VAL[args[k]]; if (!re || args[k + 1] === undefined || !re.test(args[k + 1])) return { ok: false, why: `find expression ${args[k]} is not allowed` }; }
       for (const d of paths.length ? paths : ["."]) { const r = pathAllowedDirOrFile(abs(d), roots, env, home); if (!r.ok) return { ok: false, why: `${d}: ${r.why}` }; }
       continue;
+    } else if (c === "findstr") { // Windows search (qwenbench 15-11: the agent reaches for findstr first): read-only flags only, never /f: /g: /d: /s (file lists, recursion)
+      const fl = args.filter((a) => a.startsWith("/")), ps = args.filter((a) => !a.startsWith("/"));
+      const badF = fl.find((a) => !/^\/([nilvbermx]|c:.*)$/i.test(a)); if (badF) return { ok: false, why: `findstr flag ${badF} is not allowed` };
+      rest = fl.some((a) => /^\/c:/i.test(a)) ? ps : ps.slice(1);
     } else {
       const p = parseFlags(c, args); if (p.bad) return { ok: false, why: `flag ${p.bad} is not allowed` };
       rest = p.rest;

@@ -929,6 +929,17 @@ function main(argv) {
   console.log(JSON.stringify(res));
   const bad = res.trace?.length === 1 && /^unknown provider id/.test(res.trace[0].error ?? "") ? res.trace[0].error : null;
   if (bad) { console.error("route: " + bad); return 2; }
-  return res.used && res.status === "completed" ? 0 : res.status === "asking" ? 3 : 1; // 3 = parked, waiting for `agent-hub reply`
+  const code = routeExitCode(res); const why = noRunLine(res); if (why) console.error(why);
+  return code; // 3 = parked, waiting for `agent-hub reply`
+}
+/** HUBFIX3 (T031): a route that ran on no provider, or that "completed" with nothing to read, never exits 0 and always prints one line saying which providers were tried and why each was skipped. */
+export function routeExitCode(res) {
+  if (res?.status === "asking") return 3;
+  return res?.used && res.status === "completed" && (res.gate || String(res.answer ?? "").trim()) ? 0 : 1; // a gated edit may end with no prose; a read-only answer may not
+}
+export function noRunLine(res) {
+  if (routeExitCode(res) !== 1) return null;
+  const t = (res?.trace ?? []).map((x) => `${x.provider ?? "?"}: ${String(x.skip ?? x.error ?? "no result").slice(0, 120)}`);
+  return "route: " + (res?.used ? "completed with an empty answer on " + res.used : "no provider ran") + (t.length ? " (" + t.join("; ") + ")" : "") + ": retry, or pass --provider to pick one";
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) { const c = main(process.argv.slice(2)); if (c !== null) process.exit(c); }

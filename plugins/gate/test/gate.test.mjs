@@ -375,20 +375,15 @@ test("symlinks in an ignored folder: target scanned once (pnpm-like), loops end,
   assert.match(runGate(d, { cmd: OK }).reasons.join(), /symlink node_modules\/ext not scanned/);
 });
 
-test("secret scan skips only real bytecode under a __pycache__ segment; look-alikes are still scanned (HUBFIX3)", async () => {
-  const { scanFolder } = await import("../server/gate.mjs");
-  const tok = "api_key" + "=" + "abcdefghijklmnopqrstuv9";
-  const d = mkdtempSync(join(tmpdir(), "gate-pyc-"));
-  mkdirSync(join(d, "__pycache__")); mkdirSync(join(d, "my__pycache__dir"));
-  writeFileSync(join(d, "__pycache__", "m.cpython-313.pyc"), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(tok)]));
-  assert.deepEqual(scanFolder(d), [], "(1) real bytecode is not flagged");
-  writeFileSync(join(d, "notes__pycache__.txt"), tok);
-  assert.match(scanFolder(d).join(), /notes__pycache__\.txt/, "(2)");
-  writeFileSync(join(d, "x.pyc"), tok);
-  assert.match(scanFolder(d).join(), /x\.pyc/, "(3) text .pyc");
-  writeFileSync(join(d, "__pycache__", "t.pyc"), tok);
-  assert.match(scanFolder(d).join(), /__pycache__\/t\.pyc/, "text file named .pyc under __pycache__ is flagged");
-  writeFileSync(join(d, "my__pycache__dir", "a.pyc"), Buffer.concat([Buffer.from([0]), Buffer.from(tok)]));
-  assert.match(scanFolder(d).join(), /my__pycache__dir\/a\.pyc/, "(4)");
-  rmSync(d, { recursive: true, force: true });
+test("the secret scan skips nothing: a planted __pycache__/x.pyc with NUL + token and a git-ignored file with a token are both flagged; a pyc says why (HUBFIX3 rev 3)", () => {
+  const tok = "api_key" + "=" + "abcdefghijklmnopqrstuv9", bin = Buffer.concat([Buffer.from([0, 1]), Buffer.from(tok)]);
+  const scan = (d) => runGate(d, { cmd: OK, base: undefined });
+  let d = repo(); mkdirSync(join(d, "__pycache__")); writeFileSync(join(d, "__pycache__", "x.pyc"), bin);
+  assert.match(scan(d).reasons.join(), /secret pattern in .*x\.pyc \(compiled file; delete it or do not generate it\)/);
+  d = repo(); writeFileSync(join(d, ".gitignore"), "ig.txt"); writeFileSync(join(d, "ig.txt"), tok); sh(d, "add", ".gitignore"); sh(d, "-c", "user.name=t", "-c", "user.email=t@t.t", "commit", "-qm", "ig");
+  assert.match(scan(d).reasons.join(), /secret pattern/);
+});
+test("the gate command runs with PYTHONDONTWRITEBYTECODE=1: a python test run leaves no __pycache__ (HUBFIX3 rev 3)", () => {
+  const d = repo(); writeFileSync(join(d, "m.py"), "X = 1"); writeFileSync(join(d, "t.py"), "import m");
+  const r = runGate(d, { cmd: "python t.py", base: undefined }); assert.ok(!existsSync(join(d, "__pycache__")), r.reasons.join());
 });

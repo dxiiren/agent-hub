@@ -20,6 +20,7 @@ regexes = [
   '''^[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)[A-Z0-9_]*$''',
   '''^(?:REPLACE|CHANGE|YOUR|EXAMPLE|PLACEHOLDER)_[A-Z0-9_]*$''',
   '''^<[^>]*>$''',
+  '''^[a-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\?\.[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$''', # a code property read such as res?.tokens: an optional-chain expression, never a literal value (HUBFIX3: ledger.mjs was refused as a credential)
 ]
 # an unquoted letters-only value is code naming something (token = parseToken), a quoted one is a secret
 [[rules.allowlists]]

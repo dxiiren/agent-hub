@@ -61,7 +61,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && pro
 export const QWEN_SYSTEM_SETTINGS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "qwen", "system-settings.json");
 export const QWEN_SYSTEM_SETTINGS_RO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "qwen", "system-settings-readonly.json");
 /** readOnly = the launcher was started as the "-ro" twin provider (--read-only): sensitive reads are denied by the CLI itself. */
-export const qwenEnv = (env = process.env, readOnly = false) => ({ ...env, QWEN_CODE_SYSTEM_SETTINGS_PATH: readOnly ? QWEN_SYSTEM_SETTINGS_RO : QWEN_SYSTEM_SETTINGS });
+export const qwenEnv = (env = process.env, readOnly = false) => ({ ...env, PYTHONDONTWRITEBYTECODE: "1", QWEN_CODE_SYSTEM_SETTINGS_PATH: readOnly ? QWEN_SYSTEM_SETTINGS_RO : QWEN_SYSTEM_SETTINGS });
 export const takeReadOnlyFlag = (argv) => { const i = argv.indexOf("--read-only"); if (i < 0) return false; argv.splice(i, 1); return true; };
 
 /**

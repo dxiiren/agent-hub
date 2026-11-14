@@ -128,7 +128,7 @@ function flushScan(budget, out) {
   if (!items.length) return;
   // a hit is narrowed by halving (k hits cost about k*log2(n) scans, not n); a hit that no single file shows (a secret wrapped across two files) still fails closed
   const hit = (xs) => hasSecret(xs.map((i) => i.text).join(String.fromCharCode(10)));
-  const find = (xs) => { if (!hit(xs)) return 0; if (xs.length === 1) { out.push("secret pattern in " + xs[0].label); return 1; } const m = xs.length >> 1; return find(xs.slice(0, m)) + find(xs.slice(m)) || (out.push("secret pattern across files " + xs.map((i) => i.label).slice(0, 3).join(", ")), 1); };
+  const find = (xs) => { if (!hit(xs)) return 0; if (xs.length === 1) { out.push(secretMsg(xs[0].label)); return 1; } const m = xs.length >> 1; return find(xs.slice(0, m)) + find(xs.slice(m)) || (out.push("secret pattern across files " + xs.map((i) => i.label).slice(0, 3).join(", ")), 1); };
   try { find(items); } catch (e) { out.push(e.message); }
 }
 /** Scan one file into `out`; the budget is shared so a repo of many files cannot pass unscanned. */
@@ -139,7 +139,6 @@ function scanFile(f, label, budget, out, deleted = new Set()) {
     if (budget.deadline && Date.now() > budget.deadline) { if (!budget.timedOut) out.push("scan incomplete: the gate time limit was reached before every file was scanned"); budget.timedOut = true; return; }
     budget.left -= st.size;
     const buf = readFileSync(f);
-    if (isBytecode(label, buf)) return;
     const text = bufText(buf);
     (budget.batch ??= []).push({ label, text }); budget.batchBytes = (budget.batchBytes ?? 0) + text.length;
     if (budget.batchBytes >= BATCH) flushScan(budget, out);
@@ -174,8 +173,11 @@ export function scanFolder(root, budget = { left: MAX_TOTAL }, depth = 0, rel = 
 }
 
 const isPyc = (f) => f.includes("__pycache__") || f.endsWith(".pyc"); // exempt only from the allow-list; forbid applies to every path
-/** HUBFIX3 (qwenbench 08: a correct edit failed on token-shaped bytes in compiled bytecode). Skip the secret scan ONLY for real bytecode: a path SEGMENT equal to __pycache__, a name ending .pyc, and a NUL byte in the content. A text file with those names, or a folder like my__pycache__dir, is still scanned. shortcut: a tracked binary .pyc under __pycache__ is also skipped (scanFile does not know tracked-ness); upgrade if one is ever committed. */
-export const isBytecode = (label, buf) => String(label).split(/[\\/]/).slice(0, -1).includes("__pycache__") && /\.pyc$/.test(label) && buf.includes(0);
+/** HUBFIX3 rev 3: the scan skips NOTHING (two exemptions, a content sniff and a git-ignore check, were withdrawn: an agent could steer both).
+ * The qwenbench 08 false positive is fixed at its cause: the gate command runs with PYTHONDONTWRITEBYTECODE=1 so python never writes a __pycache__. */
+export const GATE_ENV = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+/** A flagged compiled file says why. */
+export const secretMsg = (label) => "secret pattern in " + label + (/\.pyc$/.test(label) ? " (compiled file; delete it or do not generate it)" : "");
 
 /** Paths git status lists (changed, intent-to-add, untracked), NUL-separated, no rename pairing. */
 function statusPaths(cwd) {
@@ -255,7 +257,7 @@ export function runGate(cwd, opts = {}) {
   const reasons = [];
   // read-only task: nothing may have changed (the caller compares gitSig before/after), so the diff, history and ignored-file scans have nothing to judge; only the gate command runs
   if (opts.readOnly) {
-    if (cmd) { const r = spawnSync(cmd, { cwd, shell: true, encoding: "utf8", timeout: 120_000 }); if (r.status !== 0) reasons.push(`gate cmd exit ${r.status}: ` + (r.stderr || r.stdout || "").trim().slice(-300)); }
+    if (cmd) { const r = spawnSync(cmd, { cwd, shell: true, encoding: "utf8", timeout: 120_000, env: GATE_ENV }); if (r.status !== 0) reasons.push(`gate cmd exit ${r.status}: ` + (r.stderr || r.stdout || "").trim().slice(-300)); }
     return { status: reasons.length ? "FAIL" : "PASS", noRepo: false, reasons, files: 0, changed: 0, ranCmd: Boolean(cmd), readOnly: true };
   }
   let diff = "", hist = "", files = [], raw = [], deleted = new Set();
@@ -316,7 +318,7 @@ export function runGate(cwd, opts = {}) {
   const bad = [...raw.filter((f) => forbid && rx(forbid).test(f)), ...files.filter((f) => allow && !rx(allow).test(f))];
   if (bad.length) reasons.push("path not allowed: " + bad.join(","));
   if (cmd) {
-    const r = spawnSync(cmd, { cwd, shell: true, encoding: "utf8", timeout: 120_000 });
+    const r = spawnSync(cmd, { cwd, shell: true, encoding: "utf8", timeout: 120_000, env: GATE_ENV });
     if (r.status !== 0) reasons.push(`gate cmd exit ${r.status}: ` + (r.stderr || r.stdout || "").trim().slice(-300));
   }
   return { status: reasons.length ? "FAIL" : "PASS", noRepo: !inRepo, reasons, files: files.length, changed: added.length + removed.length, ranCmd: Boolean(cmd) };
