@@ -1,37 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { grantMcp } from "../mcp-grant.mjs";
 
-const cfg = (servers) => JSON.stringify({ mcpServers: servers });
-const ALLOW = [{ name: "swing", command: "node", args: ["swing.js"] }];
-const setup = () => { const root = mkdtempSync(join(tmpdir(), "mcpg-")); const cwd = join(root, "task"), out = join(root, "cfg"); mkdirSync(cwd); mkdirSync(out); mkdirSync(join(cwd, ".git")); return { cwd, out }; };
+const ALLOW = [{ name: "swing", command: "node", args: ["swing.js"], env: { JAVA_HOME: "C:/jdk" } }];
 
-test("no flag = nothing loaded, even with a .mcp.json in the task folder (default is only the hub's own MCP)", () => {
-  const { cwd } = setup(); writeFileSync(join(cwd, ".mcp.json"), cfg({ evil: { command: "calc.exe" } }));
-  assert.deepEqual(grantMcp({ cwd, allow: ALLOW }), { servers: [] });
+test("no names = nothing loaded, even with a .mcp.json in a task folder (the grant never reads any file)", () => {
+  const d = mkdtempSync(join(tmpdir(), "mcpg-")); writeFileSync(join(d, ".mcp.json"), JSON.stringify({ mcpServers: { evil: { command: "calc.exe" } } }));
+  assert.deepEqual(grantMcp({ allow: ALLOW }), { servers: [] });
+  assert.deepEqual(grantMcp({ names: "", allow: ALLOW }), { servers: [] });
 });
-test("flag with a file inside the task folder is refused", () => {
-  const { cwd } = setup(); const f = join(cwd, "m.json"); writeFileSync(f, cfg({ swing: { command: "node", args: ["swing.js"] } }));
-  assert.match(grantMcp({ flag: f, cwd, allow: ALLOW }).refused, /inside the task folder/);
+test("a name that is not on the allowlist is refused", () => {
+  assert.match(grantMcp({ names: "evil", allow: ALLOW }).refused, /not on the hub allowlist/);
+  assert.match(grantMcp({ names: "swing,evil", allow: ALLOW }).refused, /"evil"/);
 });
-test("flag with a file inside any git tree is refused", () => {
-  const { cwd } = setup(); const other = mkdtempSync(join(tmpdir(), "mcpg-git-")); mkdirSync(join(other, ".git")); const f = join(other, "m.json"); writeFileSync(f, cfg({ swing: { command: "node", args: ["swing.js"] } }));
-  assert.match(grantMcp({ flag: f, cwd, allow: ALLOW }).refused, /git/);
+test("the flag on a read-only type is refused", () => {
+  assert.match(grantMcp({ names: "swing", allow: ALLOW, readOnly: true }).refused, /read-only/);
 });
-test("a server not on the allowlist, or with a changed command or args, is refused", () => {
-  const { cwd, out } = setup(); const f = join(out, "m.json");
-  writeFileSync(f, cfg({ other: { command: "node", args: ["swing.js"] } })); assert.match(grantMcp({ flag: f, cwd, allow: ALLOW }).refused, /not on the hub allowlist/);
-  writeFileSync(f, cfg({ swing: { command: "calc.exe", args: ["swing.js"] } })); assert.match(grantMcp({ flag: f, cwd, allow: ALLOW }).refused, /not on the hub allowlist/);
-  writeFileSync(f, cfg({ swing: { command: "node", args: ["swing.js", "--x"] } })); assert.match(grantMcp({ flag: f, cwd, allow: ALLOW }).refused, /not on the hub allowlist/);
-});
-test("the flag on a read-only type is refused before the file is even read", () => {
-  const { cwd, out } = setup(); const f = join(out, "m.json"); writeFileSync(f, cfg({ swing: { command: "node", args: ["swing.js"] } }));
-  assert.match(grantMcp({ flag: f, cwd, allow: ALLOW, readOnly: true, readFile: () => { throw new Error("read"); } }).refused, /read-only/);
-});
-test("allowlisted swing via the flag on an edit-capable type is loaded", () => {
-  const { cwd, out } = setup(); const f = join(out, "m.json"); writeFileSync(f, cfg({ swing: { command: "node", args: ["swing.js"], env: { A: "1" } } }));
-  assert.deepEqual(grantMcp({ flag: f, cwd, allow: ALLOW }), { servers: [{ name: "swing", command: "node", args: ["swing.js"], env: [{ name: "A", value: "1" }] }] });
+test("allowlisted swing on an edit-capable type is loaded with the ALLOWLIST's command, args and env; the caller cannot add loader variables", () => {
+  const g = grantMcp({ names: "swing", allow: ALLOW, NODE_OPTIONS: "--require evil.js", env: { NODE_OPTIONS: "--require evil.js" }, command: "calc.exe" });
+  assert.deepEqual(g, { servers: [{ name: "swing", command: "node", args: ["swing.js"], env: [{ name: "JAVA_HOME", value: "C:/jdk" }] }] });
+  assert.ok(!JSON.stringify(g).includes("evil"));
 });
