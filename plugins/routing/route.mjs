@@ -12,7 +12,7 @@ import path, { basename, dirname, join, resolve, sep, relative, isAbsolute } fro
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { gateDir, loadState, writeRequest, peekRequest } from "../gate/server/store.mjs";
-import { runGate, gateOpts, EMPTY_TREE, hasSecret, gitSig } from "../gate/server/gate.mjs";
+import { runGate, gateOpts, EMPTY_TREE, hasSecret, gitSig, OVERRUN } from "../gate/server/gate.mjs";
 import { resolveCached } from "./resolve.mjs";
 import { migrate } from "../../scripts/provider.mjs"; // cyclic with provider.mjs, used only at call time
 import { batchAllowed, pathAllowed } from "./readguard.mjs";
@@ -317,6 +317,7 @@ const judgeNoDiff = (r, cwd) => r.status === "PASS" && !r.noRepo && r.files === 
 
 /** Read-only post-check: null = unchanged, else the reason. Uses the git fingerprint taken before the run; with none (not a git tree, an old request) the folder snapshot hash; with neither the task is unverifiable, never a PASS. */
 export function roProblem(cwd, { sig, guardHash } = {}) {
+  if (sig?.endsWith(OVERRUN)) return "unverifiable: the ignored files under " + cwd + " are too many to fingerprint within the budget (cannot show a read-only task changed nothing)";
   if (sig) return gitSig(cwd) === sig ? null : "read-only task changed the work tree in " + cwd;
   if (guardHash) return sha(snapshot(cwd)) === guardHash ? null : "read-only task changed files in " + cwd;
   return "unverifiable: no before-state was recorded for this read-only task (cannot show it changed nothing)";
@@ -647,6 +648,10 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (j.status === "completed" && guard !== null && snapshot(o.cwd) !== guard) {
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed files in ${o.cwd}: failed` });
       return done({ used: prov, agentId: j.agentId, status: "failed-readonly-changed", trace }, wt);
+    }
+    if (j.status === "completed" && sig0?.endsWith(OVERRUN)) {
+      trace.push({ provider: prov, status: "error", error: `read-only task ${o.type}: ${roProblem(o.cwd, { sig: sig0 })}` });
+      return done({ used: prov, agentId: j.agentId, status: "unverifiable", trace }, wt);
     }
     if (j.status === "completed" && sig0 !== null && gitSig(o.cwd) !== sig0) { // git view of the same check (the snapshot above skips .git and node_modules)
       trace.push({ provider: prov, status: "error", error: `read-only task ${o.type} changed the git work tree in ${o.cwd}: failed` });

@@ -1,6 +1,6 @@
 // Gate core: pure functions, no Paseo imports, so the unit tests run under plain node.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, rmSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { readFileSync, rmSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -201,15 +201,41 @@ export function gateOpts(routes, cwd, cmd, base = null, maxLines = null) {
   return { base, requireBase: true, cmd: cmd ?? row.cmd, maxLines: Number(maxLines ?? row.maxLines ?? 400), forbid: row.forbid ?? null, allow: row.allow ?? null };
 }
 
-/** Cheap "did anything change" fingerprint of a git work tree: git status (untracked included, ignored not) plus the diff against HEAD. null = not a git work tree / git failed. A read-only task must leave it unchanged. */
-export function gitSig(cwd) {
+export const OVERRUN = "!overrun";
+/** Stat-only fingerprint of the git-ignored entries below cwd (same `--directory` listing as the gate's ignored scan; symlinks are not followed). overrun = the entry or time bound was hit, so the fingerprint cannot prove "unchanged". shortcut: (1) only inside cwd, readAllow roots outside it are not fingerprinted; (2) inside node_modules only names and folder mtimes are fingerprinted (a create or delete is caught, an in-place edit of an existing file is not) because lstat costs 0.5 ms per entry on this laptop (27 s for a 56k-entry pnpm tree); upgrade both if a read-only provider can write there. */
+export function ignoredSig(cwd, { maxEntries = 400000, maxMs = 30000 } = {}) {
+  const h = createHash("sha1"), end = Date.now() + maxMs; let n = 0, overrun = false;
+  const walk = (dir, rel, nm) => {
+    let ents; try { ents = readdirSync(dir, { withFileTypes: true }); } catch { h.update("?" + rel); return; }
+    ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const e of ents) {
+      if (overrun) return;
+      if (++n > maxEntries || ((n & 255) === 0 && Date.now() > end)) { overrun = true; return; }
+      const p = join(dir, e.name), r = rel + e.name;
+      if (e.isDirectory()) { let m = 0; try { m = lstatSync(p).mtimeMs; } catch { /* vanished */ } h.update("d|" + r + "|" + m + "\n"); walk(p, r + "/", nm || e.name === "node_modules"); continue; }
+      if (nm) { h.update("n|" + r + "\n"); continue; }
+      try { const st = lstatSync(p); h.update(r + "|" + st.size + "|" + st.mtimeMs + "\n"); } catch { h.update("x|" + r + "\n"); }
+    }
+  };
+  for (const f of git(cwd, ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"]).split(String.fromCharCode(0)).filter(Boolean)) {
+    if (f.startsWith(".git/") || overrun) continue;
+    if (f.endsWith("/")) { h.update("d|" + f + "\n"); walk(join(cwd, f), f, f === "node_modules/" || f.endsWith("/node_modules/")); continue; }
+    try { const st = lstatSync(join(cwd, f)); h.update(f + "|" + st.size + "|" + st.mtimeMs + "\n"); } catch { h.update("x|" + f + "\n"); }
+    if (++n > maxEntries) overrun = true;
+  }
+  return { hash: h.digest("hex"), overrun };
+}
+
+/** Cheap "did anything change" fingerprint of a git work tree: git status (untracked included, ignored not) plus the diff against HEAD plus the ignored-file stat fingerprint (ignoredSig). null = not a git work tree / git failed. A read-only task must leave it unchanged. */
+export function gitSig(cwd, opts = {}) {
   try {
     const h = createHash("sha1");
     h.update(git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]));
     h.update(git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"]));
     h.update(git(cwd, ["rev-parse", "HEAD"])); // a commit or reset leaves status and diff clean
     try { h.update(git(cwd, ["symbolic-ref", "-q", "HEAD"])); } catch { h.update("detached"); } // a branch switch likewise
-    // shortcut: ignored files and mtimes are not hashed (50 MB / 34 s on a pnpm worktree), so a read-only agent that edits only an ignored file is not caught here; upgrade if read-only providers ever gain write access
+    // ignored files: path + size + mtime of every ignored entry inside cwd (stat only, no reads; a content scan of a pnpm tree was 50 MB / 34 s), bounded by entries and time; over the bound the sig ends in OVERRUN and the caller reports unverifiable, never PASS
+    const ig = ignoredSig(cwd, opts); h.update(ig.hash); if (ig.overrun) return h.digest("hex") + OVERRUN;
     return h.digest("hex");
   } catch { return null; }
 }

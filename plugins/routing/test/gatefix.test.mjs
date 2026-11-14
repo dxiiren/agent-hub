@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { callerGate, runStatus, snapshot, sha } from "../route.mjs";
+import { callerGate, runStatus, snapshot, sha, roProblem } from "../route.mjs";
 import { evaluate } from "../../gate/server/hook.mjs";
 import { writeRequest } from "../../gate/server/store.mjs";
 import { gateOpts, runGate, gitSig } from "../../gate/server/gate.mjs";
@@ -156,4 +156,30 @@ test("read-only: no recorded before-state is unverifiable, never PASS; the folde
   assert.equal(callerGate({ gate: 'node -e "process.exit(0)"', base: b, ro: true }, "A1", p, runGate, {}).status, "FAIL");
   writeRequest(st, d, null, b, { readOnly: true, guardHash: sha(snapshot(d)) });
   assert.equal(runStatus("A1", p, st, runGate, {}).status, "completed");
+});
+// ---- git-ignored files: a read-only task may not edit, create or delete them (14-11-2026) ----
+import { rmSync, utimesSync } from "node:fs";
+import { ignoredSig } from "../../gate/server/gate.mjs";
+function igRepo() {
+  const d = repo(); writeFileSync(join(d, ".gitignore"), "node_modules/\n.env\nout/\n"); sh(d, "add", "."); sh(d, "-c", "user.name=t", "-c", "user.email=t@t.t", "commit", "-qm", "ig");
+  mkdirSync(join(d, "node_modules", "p"), { recursive: true }); writeFileSync(join(d, "node_modules", "p", "i.js"), "1\n"); writeFileSync(join(d, ".env"), "A=1\n");
+  return d;
+}
+const roCheck = (d, mutate) => { const sig = gitSig(d); mutate(); return roProblem(d, { sig }); };
+test("read-only: ignored file edit, create and delete each fail; untouched ignored tree passes", () => {
+  const d = igRepo();
+  assert.equal(roCheck(d, () => {}), null);
+  assert.match(roCheck(d, () => writeFileSync(join(d, ".env"), "A=22\n")), /changed the work tree/); // edit (size change)
+  assert.match(roCheck(d, () => { const f = join(d, ".env"), t = new Date(Date.now() + 5000); utimesSync(f, t, t); }), /changed the work tree/); // edit, same size, new mtime
+  assert.match(roCheck(d, () => writeFileSync(join(d, "node_modules", "p", "new.js"), "n\n")), /changed the work tree/); // create inside an ignored folder
+  assert.match(roCheck(d, () => writeFileSync(join(d, "out"), "o\n")), /changed the work tree/); // create a new ignored top-level file
+  assert.match(roCheck(d, () => rmSync(join(d, "node_modules", "p", "i.js"))), /changed the work tree/); // delete
+  assert.match(roCheck(d, () => rmSync(join(d, ".env"))), /changed the work tree/);
+});
+test("read-only: ignored-file budget overrun is unverifiable, never PASS", () => {
+  const d = igRepo(); for (let i = 0; i < 20; i++) writeFileSync(join(d, "node_modules", "p", "f" + i + ".js"), "x");
+  assert.equal(ignoredSig(d, { maxEntries: 5 }).overrun, true);
+  assert.equal(ignoredSig(d).overrun, false);
+  const sig = gitSig(d, { maxEntries: 5 }); assert.match(sig, /!overrun$/);
+  assert.match(roProblem(d, { sig }), /^unverifiable/);
 });
