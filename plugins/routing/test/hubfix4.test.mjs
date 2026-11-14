@@ -96,15 +96,25 @@ test("apply-back: --cwd changed underneath (edit or new commit) => NOT applied, 
   assert.equal(applyPatchToCwd(d2, p2, null).ok, false, "no fingerprint (not a git tree at the start) never applies");
 });
 
-test("gate requests are per run: two routes on one --cwd each claim their own request; no overwrite", () => {
-  const dir = mkdtempSync(join(tmpdir(), "hf4-gate-")), cwd = mkdtempSync(join(tmpdir(), "hf4-cwd-"));
-  writeRequest(dir, cwd, "gate-A", "baseA", { run: "runa1111" }); writeRequest(dir, cwd, "gate-B", "baseB", { run: "runb2222" });
-  assert.equal(peekRequest(dir, cwd, "runb2222").cmd, "gate-B");
-  assert.equal(claimRequest(dir, cwd, "runb2222").cmd, "gate-B");
-  assert.equal(claimRequest(dir, cwd, "runa1111").cmd, "gate-A");
-  assert.equal(claimRequest(dir, cwd, "runa1111"), null, "a request is taken once");
-  writeRequest(dir, cwd, "gate-C", null, { run: "runc3333" });
-  assert.equal(claimRequest(dir, cwd, "rund4444"), null, "a run never takes another run's request");
+test("gate requests are bound to the agent id: concurrent routes on one cwd each get their own; a forged/missing label or another agent's id never selects a request", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hf4-gate-"));
+  writeRequest(dir, "agent-A-0001", "gate-A", "baseA"); writeRequest(dir, "agent-B-0002", "gate-B", "baseB");
+  assert.equal(peekRequest(dir, "agent-B-0002").cmd, "gate-B");
+  assert.equal(claimRequest(dir, "agent-B-0002").cmd, "gate-B");
+  assert.equal(claimRequest(dir, "agent-B-0002"), null, "a request is taken once");
+  assert.equal(claimRequest(dir, "agent-C-0003"), null, "an agent with no bound request gets none (never the oldest, never another agent's)");
+  assert.equal(claimRequest(dir, "../agent-A-0001"), null, "a forged id cannot walk to another file");
+  assert.equal(claimRequest(dir, ""), null); assert.equal(claimRequest(dir, undefined), null);
+  assert.equal(claimRequest(dir, "agent-A-0001").cmd, "gate-A", "A's request was untouched by all of the above");
+});
+test("evaluate: an agent id with no bound request is FAILed closed with a clear reason, and a request for agent A is never evaluated for agent B", async () => {
+  const { evaluate } = await import("../../gate/server/hook.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "hf4-ev-")), cwd = mkdtempSync(join(tmpdir(), "hf4-evc-"));
+  writeRequest(dir, "agent-A-0001", "true", null, { readOnly: true });
+  const b = evaluate({ dir, id: "agent-B-0002", cwd, routes: {}, labels: { "route/run": "agent-A-0001" }, run: "agent-A-0001" });
+  assert.equal(b.d.status, "FAIL"); assert.equal(b.d.reprompt, false); assert.match(b.res.reasons.join(), /no gate request is bound to this agent id/);
+  assert.ok(peekRequest(dir, "agent-A-0001"), "B's evaluation did not take A's request");
+  assert.equal(evaluate({ dir, id: "agent-A-0001", cwd, routes: {} }).d.status, "N/A", "A still gets its own (read-only) request");
 });
 
 test("read-only time cap: summarise and review fail over after at most 10 minutes by default; routes.timeouts overrides", () => {

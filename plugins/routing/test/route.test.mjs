@@ -50,8 +50,8 @@ test("caller gate goes to the plugin-side store, never into labels", async () =>
   const p = fake({ run: () => ({ status: "completed", agentId: "A9" }) });
   runRoute({ ...o, gate: "npm test", gateDir: d }, p, routes);
   assert.ok(!p.calls.find((c) => c[0] === "run").some((a) => String(a).startsWith("gate/")));
-  assert.equal(claimRequest(d, "/r").cmd, "npm test");
-  assert.equal(claimRequest(d, "/r"), null);
+  assert.equal(claimRequest(d, "A9").cmd, "npm test");
+  assert.equal(claimRequest(d, "A9"), null);
 });
 test("unsafe mode is dropped outside a worktree and kept (with --new-workspace worktree) inside one", () => {
   const r2 = { ...routes, modes: { codex: "full-access", qwen: "plan" } };
@@ -183,7 +183,7 @@ test("route records the task's start commit as the gate base (committed work is 
   g("init", "-q"); writeFileSync(join(d, "a"), "1"); g("add", "."); g("commit", "-qm", "i");
   const sha = g("rev-parse", "HEAD").trim();
   runRoute({ ...o, cwd: d, gate: "x", gateDir: gd }, fake({ run: () => ({ status: "completed", agentId: "A9" }) }), routes, () => ({ status: "PASS", reasons: [] }));
-  assert.equal(claimRequest(gd, d).base, sha);
+  assert.equal(claimRequest(gd, "A9").base, sha);
 });
 test("caller gate uses the same options as the hook: repo row maxLines, forbid, allow, cmd fallback", () => {
   let opts;

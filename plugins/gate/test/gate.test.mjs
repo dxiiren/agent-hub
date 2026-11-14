@@ -63,8 +63,11 @@ test("repo default gate: matching row, then gateDefault, placeholder ignored", (
   assert.equal(repoGate({ gateDefault: "make test" }, "/other").cmd, "make test");
 });
 
-import { evaluate } from "../server/hook.mjs";
-import { writeRequest, writeDirectMarker, removeDirectMarker, hasDirectMarkers, claimDirect } from "../server/store.mjs";
+import { evaluate as evaluate0 } from "../server/hook.mjs";
+import { writeRequest, writeDirectMarker, removeDirectMarker, hasDirectMarkers, claimDirect, hasBinding, loadState, claimRequest } from "../server/store.mjs";
+// Requests are bound to the agent id only. Tests that are about the gate itself bind a default (no command, no base) request; noBind tests the fail-closed path.
+const G = (s) => "gate-agent-" + s;
+const evaluate = (o) => { if (!o.noBind && !loadState(o.dir)[o.id] && !hasBinding(o.dir, o.id)) writeRequest(o.dir, o.id, null, null); return evaluate0(o); };
 import { existsSync, writeFileSync as wf, readFileSync as rf, readdirSync } from "node:fs";
 const require_len = (d) => readdirSync(d).length;
 
@@ -74,24 +77,24 @@ test("agent labels cannot switch the gate off or swap its command (labels are no
   const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
   wf(join(d, "a.py"), "x = 2\n");
   // evaluate() takes no labels at all; the attack is an agent that wrote gate/skip, gate/cmd=true, gate/forbid=.* on itself
-  const r = evaluate({ dir: st, id: "A", cwd: d, routes: routesCfg });
+  const r = evaluate({ dir: st, id: G("A"), cwd: d, routes: routesCfg });
   assert.equal(r.d.status, "RETRY"); assert.match(r.res.reasons.join(), /gate cmd exit 1/);
-  assert.equal(evaluate({ dir: st, id: "A", cwd: d, routes: routesCfg }).d.status, "FAIL");
+  assert.equal(evaluate({ dir: st, id: G("A"), cwd: d, routes: routesCfg }).d.status, "FAIL");
 });
 test("attempt counter lives in the plugin store, survives a restart, and ignores label rewrites", () => {
   const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
   wf(join(d, "a.py"), "x = 2\n");
-  assert.equal(evaluate({ dir: st, id: "B", cwd: d, routes: routesCfg }).mirror["gate/attempts"], "1");
-  const state = JSON.parse(rf(join(st, "state.json"), "utf8")); assert.equal(state.B.attempts, 1);
-  const again = evaluate({ dir: st, id: "B", cwd: d, routes: routesCfg }); // a "restart": state reloaded from disk
+  assert.equal(evaluate({ dir: st, id: G("B"), cwd: d, routes: routesCfg }).mirror["gate/attempts"], "1");
+  const state = JSON.parse(rf(join(st, "state.json"), "utf8")); assert.equal(state[G("B")].attempts, 1);
+  const again = evaluate({ dir: st, id: G("B"), cwd: d, routes: routesCfg }); // a "restart": state reloaded from disk
   assert.equal(again.d.status, "FAIL"); assert.equal(again.mirror["gate/attempts"], "2");
 });
 test("caller-supplied gate comes from the plugin-side request, bound to the agent once", () => {
   const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
   wf(join(d, "a.py"), "x = 2\n");
-  writeRequest(st, d, OK, head(d)); // routes default is BAD, caller says OK
-  assert.equal(evaluate({ dir: st, id: "C", cwd: d, routes: routesCfg }).d.status, "PASS");
-  assert.equal(evaluate({ dir: st, id: "D", cwd: d, routes: routesCfg }).d.status, "RETRY"); // request was consumed
+  writeRequest(st, G("C"), OK, head(d)); // routes default is BAD, caller says OK
+  assert.equal(evaluate({ dir: st, id: G("C"), cwd: d, routes: routesCfg }).d.status, "PASS");
+  assert.equal(evaluate({ dir: st, id: G("D"), cwd: d, routes: routesCfg }).d.status, "RETRY"); // request was consumed
 });
 test("a repo with a malicious core.fsmonitor / diff.external / textconv does not execute it", () => {
   const d = repo(), marker = join(mkdtempSync(join(tmpdir(), "pwn-")), "PWNED");
@@ -134,7 +137,7 @@ test("no repo + cmd only: PASS, but a secret in the folder FAILs (c)", () => {
 test("hook: an agent in a plain folder is labelled FAIL at once and never re-prompted", async () => {
   const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
   const d = mkdtempSync(join(tmpdir(), "nogit-")), st = mkdtempSync(join(tmpdir(), "gstate-"));
-  const r = evaluate({ dir: st, id: "P", cwd: d, routes: {} });
+  const r = evaluate({ dir: st, id: G("P"), cwd: d, routes: {} });
   assert.equal(r.d.status, "FAIL"); assert.equal(r.d.reprompt, false); assert.match(r.mirror["gate/reasons"], /nothing to verify/);
 });
 
@@ -270,19 +273,19 @@ function linkedWorktree() {
 test("worktree task with NO recorded request fails closed: the base is never derived at turn end (fast agent finished before registration)", () => {
   const { wt } = linkedWorktree(); writeFileSync(join(wt, "evil.txt"), "x\n");
   sh(wt, "add", "."); sh(wt, ...GID, "commit", "-qm", "evil");
-  const r = evaluate({ dir: mkdtempSync(join(tmpdir(), "gs-")), id: "F", cwd: wt, routes: {} });
-  assert.notEqual(r.d.status, "PASS"); assert.match(r.res.reasons.join(), /no base commit recorded/);
+  const r = evaluate({ dir: mkdtempSync(join(tmpdir(), "gs-")), id: G("F"), cwd: wt, routes: {}, noBind: true });
+  assert.equal(r.d.status, "FAIL"); assert.equal(r.d.reprompt, false); assert.match(r.res.reasons.join(), /no gate request is bound to this agent id/);
 });
 test("direct run (create-then-prompt): exempt only the agent id that has a marker written after it was created; labels, cwd, other agents, a used or stale marker and a route request never exempt", () => {
   const { wt, start } = linkedWorktree(); const REAL = "11111111-aaaa-4bbb-8ccc-000000000001", ATT = "22222222-aaaa-4bbb-8ccc-000000000002";
   const fresh = () => mkdtempSync(join(tmpdir(), "gs-"));
   // 1. nothing in the store: an agent that labels itself direct (labels are not an input at all) is gated
-  assert.equal(evaluate({ dir: fresh(), id: ATT, cwd: wt, routes: {}, labels: { "route/type": "direct", "direct-nonce": "a".repeat(32) } }).d.reprompt, true, "no marker for this id: gated");
+  assert.equal(evaluate({ dir: fresh(), id: ATT, cwd: wt, routes: {}, noBind: true, labels: { "route/type": "direct", "direct-nonce": "a".repeat(32) } }).d.status, "FAIL", "no marker and no request for this id: fails closed");
   // 2. the race attack: the attacker reads everything in the gate dir before and while the real agent is created, then copies what it saw. The id-keyed marker only appears once the real id exists.
   const dir = fresh();
   assert.equal(hasDirectMarkers(dir), false, "before the real agent exists the store holds nothing to read");
   writeDirectMarker(dir, REAL); // launcher: created without a prompt, id known, marker written, only then the prompt
-  assert.equal(evaluate({ dir, id: ATT, cwd: wt, routes: {} }).d.reprompt, true, "the attacker read the marker name and started first, but its own id has no marker: gated");
+  assert.equal(evaluate({ dir, id: ATT, cwd: wt, routes: {}, noBind: true }).d.status, "FAIL", "the attacker read the marker name and started first, but its own id has no marker: gated");
   assert.equal(hasDirectMarkers(dir), true, "the attacker did not consume the real marker");
   const r = evaluate({ dir, id: REAL, cwd: wt, routes: {} });
   assert.equal(r.d.reprompt, false); assert.equal(r.d.status, "N/A"); assert.equal(hasDirectMarkers(dir), false, "claimed once");
@@ -291,9 +294,9 @@ test("direct run (create-then-prompt): exempt only the agent id that has a marke
   assert.equal(claimDirect(dir, REAL), false);
   // 4. expired marker: gated
   const old = fresh(); writeDirectMarker(old, REAL, Date.now() - 11 * 60_000);
-  assert.equal(evaluate({ dir: old, id: REAL, cwd: wt, routes: {} }).d.reprompt, true, "expired");
+  assert.equal(evaluate({ dir: old, id: REAL, cwd: wt, routes: {}, noBind: true }).d.status, "FAIL", "expired");
   // 5. a route request for the cwd always wins, even with a marker for this id
-  const mixed = fresh(); writeDirectMarker(mixed, REAL); wreq(mixed, wt, null, start); writeFileSync(join(wt, "ok.txt"), "OK" + String.fromCharCode(10));
+  const mixed = fresh(); writeDirectMarker(mixed, REAL); wreq(mixed, REAL, null, start); writeFileSync(join(wt, "ok.txt"), "OK" + String.fromCharCode(10));
   assert.equal(evaluate({ dir: mixed, id: REAL, cwd: wt, routes: {} }).d.status, "PASS", "request present: gated normally even with a marker");
   // 6. a marker is never overwritten, a bad id is refused
   assert.throws(() => writeDirectMarker(mixed, REAL), /EEXIST/); assert.throws(() => writeDirectMarker(mixed, "../x"), /agent id/);
@@ -301,9 +304,9 @@ test("direct run (create-then-prompt): exempt only the agent id that has a marke
 });
 test("worktree task with a request registered before the agent starts is judged against that base, and a clean task passes the first time", () => {
   const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-"));
-  wreq(dir, wt, null, start);
+  wreq(dir, G("W"), null, start);
   writeFileSync(join(wt, "ok.txt"), "OK\n");
-  const first = evaluate({ dir, id: "W", cwd: wt, routes: {} });
+  const first = evaluate({ dir, id: G("W"), cwd: wt, routes: {} });
   assert.equal(first.d.status, "PASS"); assert.deepEqual(first.res.reasons, []);
   assert.equal(first.res.files, 1, "a CRLF checkout of an untouched file (global autocrlf) is not a change");
 });
@@ -316,9 +319,9 @@ test("attack: an agent that commits, moves HEAD and the branch ref, or rewrites 
     "commit, rewind HEAD, drop the file from the index": (wt, start) => { writeFileSync(join(wt, "evil.txt"), "x\n"); sh(wt, "add", "."); sh(wt, ...GID, "commit", "-qm", "e"); sh(wt, "update-ref", "HEAD", start); sh(wt, "rm", "-q", "--cached", "evil.txt"); },
   };
   for (const [name, run] of Object.entries(attacks)) {
-    const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-")); wreq(dir, wt, null, start);
+    const { wt, start } = linkedWorktree(); const dir = mkdtempSync(join(tmpdir(), "gs-")); wreq(dir, G("A"), null, start);
     run(wt, start);
-    const r = evaluate({ dir, id: "A", cwd: wt, routes: routesCfg });
+    const r = evaluate({ dir, id: G("A"), cwd: wt, routes: routesCfg });
     assert.notEqual(r.d.status, "PASS", name); assert.match(r.res.reasons.join(), /path not allowed: evil.txt/, name);
   }
 });

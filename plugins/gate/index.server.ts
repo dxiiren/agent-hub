@@ -2,7 +2,8 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { loadRoutes } from "./server/gate.mjs";
 import { evaluate } from "./server/hook.mjs";
 import { mcpCall, hubPassword } from "./server/mcp.mjs";
-import { gateDir } from "./server/store.mjs";
+import { gateDir, hasBinding } from "./server/store.mjs";
+import { loadState } from "./server/store.mjs";
 
 const MCP = process.env.AGENT_HUB_MCP ?? "http://127.0.0.1:6790/mcp/agents";
 
@@ -22,7 +23,9 @@ async function gate(event: any, context: any) {
     try {
       // No agent label is read here: cmd, limits and patterns come from the routes file or the caller's request,
       // attempts and status from the plugin store. Labels are written for display only.
-      const { d, res, mirror: m } = evaluate({ dir: gateDir(), id, cwd: event.agent.cwd, routes: loadRoutes(), run: event.agent.labels?.["route/run"] });
+      // the route binds the request to the agent id a moment after Paseo returns it: a very fast first turn waits up to 20 s for it (state present = a later turn)
+      for (let k = 0; k < 40 && !loadState(gateDir())[id] && !hasBinding(gateDir(), id); k++) await new Promise((r) => setTimeout(r, 500));
+      const { d, res, mirror: m } = evaluate({ dir: gateDir(), id, cwd: event.agent.cwd, routes: loadRoutes() });
       mirror = m;
       if (d.reprompt) await context.paseo.agents.ref(id).send("Your work failed the gate: " + res.reasons.join("; ") + "\nFix it and finish.");
     } catch (e) {

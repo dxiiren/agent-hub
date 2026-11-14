@@ -22,15 +22,15 @@ const paseo = (d) => (a) => (a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "
 
 test("issue 1: a read-only request makes the hook skip the diff gate (N/A, no re-prompt)", () => {
   const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
-  writeRequest(st, d, null, head(d), { readOnly: true });
-  const r = evaluate({ dir: st, id: "S1", cwd: d, routes: {} });
+  writeRequest(st, "agent-S1-0001", null, head(d), { readOnly: true });
+  const r = evaluate({ dir: st, id: "agent-S1-0001", cwd: d, routes: {} });
   assert.equal(r.mirror["gate/status"], "N/A"); assert.equal(r.d.reprompt, false);
   assert.doesNotMatch(r.mirror["gate/reasons"], /nothing to verify/);
 });
 test("issue 1: an edit request is still gated", () => {
   const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
-  writeRequest(st, d, 'node -e "process.exit(1)"', head(d), { readOnly: false });
-  assert.equal(evaluate({ dir: st, id: "E1", cwd: d, routes: {} }).d.status, "RETRY");
+  writeRequest(st, "agent-E1-0001", 'node -e "process.exit(1)"', head(d), { readOnly: false });
+  assert.equal(evaluate({ dir: st, id: "agent-E1-0001", cwd: d, routes: {} }).d.status, "RETRY");
 });
 test("issue 2: --max-lines raises the limit for one call; the failure says how", () => {
   const d = repo(), b = head(d);
@@ -42,8 +42,8 @@ test("issue 2: --max-lines raises the limit for one call; the failure says how",
 test("issue 2: the request carries maxLines to the hook", () => {
   const d = repo(), st = mkdtempSync(join(tmpdir(), "st-"));
   writeFileSync(join(d, "big.txt"), "l\n".repeat(500));
-  writeRequest(st, d, OK, head(d), { maxLines: 700 });
-  assert.equal(evaluate({ dir: st, id: "M1", cwd: d, routes: {} }).d.status, "PASS");
+  writeRequest(st, "agent-M1-0001", OK, head(d), { maxLines: 700 });
+  assert.equal(evaluate({ dir: st, id: "agent-M1-0001", cwd: d, routes: {} }).d.status, "PASS");
 });
 test("issue 3: an edit whose gate saw no changed file is a failure, not a pass", () => {
   const d = repo();
@@ -56,9 +56,9 @@ test("issue 3: a real edit still passes", () => {
 });
 test("issue 4: --status returns status, gate state and the answer", () => {
   const p = (a) => (a[0] === "inspect" ? { Status: "idle", Archived: false, Cwd: "/x" } : a[0] === "logs" ? { text: "[User] q\nthe answer\n" } : {});
-  const r = runStatus("A1", p, mkdtempSync(join(tmpdir(), "st-")));
+  const r = runStatus("agent-A1-0001", p, mkdtempSync(join(tmpdir(), "st-")));
   assert.equal(r.status, "completed"); assert.equal(r.answer, "the answer"); assert.equal(r.gate, null);
-  assert.equal(runStatus("A1", (a) => (a[0] === "inspect" ? { Status: "running" } : {}), mkdtempSync(join(tmpdir(), "st-"))).status, "running");
+  assert.equal(runStatus("agent-A1-0001", (a) => (a[0] === "inspect" ? { Status: "running" } : {}), mkdtempSync(join(tmpdir(), "st-"))).status, "running");
   assert.match(runStatus("../x", p).error, /not an agent id/);
 });
 
@@ -117,23 +117,23 @@ test("hung routes: the gate stops scanning at its deadline and fails closed", ()
 });
 test("issue 5: --status of a cut-off route runs the requested gate (a no-op edit is not 'completed, gate null')", () => {
   const d = repo(), b = head(d), st = mkdtempSync(join(tmpdir(), "st-"));
-  writeRequest(st, d, 'node -e "process.exit(0)"', b, {});
+  writeRequest(st, "agent-A1-0001", 'node -e "process.exit(0)"', b, {});
   const p = (a) => (a[0] === "inspect" ? { Status: "idle", Cwd: d } : a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "logs" ? { text: "x\nok\n" } : {});
-  const r = runStatus("A1", p, st, runGate, { gateRetry: false });
+  const r = runStatus("agent-A1-0001", p, st, runGate, { gateRetry: false });
   assert.equal(r.status, "gate-failed"); assert.equal(r.gate.status, "FAIL"); assert.match(r.gate.reasons.join(), /no diff produced/);
   writeFileSync(join(d, "a.txt"), "y\n"); // a real edit with a failing gate command must fail too
-  writeRequest(st, d, 'node -e "process.exit(1)"', b, {});
-  assert.equal(runStatus("A1", p, st, runGate, {}).status, "gate-failed");
-  writeRequest(st, d, 'node -e "process.exit(0)"', b, {});
-  { const r3 = runStatus("A1", p, st, runGate, {}); assert.equal(r3.status, "completed", JSON.stringify(r3.gate)); }
+  writeRequest(st, "agent-A1-0001", 'node -e "process.exit(1)"', b, {});
+  assert.equal(runStatus("agent-A1-0001", p, st, runGate, {}).status, "gate-failed");
+  writeRequest(st, "agent-A1-0001", 'node -e "process.exit(0)"', b, {});
+  { const r3 = runStatus("agent-A1-0001", p, st, runGate, {}); assert.equal(r3.status, "completed", JSON.stringify(r3.gate)); }
 });
 test("read-only: --status runs only the command and the unchanged-tree check (no diff/ignored scan)", () => {
   const d = repo(), b = head(d), st = mkdtempSync(join(tmpdir(), "st-"));
   const p = (a) => (a[0] === "inspect" ? { Status: "idle", Cwd: d } : a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "logs" ? { text: "x\nok\n" } : {});
-  writeRequest(st, d, null, b, { readOnly: true, sig: gitSig(d) });
-  const r = runStatus("A1", p, st, runGate, {}); assert.equal(r.status, "completed"); assert.equal(r.gate.status, "PASS");
+  writeRequest(st, "agent-A1-0001", null, b, { readOnly: true, sig: gitSig(d) });
+  const r = runStatus("agent-A1-0001", p, st, runGate, {}); assert.equal(r.status, "completed"); assert.equal(r.gate.status, "PASS");
   writeFileSync(join(d, "new.txt"), "changed\n"); // the read-only task changed the tree
-  const r2 = runStatus("A1", p, st, runGate, {}); assert.equal(r2.status, "failed-readonly-changed"); assert.match(r2.gate.reasons.join(), /changed the work tree/);
+  const r2 = runStatus("agent-A1-0001", p, st, runGate, {}); assert.equal(r2.status, "failed-readonly-changed"); assert.match(r2.gate.reasons.join(), /changed the work tree/);
 });
 test("read-only: callerGate with --gate passes on no change, fails on a change or a failing command", () => {
   const d = repo(), b = head(d), sig = gitSig(d), p = (a) => (a[0] === "ls" ? [{ id: "A1", cwd: d }] : {});
@@ -152,11 +152,11 @@ test("read-only: a commit or branch switch by the agent is caught (status and di
 });
 test("read-only: no recorded before-state is unverifiable, never PASS; the folder snapshot can verify instead", () => {
   const d = repo(), b = head(d), st = mkdtempSync(join(tmpdir(), "st-")), p = (a) => (a[0] === "inspect" ? { Status: "idle", Cwd: d } : a[0] === "ls" ? [{ id: "A1", cwd: d }] : a[0] === "logs" ? { text: "x\nok\n" } : {});
-  writeRequest(st, d, null, b, { readOnly: true });
-  const r = runStatus("A1", p, st, runGate, {}); assert.equal(r.status, "unverifiable"); assert.equal(r.gate.status, "FAIL");
+  writeRequest(st, "agent-A1-0001", null, b, { readOnly: true });
+  const r = runStatus("agent-A1-0001", p, st, runGate, {}); assert.equal(r.status, "unverifiable"); assert.equal(r.gate.status, "FAIL");
   assert.equal(callerGate({ gate: 'node -e "process.exit(0)"', base: b, ro: true }, "A1", p, runGate, {}).status, "FAIL");
-  writeRequest(st, d, null, b, { readOnly: true, guardHash: sha(snapshot(d)) });
-  assert.equal(runStatus("A1", p, st, runGate, {}).status, "completed");
+  writeRequest(st, "agent-A1-0001", null, b, { readOnly: true, guardHash: sha(snapshot(d)) });
+  assert.equal(runStatus("agent-A1-0001", p, st, runGate, {}).status, "completed");
 });
 // ---- git-ignored files: a read-only task may not edit, create or delete them (14-11-2026) ----
 import { rmSync, utimesSync } from "node:fs";

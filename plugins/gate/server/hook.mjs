@@ -4,13 +4,18 @@ import { claimDirect, claimRequest, loadState, peekRequest, saveState } from "./
 
 /** Returns { d, res, mirror } and persists attempts/status in the plugin store. */
 const DIRECT = { d: { status: "N/A", attempts: 0, reprompt: false }, res: { reasons: [] }, mirror: { "gate/status": "N/A", "gate/reasons": "direct run: the hub gate never applies" } };
-export function evaluate({ dir, id, cwd, routes, run }) {
+export function evaluate({ dir, id, cwd, routes }) {
   const state = loadState(dir);
   // A direct run (`agent-hub direct paseo`) is never gated or re-prompted: the launcher created the agent without a prompt, wrote <gate>/direct/<agentId>.json, then sent the prompt, so the marker exists before the first turn.
-  // A route request for the cwd always wins (gated normally); no marker, an expired or used one = gated as before (fail closed).
+  // A request bound to the agent id always wins (gated normally); no marker, an expired or used one = gated as before (fail closed).
   if (state[id]?.direct) return DIRECT;
-  if (!state[id] && !peekRequest(dir, cwd, run) && claimDirect(dir, id) === true) { state[id] = { direct: true, status: "N/A" }; saveState(dir, state); return DIRECT; }
-  const mine = (state[id] ??= (() => { const q = claimRequest(dir, cwd, run); return { attempts: 0, cmd: q?.cmd ?? null, base: q?.base ?? null, readOnly: q?.readOnly === true, maxLines: q?.maxLines ?? null }; })());
+  if (!state[id] && !peekRequest(dir, id) && claimDirect(dir, id) === true) { state[id] = { direct: true, status: "N/A" }; saveState(dir, state); return DIRECT; }
+  if (!state[id]) {
+    const q = claimRequest(dir, id);
+    if (!q) return { d: { status: "FAIL", attempts: 0, reprompt: false }, res: { reasons: ["no gate request is bound to this agent id: the route did not register one (or it was already used)"] }, mirror: { "gate/status": "FAIL", "gate/reasons": "no gate request is bound to this agent id" } }; // fail closed, nothing stored: a request bound later still applies
+    state[id] = { attempts: 0, cmd: q.cmd ?? null, base: q.base ?? null, readOnly: q.readOnly === true, maxLines: q.maxLines ?? null };
+  }
+  const mine = state[id];
   // summarise/review judge the answer, not a diff: the code-edit gate has nothing to verify and must neither fail them nor re-prompt them
   if (mine.readOnly) { mine.status = "N/A"; saveState(dir, state); return { d: { status: "N/A", attempts: 0, reprompt: false }, res: { reasons: [] }, mirror: { "gate/status": "N/A", "gate/reasons": "read-only task: the diff gate does not apply" } }; }
   const res = runGate(cwd, gateOpts(routes, cwd, mine.cmd, mine.base, mine.maxLines));

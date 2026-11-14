@@ -55,15 +55,15 @@ test("answer is present for every route: empty plus answerReason when nothing re
   assert.equal(withAnswer({ agentId: "A" }, late, 1500, () => { slept++; }).answer, "final"); assert.equal(slept, 1);
 });
 
-test("worktree route: the route creates the worktree from the pinned base and registers the gate request under its path BEFORE the agent exists (a fast agent cannot beat registration)", () => {
+test("worktree route: the route creates the worktree from the pinned base and binds the gate request to the agent id Paseo returns (the plugin waits for the binding after a fast first turn)", () => {
   const d = mkdtempSync(join(tmpdir(), "gd-")); const seen = {};
   const p = (a) => {
     if (a[0] === "worktree" && a[1] === "create") { seen.create = a; return { name: "wt-x", worktreePath: "/wt/one" }; }
-    if (a[0] === "run") { seen.runCwd = a[a.indexOf("--cwd") + 1]; seen.reqAtRun = claimRequest(d, "/wt/one"); return { status: "running", agentId: "W1" }; }
+    if (a[0] === "run") { seen.runCwd = a[a.indexOf("--cwd") + 1]; return { status: "running", agentId: "W1" }; }
     return a[0] === "ls" ? [{ id: "W1", cwd: "/wt/one" }] : a[0] === "wait" ? { status: "idle" } : {};
   };
   runRoute({ ...o, provider: "qwen/b", worktree: true, base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", gate: "true", gateDir: d }, p, routes, () => ({ status: "PASS", reasons: [] }));
-  assert.deepEqual(seen.reqAtRun, { cmd: "true", base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, "request existed when run was called");
+  assert.deepEqual(claimRequest(d, "W1"), { cmd: "true", base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, "bound to the agent id");
   assert.equal(seen.runCwd, "/wt/one"); assert.equal(claimRequest(d, "/r"), null);
   assert.deepEqual(seen.create.slice(0, 8), ["worktree", "create", "--mode", "branch-off", "--new-branch", seen.create[5], "--base", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
 });

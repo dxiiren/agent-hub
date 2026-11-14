@@ -695,6 +695,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     }
     const labels = { "route/type": o.type, "route/provider": prov, "route/run": rid, ...(process.env.CLAUDE_CODE_SESSION_ID && process.env.CLAUDE_CODE_SESSION_ID !== o.session ? { claude_session: process.env.CLAUDE_CODE_SESSION_ID } : {}), ...(o.keep ? { "route/keep": "1" } : {}), dev: o.dev, caller: o.client, session: o.session };
     let wt = null; // this entry's route-created worktree
+    let pendingReq = null; // gate request, bound to the agent id the moment Paseo returns it (the plugin never selects by cwd or label)
     // Qwen read-only: the launcher (acp-proxy.mjs) offers the session mode "read-only"; choosing it restarts qwen with the deny settings (config/qwen/system-settings-readonly.json). Nothing is ever written under the task cwd.
     const lim = attemptLimit(o, routes); const t0 = tEntry; const left = () => Math.max(1, Math.round(lim - ((o.now ?? Date.now)() - t0) / 1000)); // one provider attempt gets lim seconds in all (run, waits, permission rounds)
     const args = ["run", "--cwd", o.cwd, "--provider", prov, "--wait-timeout", `${left()}s`];
@@ -713,7 +714,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       wt = { name: c.name, path: c.worktreePath }; track(null, wt);
       if (o.ledgerDir) recordHubWorktree(o.ledgerDir, c.worktreePath); // provably ours: the idle-workspace sweep may archive it (guards.mjs)
       args[2] = wt.path;
-      writeRequest(o.gateDir ?? gateDir(), wt.path, o.gate, o.base, { run: rid, readOnly: ro, maxLines: o.maxLines });
+      pendingReq = { cmd: o.gate, base: o.base, extra: { readOnly: ro, maxLines: o.maxLines } };
     }
     // an unsafe mode also runs in place when --cwd is a git work tree with nothing uncommitted (git can revert it); dirty or non-git stays on the provider default, with the reason
     // fail closed: full access in place only with the explicit --in-place flag AND a clean git work tree; .git and paths outside cwd are not protected then
@@ -728,7 +729,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
     const sig0 = ro && !o.privateRo ? gitSig(o.cwd) : null; // read-only: fingerprint of the work tree before the agent starts (null outside git)
-    if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { run: rid, readOnly: ro, maxLines: o.maxLines, sig: sig0, guardHash: ro ? sha(snapshot(o.cwd)) : null });
+    if (!o.worktree && (ro || o.gate || o.base)) pendingReq = { cmd: o.gate, base: o.base, extra: { readOnly: ro, maxLines: o.maxLines, sig: sig0, guardHash: ro ? sha(snapshot(o.cwd)) : null } };
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
     const guard = ro ? snapshot(o.cwd) : null;
@@ -749,6 +750,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of Array.isArray(r) ? r : []) { try { archive(a.id); } catch { /* the reaper retries */ } } }
       (o.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)))(createBackoffMs(k, routes));
     }
+    if (pendingReq && j?.agentId) writeRequest(o.gateDir ?? gateDir(), j.agentId, pendingReq.cmd, pendingReq.base, pendingReq.extra);
     live.delete("run:" + rid); if (ws && j?.agentId) wsOf.set(j.agentId, ws); else if (ws && !/^CREATE_TIMEOUT|^no answer in /.test(String(j?.error ?? ""))) archiveWs(ws); // no agent was made: nothing owns this workspace
     if (j?.agentId) { track(j.agentId, wt); try { o.onAgent?.(j.agentId); } catch { /* informational */ } } else { unnamed = true; ledger(); }
     if (j.agentId && !j.error && !["completed", "permission", "error", "timeout"].includes(String(j.status))) { // the create call returned the agent id; its answer is awaited here (a terminal status from the create call itself needs no wait)
@@ -938,7 +940,7 @@ export function runStatus(id, paseo, dir = gateDir(), gate = runGate, routes = {
   let out = { agentId: id, status: done ? "completed" : st || "unknown", agentStatus: i.Status, archived: i.Archived === true, cwd: i.Cwd, gate: g ? { status: g.status ?? null, attempts: g.attempts ?? 0 } : null, ...(done ? {} : { hint: "the agent is still working; ask again later" }) };
   // A route cut off before its caller-side gate ran leaves the request unclaimed and no gate state: "completed, gate null" would accept a no-op edit. Run the requested gate now.
   const cwd = i.Cwd ? (agentCwd(paseo, id) ?? i.Cwd) : null;
-  const req = !g && done && cwd ? peekRequest(dir, cwd) : null;
+  const req = !g && done && cwd ? peekRequest(dir, id) : null;
   if (req && req.readOnly) { // read-only: the work tree must be unchanged (fingerprint taken at start), then the gate command if any; no diff/ignored-file scan
     const reasons = []; { const why = roProblem(cwd, req); if (why) reasons.push(why); }
     if (req.cmd) reasons.push(...(gate(cwd, { cmd: req.cmd, readOnly: true }).reasons ?? []));
