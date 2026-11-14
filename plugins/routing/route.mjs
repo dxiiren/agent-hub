@@ -180,7 +180,8 @@ const lines = (t) => String(t ?? "").replace(/\r\n/g, NL).split(NL);
 /** Session id when --session is absent: AGENT_HUB_SESSION, else Claude Code's CLAUDE_CODE_SESSION_ID (set in every Bash call, inherited by its subagents), so any Claude helper lands under its session's usage counter. */
 export const sessionFromEnv = (env) => env.AGENT_HUB_SESSION || env.CLAUDE_CODE_SESSION_ID || undefined;
 /** The agent's last assistant message. `paseo logs` has no JSON, so two reads are combined: `full` is the whole transcript (tagged [User]/[Thought]/tool lines; a multi-line User or Thought block continues on untagged lines that look like an answer) and `assistant` is `paseo logs --filter assistant` (assistant messages only, untagged). The answer is the last untagged run of the full log, cut to the lines the assistant-only text also ends with, so a re-prompt tail or a thought continuation never leaks in. Without the assistant-only text (read failed) it is the last untagged run alone. Capped. */
-export function lastAnswer(full, cap = 4096, assistant = null) {
+export const ANSWER_CAP = 200_000; // HUBFIX3: 4096 cut 6 of 8 review answers; a review of a big input is long
+export function lastAnswer(full, cap = ANSWER_CAP, assistant = null) {
   const ls = lines(full);
   let end = ls.length; while (end > 0 && (!ls[end - 1].trim() || TAG.test(ls[end - 1]))) end--; // tool lines printed after the final message
   let start = end; while (start > 0 && !TAG.test(ls[start - 1])) start--;
@@ -241,7 +242,7 @@ export function withAnswer(r, paseo, retryMs = 1500, sleep = (ms) => Atomics.wai
   if (!r.agentId) return r;
   const read = () => {
     const f = paseo(["logs", r.agentId]); const as = paseo(["logs", r.agentId, "--filter", "assistant"]);
-    const a = lastAnswer(isEmptyState(f?.text) ? "" : f?.text, 4096, isEmptyState(as?.text) ? null : as?.text ?? null);
+    const a = lastAnswer(isEmptyState(f?.text) ? "" : f?.text, ANSWER_CAP, isEmptyState(as?.text) ? null : as?.text ?? null);
     return { f, a: isEmptyState(a.answer) ? { answer: "", truncated: false } : a };
   };
   let x = read();

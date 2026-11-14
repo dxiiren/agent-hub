@@ -30,10 +30,10 @@ export function loadMcpAllow(file = join(dirname(fileURLToPath(import.meta.url))
   try { const a = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")).mcpAllow; return Array.isArray(a) ? a : []; } catch { return []; }
 }
 /** Launcher side: names from env -> { servers, preamble } or { refused }. */
-export function grantFromEnv(env = process.env, allow = loadMcpAllow()) {
+export function grantFromEnv(env = process.env, allow = null) { // the config file is read only when a server is actually named (a launcher with no HUB_MCP touches no config)
   const names = String(env[MCP_ENV] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
   if (!names.length) return { servers: [], preamble: "" };
-  const g = grantMcp({ names, allow }); if (g.refused) return g;
+  const g = grantMcp({ names, allow: allow ?? loadMcpAllow() }); if (g.refused) return g;
   return { servers: g.servers, preamble: mcpPreamble(g.servers.map((x) => x.name)) };
 }
 /** The hub's own instruction for a granted MCP (the caller's prompt stays clean). Some providers (Qoder) list a granted server's tools as deferred and use them only after they are loaded. */

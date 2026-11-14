@@ -319,15 +319,16 @@ test("read-only types use each provider's read-only mode, in or out of a worktre
 test("lastAnswer: text after the last tagged line, capped at 4 KB with a flag", () => {
   assert.deepEqual(lastAnswer("[User] q\n[Read] f\nJob 61 failed.\nDisk full.\n"), { answer: "Job 61 failed.\nDisk full.", truncated: false });
   assert.equal(lastAnswer("[User] q\n[Read] f\n").answer, "");
-  const big = lastAnswer("[User] q\n" + "x".repeat(5000));
+  const big = lastAnswer("[User] q\n" + "x".repeat(5000), 4096);
   assert.equal(big.answer.length, 4096); assert.equal(big.truncated, true);
+  assert.equal(lastAnswer("[User] q" + String.fromCharCode(10) + "x".repeat(50000)).truncated, false, "a 50 KB review answer is returned whole (HUBFIX3)");
 });
 test("a completed route returns the agent's answer from `paseo logs`; truncation names the full-log command", () => {
   const mk = (text) => (a) => (a[0] === "ls" ? [] : a[0] === "logs" ? { text } : { status: "completed", agentId: "A1" });
   const r = runRoute({ ...o, provider: "qwen/b" }, mk("[User] q\nthe answer\n"), routes);
   assert.equal(r.answer, "the answer"); assert.equal(r.answerTruncated, undefined);
-  const t = runRoute({ ...o, provider: "qwen/b" }, mk("[User] q\n" + "y".repeat(9000)), routes);
-  assert.equal(t.answer.length, 4096); assert.equal(t.answerTruncated, true); assert.equal(t.answerFull, "paseo logs A1");
+  const t = runRoute({ ...o, provider: "qwen/b" }, mk("[User] q\n" + "y".repeat(250000)), routes);
+  assert.equal(t.answer.length, 200000); assert.equal(t.answerTruncated, true); assert.equal(t.answerFull, "paseo logs A1");
   assert.equal(runRoute({ ...o, provider: "qwen/b" }, (a) => (a[0] === "ls" ? [] : a[0] === "logs" ? { error: "x" } : { status: "completed", agentId: "A1" }), routes).answer, "");
 });
 test("cliPaseo returns `paseo logs` as raw text, without --json", () => {
