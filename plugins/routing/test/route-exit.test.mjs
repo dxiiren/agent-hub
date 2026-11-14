@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 import { routeExitCode, noRunLine } from "../route.mjs";
 
 test("a route that ran on no provider exits 1 and says which were tried and why (HUBFIX3, T031)", () => {
@@ -33,4 +35,13 @@ test("a refused shell command does not end the route: the agent carries on; the 
   assert.ok(a.log.includes("permit"), "the refusal was sent");
   const b = mk([{ status: "permission" }, { status: "permission" }, { status: "permission" }]); const r = grantReads(b.paseo, { agentId: "A", status: "permission" }, 60, { cwd: "C:/x" });
   assert.match(r.denied, /refused 3 times/);
+});
+
+test("a permission whose request is not listed yet is looked up again before the route gives up (HUBFIX3, big-input read)", () => {
+  let looks = 0; const log = [];
+  const paseo = (a) => { log.push(a[0]); if (a[0] === "pending") { looks++; return looks < 3 ? [] : [{ agentId: "A", id: "p1", name: "read_file", kind: "read", paths: [fileURLToPath(import.meta.url)] }]; } if (a[0] === "wait") return { status: "idle" }; return {}; };
+  const r = grantReads(paseo, { agentId: "A", status: "permission" }, 60, { cwd: dirname(fileURLToPath(import.meta.url)), sleep: () => {} });
+  assert.equal(r.status, "completed"); assert.equal(looks, 3); assert.ok(log.includes("permit"));
+  const none = grantReads((a) => (a[0] === "pending" ? [] : {}), { agentId: "A", status: "permission" }, 60, { cwd: dirname(fileURLToPath(import.meta.url)), sleep: () => {} });
+  assert.equal(none.status, "permission", "still nothing pending: the route ends as before");
 });

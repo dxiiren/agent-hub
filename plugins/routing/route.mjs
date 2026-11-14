@@ -7,7 +7,7 @@ import { modelNotAllowed } from "./allow.mjs";
 import { outsideHours } from "./hours.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync, mkdtempSync, copyFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, rmdirSync, mkdtempSync, copyFileSync, realpathSync, cpSync } from "node:fs";
 import path, { basename, dirname, join, resolve, sep, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -155,7 +155,9 @@ export function grantReads(paseo, j, timeoutS, ctx = {}, max = 8, left = () => t
   let refused = 0;
   for (let i = 0; i < max && j.status === "permission" && j.agentId; i++) {
     const pend = paseo(["pending"]);
-    const mine = (Array.isArray(pend) ? pend : []).filter((p) => p.agentId === j.agentId);
+    let mine = (Array.isArray(pend) ? pend : []).filter((p) => p.agentId === j.agentId);
+    // HUBFIX3: the daemon can report status "permission" a moment before `paseo pending` lists the request; one empty look ended the route (big-input read, 14-11). Look again twice before giving up.
+    for (let k = 0; k < 2 && !mine.length; k++) { (ctx.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)))(1500); const again = paseo(["pending"]); mine = (Array.isArray(again) ? again : []).filter((p) => p.agentId === j.agentId); }
     if (!mine.length) break;
     const roots = [ctx.cwd, ...(ctx.allow ?? [])].filter(Boolean);
     const v = batchAllowed(mine, roots);
@@ -336,6 +338,15 @@ export function snapshot(dir, max = 5000) {
     for (const e of es) { if (out.length >= max) return; if (e.name === ".git" || e.name === "node_modules") continue; const p = join(d, e.name);
       if (e.isDirectory()) walk(p); else { try { out.push(p + "|" + statSync(p).mtimeMs); } catch { /* vanished */ } } } };
   walk(dir); return out.sort().join(String.fromCharCode(10));
+}
+
+/** HUBFIX3: a read-only route runs in its own hub-owned copy of the task folder (node_modules skipped), so another writer in the original can no longer trip the read-only guard; a change inside the copy still fails the route. null when the folder is too big to copy (the route then runs in place as before). */
+export function privateCopy(src, { maxFiles = 20000, maxBytes = 500e6, tmp = os.tmpdir() } = {}) {
+  let n = 0, bytes = 0; const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { if (e.name === "node_modules") continue; const p = join(d, e.name); if (e.isDirectory()) { walk(p); } else { n++; try { bytes += statSync(p).size; } catch { /* vanished */ } } if (n > maxFiles || bytes > maxBytes) throw new Error("too big"); } };
+  try { walk(src); } catch { return null; }
+  const dir = mkdtempSync(join(tmp, "hub-ro-"));
+  try { cpSync(src, dir, { recursive: true, filter: (f) => basename(f) !== "node_modules" }); } catch { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } return null; }
+  return dir;
 }
 
 /** The agent's real cwd (`paseo ls` abbreviates the home folder as "~"); undefined when unknown. */
@@ -650,7 +661,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.mcp) { const g = grantMcp({ names: o.mcp, allow: o.mcpAllow ?? loadMcpAllow(), readOnly: ro }); if (g.refused) { trace.push({ provider: prov, error: g.refused }); break; } args.push("--env", `${MCP_ENV}=${g.servers.map((x) => x.name).join(",")}`); } // names only: the provider launcher re-resolves them against the hub allowlist
     // caller-supplied gate (decision 47) goes to the plugin-side store, not into agent-writable labels (worktree runs registered theirs above, under the worktree path)
     if (!o.base) o.base = headSha(o.cwd); // the task starts here: the gate diffs against it so committed work is judged too
-    const sig0 = ro ? gitSig(o.cwd) : null; // read-only: fingerprint of the work tree before the agent starts (null outside git)
+    const sig0 = ro && !o.privateRo ? gitSig(o.cwd) : null; // read-only: fingerprint of the work tree before the agent starts (null outside git)
     if (!o.worktree && (ro || o.gate || o.base)) writeRequest(o.gateDir ?? gateDir(), o.cwd, o.gate, o.base, { readOnly: ro, maxLines: o.maxLines, sig: sig0, guardHash: ro ? sha(snapshot(o.cwd)) : null });
     // worktree runs: create without waiting (the create call is bounded by cliPaseo), then wait for the agent separately
     args.push("--no-wait"); // the create call is bounded by startLimitS; the answer is awaited separately with the attempt limit
@@ -918,6 +929,8 @@ function main(argv) {
     process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } });
     cwd = dir.split(String.fromCharCode(92)).join("/");
   }
+  let privateRo = false; // HUBFIX3: read-only route on a plain --cwd runs in a private copy (AGENT_HUB_RO_COPY=0 turns it off); the guard compares that copy only
+  if (!files.length && process.env.AGENT_HUB_RO_COPY !== "0" && existsSync(cwd) && readOnlyType(type, loadRoutes())) { const pc = privateCopy(cwd); if (pc) { process.on("exit", () => { try { rmSync(pc, { recursive: true, force: true }); } catch { /* temp */ } }); cwd = pc.split(String.fromCharCode(92)).join("/"); privateRo = true; } }
   const dev = opt("--dev") ?? process.env.AGENT_HUB_DEV ?? os.userInfo().username.replace(/[^A-Za-z0-9._@:-]/g, "_");
   const mcpNames = opt("--mcp");
   if (mcpNames !== undefined) { const g = grantMcp({ names: mcpNames, allow: loadMcpAllow(), readOnly: readOnlyType(type, loadRoutes()) }); if (g.refused) { console.error("route: " + g.refused); return 2; } }
@@ -956,7 +969,7 @@ function main(argv) {
   // every provider skipped only because its slots are held by other routes: queue here and retry, never exit 1 with nothing started
   const allFull = (r) => !r.used && Array.isArray(r.trace) && r.trace.length > 0 && r.trace.every((t) => /^(slots full|busy \d+\/)/.test(t.skip ?? ""));
   try { for (;;) { res = runRoute({
-    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
+    providerState: providerState(withRetry(cliPaseo(process.env.PASEO_HOME)), cfgNow, pcache) ?? pstate, providerCache: pcache.file, endpointDown: (id) => endpointSkip(id, cfgNow), marker: unmark, type, prompt: prompt + (readOnlyType(type, routes) ? "" : ASK_CLAUSE), provider: opt("--provider"), cwd, privateRo, gate: opt("--gate"), maxLines, onAgent: (id) => console.error(`route: agent ${id} started; if this call is cut off, fetch the result later with: agent-hub route --status ${id}`), mode: opt("--mode"), worktree: opt("--new-workspace") === "worktree", inPlace: rest.includes("--in-place"),
     session: opt("--session") ?? sessionFromEnv(process.env), dev,
     client: opt("--client") ?? process.env.AGENT_HUB_CLIENT, keep: rest.includes("--keep"), mcp: mcpNames, deferCleanup: true, home, ledgerDir: (() => { try { return runDir(); } catch { return null; } })(), freeMem: () => availableGb(), laptop: () => laptopNow(),
   }, withRetry(cliPaseo(home)), routes); if (!allFull(res) || Date.now() > slotWaitUntil) break; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 + Math.random() * 4000); } } finally { unmark(); }
