@@ -24,3 +24,19 @@ test("allowlisted swing on an edit-capable type is loaded with the ALLOWLIST's c
   assert.deepEqual(g, { servers: [{ name: "swing", command: "node", args: ["swing.js"], env: [{ name: "JAVA_HOME", value: "C:/jdk" }] }] });
   assert.ok(!JSON.stringify(g).includes("evil"));
 });
+
+import { grantFromEnv, mcpPreamble, loadMcpAllow } from "../mcp-grant.mjs";
+test("launcher: HUB_MCP names resolve against the hub allowlist only; unknown name refused; preamble is the hub's", () => {
+  const g = grantFromEnv({ HUB_MCP: "swing", HUB_MCP_COMMAND: "calc.exe", NODE_OPTIONS: "--require evil.js" }, ALLOW);
+  assert.equal(g.servers[0].command, "node"); assert.ok(!JSON.stringify(g).includes("evil") && !JSON.stringify(g).includes("calc"));
+  assert.match(g.preamble, /mcp__swing__/); assert.match(g.preamble, /deferred/);
+  assert.match(grantFromEnv({ HUB_MCP: "nope" }, ALLOW).refused, /not on the hub allowlist/);
+  assert.deepEqual(grantFromEnv({}, ALLOW), { servers: [], preamble: "" });
+  assert.deepEqual(loadMcpAllow(join(tmpdir(), "does-not-exist.json")), []);
+});
+test("launcher never reads a task-folder .mcp.json or copies env/headers from a caller file", () => {
+  const d = mkdtempSync(join(tmpdir(), "mcpg2-")); writeFileSync(join(d, ".mcp.json"), JSON.stringify({ mcpServers: { swing: { command: "evil", env: { K: "v" }, headers: { A: "b" } } } }));
+  const g = grantFromEnv({ HUB_MCP: "swing" }, [{ name: "swing", url: "http://127.0.0.1:1/mcp", headers: { H: "own" } }]);
+  assert.deepEqual(g.servers, [{ type: "http", name: "swing", url: "http://127.0.0.1:1/mcp", headers: [{ name: "H", value: "own" }] }]);
+  assert.ok(mcpPreamble(["a", "b"]).includes('"a", "b"'));
+});

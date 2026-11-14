@@ -52,3 +52,13 @@ test("Windows device names are refused as ids, labels and usage file names (any 
   }
   for (const ok of ["CONSOLE", "com10", "lpt0", "nullable", "aux-1", "abc123", "COM"]) { assert.ok(parkFile(d, ok), ok); assert.equal(inputError({ session: ok }), null, ok); assert.equal(safe(ok), ok); }
 });
+
+import { resolveCommand as rc } from "../spawn-safe.mjs";
+import { existsSync as ex } from "node:fs";
+import { homedir as hd } from "node:os";
+const QW = hd() + "/AppData/Roaming/npm/qwen.cmd";
+test("HUBLANE: the real qwen.cmd shim resolves to node + cli entry and a multi-line/quoted/path prompt stays ONE untouched argv element (the shim itself cuts it to its first line)", { skip: process.platform !== "win32" || !ex(QW) }, () => {
+  const nasty = 'say "hi" \'x\'\nC:\\Users\\k\\a b\\c.txt\n%PATH% & | ^';
+  const r = rc(QW, ["-p", nasty]);
+  assert.equal(r.cmd, process.execPath); assert.equal(r.args.at(-1), nasty); assert.equal(r.args.at(-2), "-p");
+});

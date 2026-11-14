@@ -4,6 +4,7 @@
 // replays initialize + session/new, and keeps talking to Paseo under the original session id. One provider entry per endpoint.
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
+import { appendFileSync } from 'node:fs';
 import { runDir, tryWriteState, readStateJson } from './runstate.mjs';
 /** Run-dir file that maps the session id Paseo sees to the id of qwen's own session (they differ after the read-only restart). */
 export const aliasFile = (outer) => `qwen-session-${String(outer).replace(/[^A-Za-z0-9-]/g, '_')}.json`;
@@ -47,8 +48,8 @@ const lines = (stream, fn) => createInterface({ input: stream, crlfDelay: Infini
  * beforeForward(line) / onAgentLine(line): optional hooks (the laptop launcher starts its model server on the first prompt).
  * Returns { done } resolving with the agent's exit code.
  */
-export function modeProxy({ spawnAgent, input = process.stdin, output = process.stdout, initialReadOnly = false, roBaseMode = 'plan', beforeForward, onAgentLine, timeoutMs = 60000 }) {
-  let agent = null, models = new Map(), known = new Set(), ro = false, gen = 0, prompted = false, init = null, sess = null, outer = null, inner = null, awaiting = null, hub = 0;
+export function modeProxy({ spawnAgent, input = process.stdin, output = process.stdout, initialReadOnly = false, roBaseMode = 'plan', beforeForward, onAgentLine, timeoutMs = 60000, mcp = null, allowRo = true, toolLog = null }) {
+  let sessBase = null, agent = null, models = new Map(), known = new Set(), ro = false, gen = 0, prompted = false, init = null, sess = null, outer = null, inner = null, awaiting = null, hub = 0;
   const waits = new Map();
   let exit; const done = new Promise((r) => { exit = r; });
   const toAgent = (m) => agent.stdin.write(JSON.stringify(m) + NL);
@@ -74,7 +75,7 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
       if (m.result) {
         inner = m.result.sessionId ?? inner ?? sess.params?.sessionId; outer = inner;
         const a = m.result.modes?.availableModes; if (Array.isArray(a)) for (const x of a) known.add(x.id);
-        if (Array.isArray(a) && !a.some((x) => x.id === RO_MODE.id)) a.push(RO_MODE);
+        if (allowRo && Array.isArray(a) && !a.some((x) => x.id === RO_MODE.id)) a.push(RO_MODE);
         if (ro && m.result.modes) m.result.modes.currentModeId = RO_MODE.id;
         if (m.result.models) m.result.models = cleanModels(m.result.models, models);
         if (m.result.configOptions) m.result.configOptions = cleanConfigOptions(m.result.configOptions, models);
@@ -82,18 +83,22 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
       return toClient(m);
     }
     if (m.params?.sessionId && m.params.sessionId === inner && inner !== outer) m.params.sessionId = outer;
-    if (m.method === 'session/update') cleanUpdate(m.params?.update, models);
+    if (m.method === 'session/update') { cleanUpdate(m.params?.update, models); logTool(m.params?.update); }
     toClient(m);
   }
   async function restartReadOnly() {
     const old = agent; gen++; start(true); // the old agent's output and exit are ignored from here on
     try { old.stdin.end(); old.kill(); } catch { /* already gone */ }
     await rpc('initialize', init.params);
-    const r = await rpc(sess.method, { ...sess.params, ...(sess.method === 'session/load' ? { sessionId: inner } : {}) });
+    const r = await rpc(sess.method, { ...(sessBase?.params ?? sess.params), ...(sess.method === 'session/load' ? { sessionId: inner } : {}) });
     inner = r?.sessionId ?? inner;
     if (inner !== outer) tryWriteState(join(runDir(), aliasFile(outer)), { inner }); // Paseo only knows `outer`; the usage hook finds qwen's own chat file (the token counts) through this
     await rpc('session/set_mode', { sessionId: inner, modeId: roBaseMode });
   }
+  // granted MCP servers (names resolved by the hub's own allowlist, never from the caller) join the session's own list; a read-only session gets none
+  const grant = (m) => { if (!mcp?.servers?.length || ro) return; const have = Array.isArray(m.params.mcpServers) ? m.params.mcpServers : []; m.params.mcpServers = [...have.filter((x) => !mcp.servers.some((g) => g.name === x?.name)), ...mcp.servers]; };
+  // per-call tool log (provider-side tool_call updates) so unsafe clicks of a free lane can be audited afterwards
+  const logTool = (u) => { if (!toolLog || !u || (u.sessionUpdate !== 'tool_call' && u.sessionUpdate !== 'tool_call_update')) return; try { appendFileSync(toolLog, JSON.stringify({ t: new Date().toISOString(), kind: u.sessionUpdate, id: u.toolCallId, title: u.title, status: u.status, input: u.rawInput }) + NL); } catch { /* best effort */ } };
   const reply = (id, result) => toClient({ jsonrpc: '2.0', id, result });
   const fail = (id, message) => toClient({ jsonrpc: '2.0', id, error: { code: -32602, message } });
   async function fromClient(l) {
@@ -101,9 +106,9 @@ export function modeProxy({ spawnAgent, input = process.stdin, output = process.
     if (m && beforeForward) await beforeForward(l, m);
     if (!m) return agent.stdin.write(l + NL);
     if (m.method === 'initialize') init = m;
-    else if (m.method === 'session/new' || m.method === 'session/load') { sess = m; awaiting = m.id; if (m.method === 'session/load') inner = outer = m.params?.sessionId; }
-    else if (m.method === 'session/prompt') prompted = true;
-    else if (m.method === 'session/set_mode') {
+    else if (m.method === 'session/new' || m.method === 'session/load') { sessBase = structuredClone(m); grant(m); sess = m; awaiting = m.id; if (m.method === 'session/load') inner = outer = m.params?.sessionId; }
+    else if (m.method === 'session/prompt') { if (!prompted && mcp?.preamble && !ro && Array.isArray(m.params?.prompt)) m.params.prompt = [{ type: 'text', text: mcp.preamble }, ...m.params.prompt]; prompted = true; }
+    else if (m.method === 'session/set_mode' && allowRo) {
       // deny by default: read-only unless the client names a mode the agent itself offers (a missing or unknown mode id never reaches the agent as a normal mode)
       if (m.params?.modeId === RO_MODE.id || !known.has(m.params?.modeId)) {
         if (ro) return reply(m.id, {});
