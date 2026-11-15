@@ -56,7 +56,7 @@ test("a thrown exception mid-route still archives the agent (finally)", () => {
   assert.equal(ACTIVE.size, 0, "drain deregistered");
 });
 test("a create call with no agent id is found again by its route/run label and archived", () => {
-  const p = fake([{ error: "CREATE_TIMEOUT: x" }], { ls: (a) => (a.includes("--label") && /^route\/run=/.test(a[2]) ? [{ id: "GHOST", cwd: base.cwd }] : []) });
+  const p = fake([{ error: "CREATE_TIMEOUT: x" }], { ls: (a) => (a.includes("--label") && /^route\/run=/.test(a[2]) ? [{ id: "GHOST", cwd: base.cwd, created: "just now" }] : []) });
   runRoute({ ...base, provider: "codex/a" }, p, routes);
   assert.ok(archivesOf(p).includes("GHOST"));
 });
@@ -74,7 +74,7 @@ test("the exit handler's drain archives agents of a route still running", () => 
 
 const asyncRun = (rows, log = []) => async (a) => { log.push(a); if (a[0] === "ls") return a.includes("--label") ? (rows[a[2]] ?? []) : rows.all ?? []; return {}; };
 // hub-owned records (owned.mjs) decide what the reaper may touch; labels are forgeable. own(): a record dir holding one record per [id, record]
-import { markOwned } from "../owned.mjs";
+import { markOwned, markPending } from "../owned.mjs";
 const own = (recs) => { const d = mkdtempSync(join(tmpdir(), "owned-")); for (const [id, r] of Object.entries(recs)) markOwned(id, r, d); return d; };
 test("reaper archives old idle/error agents, never running, young, parked or --keep ones", async () => {
   const rows = { all: [{ id: "old-idle", status: "idle", created: "2 hours ago" }, { id: "old-err", status: "error", created: "30 minutes ago" }, { id: "young", status: "error", created: "3 minutes ago" }, { id: "run-new", status: "running", created: "2 minutes ago" }, { id: "kept", status: "idle", created: "3 hours ago" }, { id: "parked", status: "idle", created: "3 hours ago" }] };
@@ -117,9 +117,10 @@ test("hard kill while `paseo run` still waits (agent id unknown): the ledger nam
   runRoute({ ...base, ledgerDir: dir }, spy, routes);
   assert.equal(seen.runs.length, 1, "ledger written before the create call");
   assert.ok(!existsSync(join(dir, `agents-${process.pid}.json`)), "ledger removed once everything is archived");
-  writeFileSync(join(dir, "agents-111.json"), JSON.stringify({ pid: 111, cwd: "/r", agents: [], runs: ["abc123"] }));
-  const log = []; const run = async (a) => { log.push(a); return a[0] === "ls" && a[2] === "route/run=abc123" ? [{ id: "GHOST", cwd: "/r" }] : {}; };
-  assert.deepEqual(await reapDeadRoutes({ run, dir, dead: () => true, owned: own({}) }), ["GHOST"]);
+  writeFileSync(join(dir, "agents-111.json"), JSON.stringify({ pid: 111, cwd: "/r", agents: [], runs: ["abcdef12"] }));
+  const pend = own({}); markPending("abcdef12", "/r", pend, Date.now() - 600_000);
+  const log = []; const run = async (a) => { log.push(a); return a[0] === "ls" && a[2] === "route/run=abcdef12" ? [{ id: "GHOST", cwd: "/r", created: "just now" }, { id: "FOREIGN", cwd: "/r", created: "3 days ago" }] : {}; };
+  assert.deepEqual(await reapDeadRoutes({ run, dir, dead: () => true, owned: pend }), ["GHOST"]);
   assert.ok(log.some((c) => c[0] === "archive" && c[1] === "GHOST"));
 });
 

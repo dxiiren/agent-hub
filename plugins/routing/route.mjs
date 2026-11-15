@@ -22,7 +22,7 @@ import { endpointSkip } from "./endpoint.mjs";
 import { grantMcp, loadMcpAllow, MCP_ENV } from "./mcp-grant.mjs";
 import { runDir, readStateJson, tryWriteState, paseoHome } from "./runstate.mjs";
 import { acquireEntry, maxInFlight } from "./entry-gate.mjs";
-import { markOwned, ownedDir, ghostOf } from "./owned.mjs";
+import { markOwned, markPending, clearPending, ghostOf } from "./owned.mjs";
 import { recordHubWorktree, spoolCleanup, workspaceCapError } from "./guards.mjs";
 import { effectiveBudget, chainOrder, costGb, laptopNow, availableGb, dropWslCache, heldIn, kindOf } from "./budget.mjs";
 
@@ -620,7 +620,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
   // Every agent this route creates is tracked until it is archived. `archive --force` interrupts a running agent and ends its CLI process tree (verified on Windows; `stop` alone leaves the CLI alive), retried once, then stop + archive.
   const live = new Map(); // key -> { id, wt }: created and not yet retired
   const rid = randomBytes(4).toString("hex"); let unnamed = false;
-  const ownDir = () => join(o.gateDir ?? gateDir(), "owned"); const ghostArg = () => ({ rid, cwds: [o.cwd, ...[...live.values()].map((v) => v.wt?.path)], dir: ownDir() }); // label lookups find only agents in this route's own folders that no hub record gives to another route (labels are forgeable by any agent) // unnamed: a create call returned no agent id (timeout), found again by its route/run label
+  const ownDir = () => join(o.gateDir ?? gateDir(), "owned"); const ghostArg = () => ({ rid, dir: ownDir() }); // label lookups only nominate: see ghostOf (pending record, created-after, exact cwd, no record of another route)
   const ledger = () => { // survives a hard kill of this process (no handler can run then): the hub reaper archives these agents once this pid is dead
     if (!o.ledgerDir || o.keep) return;
     const f = join(o.ledgerDir, `agents-${process.pid}.json`);
@@ -646,6 +646,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
     if (o.keep) return;
     for (const v of [...live.values()]) { if (v.run) continue; try { retire(v.id, v.wt); } catch { /* keep going: the reaper retries */ } }
     if (unnamed) { const r = paseo(["ls", "--label", `route/run=${rid}`]); for (const a of ghostOf(r, ghostArg())) { try { archive(a.id); } catch { /* the reaper retries */ } } unnamed = false; }
+    clearPending(rid, ownDir());
   };
   // edit types report where the work is (branch, headSha, and the worktree the hub made) before retire can remove the worktree
   // The route-created worktree is archived by retire, and an agent that edited without committing loses its diff with it (09-11: CR-004 "gate PASS", worktree gone, branch route-1c96f76704 empty). Save the diff against the start commit first.
@@ -740,6 +741,7 @@ export function runRoute(o, paseo, routes, gate = runGate) {
       const have = (() => { const r = paseo(["workspace", "ls", "--json"]); const key = (p) => String(p ?? "").split("\\").join("/").toLowerCase().replace(/\/+$/, ""); return Array.isArray(r) ? r.find((x) => x.workspaceId && x.isolation === "local" && key(x.cwd) === key(o.cwd)) : null; })();
       if (have) { args.push("--workspace", have.workspaceId); g?.release(); } else {
       let c = null; if (g) { const tw = (o.now ?? Date.now)(); try { c = paseo(["workspace", "create", "--isolation", "local", "--path", o.cwd], { noRetry: true }); } finally { g.release(); wsCreateS = Math.round(((o.now ?? Date.now)() - tw) / 1000); } } if (c?.workspaceId && !c.error) { ws = c.workspaceId; wsOpen.add(ws); args.push("--workspace", ws); } } }
+    markPending(rid, args[2], ownDir()); // before the create call: the only thing that lets a later label lookup act on an agent whose id never came back
     live.set("run:" + rid, { run: true }); ledger(); // survives a hard kill while `paseo run` still waits and the agent id is unknown
     // HUBFIX3: a create that times out (saturated daemon) is retried with backoff, bounded (routes.createRetries, default 2); the half-made agent of a failed try is archived first. Still failing: the chain moves on. Each try and its seconds go in the trace (createTries).
     const ctries = []; let j;

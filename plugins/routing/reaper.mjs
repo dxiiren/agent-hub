@@ -12,7 +12,7 @@ import { cliArgs, paseoCommand, loadRoutes, parkFile, attemptLimit, flattenError
 import { ageSeconds, DOCTOR_LABEL } from "./cleanup.mjs";
 import { listState, readStateJson, runDir } from "./runstate.mjs";
 import { sweepDead } from "./entry-gate.mjs";
-import { ownedDir, readOwned, ghostOf } from "./owned.mjs";
+import { ownedDir, readOwned, ghostOf, clearPending } from "./owned.mjs";
 import { spawnSyncSafe } from "./spawn-safe.mjs";
 import { PERMANENT, healWorkspaces, archiveIdleLocalWorkspaces, drainSpool, spoolStats, reapStuckRoutes, sweepIdleWorkspaces, sweepRegistryOffline, pruneArchivedOffline, archivePermanentDuplicates, reprobeErrorProviders } from "./guards.mjs";
 
@@ -60,7 +60,7 @@ export async function reapDeadRoutes({ run, dir = runDir(), dead = pidDead, dry 
     const rec = readStateJson(join(dir, f));
     if (!rec || !Number.isInteger(rec.pid) || !dead(rec.pid)) continue;
     const ids = (rec.agents ?? []).map((a) => a.id).filter(Boolean);
-    for (const rid of rec.runs ?? []) { const l = await run(["ls", "--label", `route/run=${rid}`]); for (const a of ghostOf(l, { rid, cwds: [rec.cwd, ...(rec.agents ?? []).map((x) => x.wt?.path)], dir: owned })) ids.push(a.id); } // an attempt that was still creating/waiting when the route died
+    for (const rid of rec.runs ?? []) { const l = await run(["ls", "--label", `route/run=${rid}`]); for (const a of ghostOf(l, { rid, dir: owned })) ids.push(a.id); clearPending(rid, owned); } // an attempt that was still creating/waiting when the route died
     if (!dry) {
       await pmap(ids, (id) => archiveAgent(run, id), concurrency);
       for (const w of rec.workspaces ?? []) await run(["workspace", "archive", w, "--json"]); // after its agents were archived above

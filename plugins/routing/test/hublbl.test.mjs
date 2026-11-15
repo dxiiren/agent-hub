@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { markOwned, readOwned, ghostOf } from "../owned.mjs";
+import { markOwned, readOwned, ghostOf, markPending, readPending, clearPending, PENDING_MAX_MS } from "../owned.mjs";
 import { reapFinished, reapDeadRoutes } from "../reaper.mjs";
 import { cleanup } from "../cleanup.mjs";
 import { toRecord } from "../../usage-otel/server/usage.mjs";
@@ -60,24 +60,47 @@ test("cleanup --mine: forged route/type or doctor label archives nothing; --all 
   assert.deepEqual(cleanup({ paseo: p, routes, owned: o, all: true }).archived.sort(), ["mine-0003", "victim-0001"]);
 });
 
-test("a route/run label alone never selects an agent: it must sit in the route's own folder and not belong to another route's record", () => {
-  const o = dir(); markOwned("other-0001", { kind: "route", rid: "bbbb" }, o);
-  const rows = [
-    { id: "elsewhere-1", cwd: "C:/other/project" }, // forged label on an agent in someone else's folder
-    { id: "other-0001", cwd: "C:/work/repo" }, // same folder, but the hub's record gives it to another route
-    { id: "ghost-0001", cwd: "C:/work/repo" }, // the route's own half-made agent: no record, right folder
-    { id: "ghost-0002", cwd: "C:/work/repo/sub" },
-  ];
-  assert.deepEqual(ghostOf(rows, { rid: "aaaa", cwds: ["C:/work/repo"], dir: o }).map((a) => a.id), ["ghost-0001", "ghost-0002"]);
-  assert.deepEqual(ghostOf(rows, { rid: "aaaa", cwds: [], dir: o }), []);
+const quiet = () => {};
+const H = 3600_000, T0 = 1_000_000_000_000;
+test("ghost lookup: a forged route/run on a record-less victim in the SAME cwd is not archived (no record never means ours)", () => {
+  const o = dir(); markPending("aaaaaaaa", "C:/work/repo", o, T0);
+  const rows = [{ id: "victim-0001", cwd: "C:/work/repo", created: "5 hours ago" }, { id: "victim-0002", cwd: "C:/work/repo", created: "2 days ago" }]; // forged route/run labels, no hub record, started long before this attempt
+  assert.deepEqual(ghostOf(rows, { rid: "aaaaaaaa", dir: o, now: T0 + 5 * H, log: quiet }), []);
 });
-
-test("dead-route reaper archives a ghost only through ghostOf (forged route/run on a foreign agent is left alone)", async () => {
+test("ghost lookup: no pending record at all fails closed", () => {
+  assert.deepEqual(ghostOf([{ id: "g-0000001", cwd: "C:/work/repo", created: "1 minutes ago" }], { rid: "bbbbbbbb", dir: dir(), now: T0, log: quiet }), []);
+});
+test("ghost lookup: an agent created before the attempt started is not archived; one provably after is", () => {
+  const o = dir(); markPending("cccccccc", "C:/work/repo", o, T0);
+  const now = T0 + 2 * H;
+  const rows = [{ id: "old-00001", cwd: "C:/work/repo", created: "3 hours ago" }, { id: "edge-0001", cwd: "C:/work/repo", created: "2 hours ago" }, { id: "ghost-0001", cwd: "C:/work/repo", created: "10 minutes ago" }];
+  assert.deepEqual(ghostOf(rows, { rid: "cccccccc", dir: o, now, log: quiet }).map((a) => a.id), ["ghost-0001"]);
+});
+test("ghost lookup: cwd must equal the route's cwd exactly; empty and drive-root cwds are rejected", () => {
+  const o = dir(), now = T0 + H; const g = (cwd, rowCwd) => { markPending("dddddddd", cwd, o, T0); return ghostOf([{ id: "g-0000002", cwd: rowCwd, created: "1 minutes ago" }], { rid: "dddddddd", dir: o, now, log: quiet }).length; };
+  assert.equal(g("C:/work/repo", "C:/work/repo/sub"), 0); assert.equal(g("C:/work/repo", "C:/work"), 0); assert.equal(g("C:/work/repo", "C:/work/repo"), 1);
+  assert.equal(g("", ""), 0); assert.equal(g("C:/", "C:/"), 0); assert.equal(g("C:", "C:"), 0); assert.equal(g("/", "/"), 0);
+});
+test("ghost lookup: a record that binds the agent id to another route (or to a direct/doctor agent) blocks it", () => {
+  const o = dir(); markPending("eeeeeeee", "C:/work/repo", o, T0); markOwned("other-0001", { kind: "route", rid: "ffffffff" }, o); markOwned("drv-00001", { kind: "direct" }, o); markOwned("same-0001", { kind: "route", rid: "eeeeeeee" }, o);
+  const rows = ["other-0001", "drv-00001", "same-0001"].map((id) => ({ id, cwd: "C:/work/repo", created: "1 minutes ago" }));
+  assert.deepEqual(ghostOf(rows, { rid: "eeeeeeee", dir: o, now: T0 + H, log: quiet }).map((a) => a.id), ["same-0001"]);
+});
+test("pending records: cleared when the route ends, expired ones are purged on the next write", () => {
+  const o = dir(); markPending("11111111", "C:/a/b", o, T0); assert.ok(readPending("11111111", o));
+  clearPending("11111111", o); assert.equal(readPending("11111111", o), null);
+  markPending("22222222", "C:/a/b", o, T0); markPending("33333333", "C:/a/b", o, T0 + PENDING_MAX_MS + 1);
+  assert.equal(readPending("22222222", o), null); assert.ok(readPending("33333333", o));
+});
+test("dead-route reaper archives a ghost only with a pending record; a forged route/run on a foreign agent is left alone", async () => {
   const state = dir(), o = dir(); const { writeFileSync } = await import("node:fs");
-  writeFileSync(join(state, "agents-1.json"), JSON.stringify({ pid: 1, cwd: "C:/work/repo", agents: [], workspaces: [], runs: ["aaaa"] }));
-  const log = []; const run = async (a) => { log.push(a); return a[0] === "ls" ? [{ id: "foreign-01", cwd: "C:/elsewhere" }, { id: "ghost-0001", cwd: "C:/work/repo" }] : {}; };
+  writeFileSync(join(state, "agents-1.json"), JSON.stringify({ pid: 1, cwd: "C:/work/repo", agents: [], workspaces: [], runs: ["aaaaaaaa"] }));
+  const ls = [{ id: "foreign-01", cwd: "C:/elsewhere", created: "1 minutes ago" }, { id: "recordless-1", cwd: "C:/work/repo", created: "9 days ago" }, { id: "ghost-0001", cwd: "C:/work/repo", created: "1 minutes ago" }];
+  const log = []; const run = async (a) => { log.push(a); return a[0] === "ls" ? ls : {}; };
+  assert.deepEqual(await reapDeadRoutes({ run, dir: state, dead: () => true, owned: o }), []); // no pending record: nothing
+  writeFileSync(join(state, "agents-1.json"), JSON.stringify({ pid: 1, cwd: "C:/work/repo", agents: [], workspaces: [], runs: ["aaaaaaaa"] }));
+  markPending("aaaaaaaa", "C:/work/repo", o, Date.now() - 2 * H);
   assert.deepEqual(await reapDeadRoutes({ run, dir: state, dead: () => true, owned: o }), ["ghost-0001"]);
-  assert.deepEqual(archived(log), ["ghost-0001"]);
 });
 
 test("usage: attribution follows the hub record, a forged label cannot move usage to another session; without a record labels are display-only attribution", () => {
